@@ -8,7 +8,7 @@ Sheets / columns
 Teams     : team, age, coach, priority (optional, 1-3)
 Coaches   : coach, email, preferred_days ("Mon, Wed"), preferred_slots ("5:30")
 NoDates   : coach, date, slot ("All" or 3:45 / 5:30 / 7:20), note
-Locals    : program, day, slot, courts ("1-3" or "1,2,5"), coaches ("Ana; Ben")
+Locals    : program, days ("Tue, Thu"), slot, courts ("1-3" or "1,2,5"), coaches ("Ana; Ben")
 Closures  : date, reason
 """
 
@@ -27,7 +27,7 @@ COLUMNS = {
     "Teams": ["team", "age", "coach", "priority"],
     "Coaches": ["coach", "email", "preferred_days", "preferred_slots"],
     "NoDates": ["coach", "date", "slot", "note"],
-    "Locals": ["program", "day", "slot", "courts", "coaches"],
+    "Locals": ["program", "days", "slot", "courts", "coaches"],
     "Closures": ["date", "reason"],
 }
 
@@ -66,6 +66,8 @@ class ScheduleInput:
         for sheet, cols in COLUMNS.items():
             df = xl.get(sheet, pd.DataFrame(columns=cols))
             df.columns = [str(c).strip().lower() for c in df.columns]
+            if sheet == "Locals" and "days" not in df.columns and "day" in df.columns:
+                df = df.rename(columns={"day": "days"})
             for c in cols:
                 if c not in df.columns:
                     df[c] = None
@@ -88,8 +90,9 @@ def parse_list(value, sep_pattern=r"[;,]") -> list[str]:
 
 
 def parse_days(value) -> list[str]:
+    """'Tue, Thu' / 'Tue/Thu' / 'Tue & Thu' / 'Tuesday and Thursday' -> ['Tue', 'Thu']."""
     out = []
-    for p in parse_list(value):
+    for p in parse_list(value, r"[;,/&]|\s+and\s+|\s+"):
         key = p[:3].title()
         if key in WEEKDAYS:
             out.append(key)
@@ -247,19 +250,17 @@ def clean(inp: ScheduleInput) -> CleanInput:
         if pd.isna(r["program"]):
             continue
         try:
-            day = parse_days(r["day"])
-            if len(day) != 1:
-                raise ValueError(f"day '{r['day']}' should be one weekday (Mon-Fri)")
+            days = parse_days(r["days"])
+            if not days:
+                raise ValueError(f"days '{r['days']}' should be weekdays like 'Tue, Thu'")
             slot = parse_slot(r["slot"])
             if slot is None:
                 raise ValueError("needs a timeslot")
-            locals_.append(LocalProgram(
-                name=str(r["program"]).strip(),
-                day=day[0],
-                slot=slot,
-                courts=parse_courts(r["courts"]),
-                coaches=parse_list(r.get("coaches")),
-            ))
+            courts = parse_courts(r["courts"])
+            staff = parse_list(r.get("coaches"))
+            # One entry per day the program runs (e.g. Tue and Thu).
+            for day in dict.fromkeys(days):
+                locals_.append(LocalProgram(str(r["program"]).strip(), day, slot, courts, staff))
         except (ValueError, TypeError) as e:
             errors.append(f"Locals row {i + 2} ({r['program']}): {e}")
 

@@ -96,3 +96,30 @@ def test_excel_roundtrip():
     assert len(back.teams) == 6 and len(back.locals) == 3
     r = solve(back, date(2026, 11, 1), date(2026, 11, 30), time_limit_s=10)
     assert r.ok
+
+
+def test_locals_on_multiple_days_block_both_days():
+    from scheduler.data import parse_days
+    assert parse_days("Tue, Thu") == ["Tue", "Thu"]
+    assert parse_days("Tue/Thu") == ["Tue", "Thu"]
+    assert parse_days("Tuesday and Thursday") == ["Tue", "Thu"]
+
+    inp = simulate(10, 10, 0, 2026, 11, 7)
+    inp.locals = pd.DataFrame([{"program": "Clinic", "days": "Tue, Thu", "slot": "5:30",
+                                "courts": "1-7", "coaches": ""}])
+    r = solve(inp, inp.start, inp.end, time_limit_s=20)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    blocked = pr[pr["day"].isin(["Tue", "Thu"]) & (pr["slot"] == "5:30")]
+    assert blocked.empty
+    loc = r.assignments[r.assignments["kind"] == "Local"]
+    assert set(loc["day"]) == {"Tue", "Thu"}
+    _check_hard_rules(inp, r)
+
+
+def test_old_single_day_column_still_reads():
+    import io
+    from scheduler import ScheduleInput
+    inp = simulate(4, 4, 2, 2026, 11, 0)
+    inp.locals = inp.locals.rename(columns={"days": "day"})
+    back = ScheduleInput.from_excel(io.BytesIO(inp.to_excel_bytes()))
+    assert "days" in back.locals.columns and len(clean(back).locals) >= 2

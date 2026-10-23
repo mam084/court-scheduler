@@ -106,8 +106,8 @@ def court_grid_html(
     highlight: set[str] | None = None,
     colors: dict | None = None,
 ) -> str:
-    """Club layout: weekdays as rows, courts as columns, practices listed
-    with their times inside each day/court box.
+    """Club layout: courts as rows, weekdays as columns, practices listed
+    with their times inside each court/day box.
 
     `bookings` needs columns: day, slot, slot_label, court, kind, name, coach
     (and optionally on_pattern). `day_dates` maps Mon..Fri to a real date
@@ -115,22 +115,31 @@ def court_grid_html(
     """
     closures = closures or {}
     colors = colors or color_map(bookings.loc[bookings["kind"] == "Practice", "name"]) if len(bookings) else {}
-    out = [CSS, '<div class="cs-wrap"><table class="cs-grid"><thead><tr><th class="cs-day"></th>']
-    out += [f"<th>Court {c}</th>" for c in COURTS]
-    out.append("</tr></thead><tbody>")
+
+    # Days that are closed or outside the period become one shaded column.
+    blocked = {}
     for wd in WEEKDAYS:
         d = (day_dates or {}).get(wd)
-        sub = f"<small>{d:%b %-d}</small>" if d else ""
-        out.append(f'<tr><td class="cs-daycell">{wd}{sub}</td>')
         if d is not None and d in closures:
-            out.append(f'<td class="cs-closed" colspan="{len(COURTS)}">Closed: {html.escape(closures[d])}</td></tr>')
-            continue
-        if d is not None and d == date.min:  # outside the scheduled period
-            out.append(f'<td class="cs-closed" colspan="{len(COURTS)}">Outside this schedule period</td></tr>')
-            continue
-        day_rows = bookings[bookings["day"] == wd]
-        for c in COURTS:
-            cell = day_rows[day_rows["court"] == c].copy()
+            blocked[wd] = f"Closed: {html.escape(closures[d])}"
+        elif d is not None and d == date.min:
+            blocked[wd] = "Outside this schedule period"
+
+    out = [CSS, '<div class="cs-wrap"><table class="cs-grid"><thead><tr><th class="cs-day"></th>']
+    for wd in WEEKDAYS:
+        d = (day_dates or {}).get(wd)
+        sub = f'<br><small style="font-weight:400;opacity:.8">{d:%b %-d}</small>' if d and d != date.min else ""
+        out.append(f"<th>{wd}{sub}</th>")
+    out.append("</tr></thead><tbody>")
+    for i, c in enumerate(COURTS):
+        out.append(f'<tr><td class="cs-daycell">Court {c}</td>')
+        court_rows = bookings[bookings["court"] == c] if len(bookings) else bookings
+        for wd in WEEKDAYS:
+            if wd in blocked:
+                if i == 0:
+                    out.append(f'<td class="cs-closed" rowspan="{len(COURTS)}">{blocked[wd]}</td>')
+                continue
+            cell = court_rows[court_rows["day"] == wd].copy()
             cell["o"] = cell["slot"].map(SLOT_KEYS.index)
             chips = "".join(_chip(r, colors, highlight) for _, r in cell.sort_values("o").iterrows())
             out.append(f"<td>{chips}</td>")

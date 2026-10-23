@@ -24,12 +24,12 @@ FIRST_NAMES = [
 ]
 COLORS = ["Navy", "Black", "Teal", "White", "Gold", "Red"]
 
-LOCAL_TEMPLATES = [
-    ("Little Spikers (8-10U)", "Tue", "3:45", "1-4"),
-    ("Adult League", "Wed", "7:20", "1-6"),
-    ("Skills Clinic", "Mon", "5:30", "6-7"),
-    ("Beginner Academy", "Fri", "5:30", "1-4"),
-    ("Middle School Clinic", "Thu", "3:45", "1-3"),
+LOCAL_TEMPLATES = [  # most locals run twice a week
+    ("Little Spikers (8-10U)", "Tue, Thu", "3:45", "1-4"),
+    ("Adult League", "Mon, Wed", "7:20", "1-5"),
+    ("Skills Clinic", "Tue, Thu", "5:30", "6-7"),
+    ("Beginner Academy", "Mon, Wed", "3:45", "1-3"),
+    ("Middle School Clinic", "Fri", "3:45", "1-3"),
     ("Open Gym", "Fri", "7:20", "5-7"),
 ]
 
@@ -83,11 +83,11 @@ def simulate(
 
     # ---- locals: fixed weekly programs, worked by some coaches -------
     local_rows = []
-    for prog, day, slot, courts in LOCAL_TEMPLATES[:n_locals]:
+    for prog, days, slot, courts in LOCAL_TEMPLATES[:n_locals]:
         staff = rng.sample(coaches, k=min(len(coaches), rng.choice([1, 2])))
-        local_rows.append({"program": prog, "day": day, "slot": slot,
+        local_rows.append({"program": prog, "days": days, "slot": slot,
                            "courts": courts, "coaches": "; ".join(staff)})
-    locals_df = pd.DataFrame(local_rows, columns=["program", "day", "slot", "courts", "coaches"])
+    locals_df = pd.DataFrame(local_rows, columns=["program", "days", "slot", "courts", "coaches"])
 
     # ---- closures ----------------------------------------------------
     closures = pd.DataFrame(

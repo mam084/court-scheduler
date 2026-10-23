@@ -182,7 +182,11 @@ with tabs[2]:
         coach = st.selectbox("Coach", sorted(cleaned.coaches))
         prof = cleaned.coaches[coach]
         my_teams = [t.name for t in cleaned.teams if t.coach == coach]
-        my_locals = [f"{lp.name} ({lp.day} {lp.slot})" for lp in cleaned.locals if coach in lp.coaches]
+        grouped = {}
+        for lp in cleaned.locals:
+            if coach in lp.coaches:
+                grouped.setdefault((lp.name, lp.slot), []).append(lp.day)
+        my_locals = [f"{n} ({' & '.join(ds)} {sl})" for (n, sl), ds in grouped.items()]
         nds = sorted((d, s) for (c, d), s in cleaned.no_dates.items() if c == coach)
 
         c1, c2, c3 = st.columns(3)
@@ -235,7 +239,7 @@ with tabs[4]:
         "teams": ("Teams", "Priority 1-3 (3 = scheduled first if courts run out). Blank = by age."),
         "coaches": ("Coaches", "Preferred days like `Mon, Wed`; preferred times like `5:30, 7:20`."),
         "no_dates": ("No-dates", "Dates a coach can't make. Slot `All` blocks the whole day."),
-        "locals": ("Locals programs", "Fixed weekly programs. Courts like `1-4` or `1,3,5`; coaches separated by `;`."),
+        "locals": ("Locals programs", "Fixed weekly programs. Days like `Tue, Thu`; courts like `1-4` or `1,3,5`; coaches separated by `;`."),
         "closures": ("Closures", "Club closed. Prefilled with major US holidays."),
     }
     for attr, (title, help_) in labels.items():

@@ -40,36 +40,36 @@ def _cell_text(rows: pd.DataFrame) -> str:
 
 
 def _grid_sheet(wb, title, bookings, day_labels, closed=None):
+    """Courts as rows, weekdays as columns."""
     ws = wb.create_sheet(title=title[:31])
     closed = closed or {}
-    ws.cell(1, 1, "")
-    for j, c in enumerate(COURTS, start=2):
-        cell = ws.cell(1, j, f"Court {c}")
+    ws.cell(1, 1, "").fill = _head
+    for j, wd in enumerate(WEEKDAYS, start=2):
+        cell = ws.cell(1, j, day_labels.get(wd, wd))
         cell.font, cell.fill = Font(bold=True, color="FFFFFF"), _head
-        cell.alignment = Alignment(horizontal="center")
-    ws.cell(1, 1).fill = _head
-    for i, wd in enumerate(WEEKDAYS, start=2):
-        dc = ws.cell(i, 1, day_labels.get(wd, wd))
-        dc.font, dc.fill, dc.border = Font(bold=True), _day, _border
-        dc.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        day_rows = bookings[bookings["day"] == wd] if len(bookings) else bookings
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.row_dimensions[1].height = 32 if day_labels else 18
+    for i, c in enumerate(COURTS, start=2):
+        rc = ws.cell(i, 1, f"Court {c}")
+        rc.font, rc.fill, rc.border = Font(bold=True), _day, _border
+        rc.alignment = Alignment(horizontal="center", vertical="center")
+        court_rows = bookings[bookings["court"] == c] if len(bookings) else bookings
         n_lines = 1
-        for j, c in enumerate(COURTS, start=2):
+        for j, wd in enumerate(WEEKDAYS, start=2):
             if wd in closed:
-                txt = closed[wd] if j == 2 else ""
-                cell = ws.cell(i, j, txt)
+                cell = ws.cell(i, j, closed[wd] if i == 2 else "")
                 cell.fill = _closed
             else:
-                rows = day_rows[day_rows["court"] == c] if len(day_rows) else day_rows
+                rows = court_rows[court_rows["day"] == wd] if len(court_rows) else court_rows
                 txt = _cell_text(rows) if len(rows) else ""
                 cell = ws.cell(i, j, txt)
                 n_lines = max(n_lines, txt.count("\n") + 1)
             cell.alignment = Alignment(vertical="top", wrap_text=True)
             cell.border = _border
         ws.row_dimensions[i].height = max(30, 15 * n_lines + 4)
-    ws.column_dimensions["A"].width = 12
-    for j in range(2, len(COURTS) + 2):
-        ws.column_dimensions[get_column_letter(j)].width = 26
+    ws.column_dimensions["A"].width = 10
+    for j in range(2, len(WEEKDAYS) + 2):
+        ws.column_dimensions[get_column_letter(j)].width = 30
     ws.freeze_panes = "B2"
     return ws
 

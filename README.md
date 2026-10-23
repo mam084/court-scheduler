@@ -39,7 +39,7 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 
 ## App
 
-- **Court view:** weekdays as rows and courts as columns, with each practice and its time in the box. You can view the recurring weekly template or any specific week, including makeups and closures.
+- **Court view:** courts as rows and weekdays as columns, with each practice and its time in the box. You can view the recurring weekly template or any specific week, including makeups and closures.
 - **Calendar:** a month view, filterable by team or coach.
 - **Coaches:** each coach's teams, locals, preferences, no-dates and full schedule, plus an `.ics` download for Google Calendar.
 - **Review:** everything that differs from the ideal schedule, with the reason.
@@ -55,7 +55,7 @@ One `.xlsx` with these sheets. Download a filled-in example from the app's sideb
 | Teams | `team`, `age`, `coach`, `priority` (optional 1–3; blank means by age) |
 | Coaches | `coach`, `email`, `preferred_days` (`Mon, Wed`), `preferred_slots` (`5:30, 7:20`) |
 | NoDates | `coach`, `date`, `slot` (`All`, or `3:45` / `5:30` / `7:20`), `note` |
-| Locals | `program`, `day`, `slot`, `courts` (`1-4` or `1,3,5`), `coaches` (`Ana; Ben`) |
+| Locals | `program`, `days` (`Tue, Thu`), `slot`, `courts` (`1-4` or `1,3,5`), `coaches` (`Ana; Ben`) |
 | Closures | `date`, `reason` (optional; defaults to major holidays) |
 
 > **Privacy:** real coach and team data should never be committed. `.gitignore` excludes everything in `data/` except the simulated sample.
