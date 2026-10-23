@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.DS_Store
+.streamlit/secrets.toml
+
+# Real club data stays out of git. Only the simulated sample is committed.
+data/*
+!data/sample_input.xlsx
+*.ics
+schedule_*.xlsx
+club_inputs.xlsx
