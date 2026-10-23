@@ -45,6 +45,7 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 
 - **Court view:** courts as rows and days as columns, with each practice, its time and its coaches in the box. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
 - **Calendar:** a month view, filterable by club, team or coach.
+- **Programs:** add a locals program (name, days, start and end dates, timeslots, courts, coaches, on/off-site) and it's blocked off on the courts and calendar right away, with the practice schedule rebuilt around it. Remove programs the same way.
 - **Coaches:** each coach's head and assistant teams, locals, no-dates and full schedule, plus an `.ics` download for Google Calendar.
 - **Review:** everything that differs from the ideal schedule, with the reason.
 - **Inputs:** edit any table in place and re-run.
@@ -59,7 +60,7 @@ One `.xlsx` with these sheets. Download a filled-in example from the app's sideb
 | Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`), `late_ok` (`Yes` lets a 14s-and-under team practice at 7:20 when needed) |
 | Availability | one row per rule: `who` (team or coach), `type` (`No` or `Not preferred`), `days` (`Mon`, `Weekdays`), `dates` (`11/10-11/16`), `times` (`5:30`, `3:45`), `note` |
 | Wishlist | `team`, `choice` (1 or 2), `days` (`Tue, Thu`; blank = any), `times` (`5:30, 7:20`) |
-| Locals | `program`, `days` (`Tue, Thu`), `time`, `courts` (`1-4`; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional) |
+| Locals | `program`, `days` (`Tue, Thu`), `time` (`5:30`, `3:45-7:20`, weekend `9AM-1PM`), `courts` (`1-4`; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional, e.g. `11/02/2026-12/18/2026`) |
 | Weekends | `date`, `open` (`9AM-9PM`), `courts`, `group` + `required` (days in a required group: at least one gets used) |
 | Closures | `date`, `reason` |
 

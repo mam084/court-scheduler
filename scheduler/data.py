@@ -150,6 +150,10 @@ def parse_times(value) -> set[str] | None:
         return None
     out: set[str] = set()
     for tok in parse_list(value, r"[;,/]|\s+or\s+|\s+and\s+"):
+        span = _parse_span(tok)
+        if span:
+            out |= span
+            continue
         t = tok.lower().replace(" ", "").replace(".", "")
         if t in ("am", "morning"):
             out |= AM_BLOCKS
@@ -180,6 +184,33 @@ def parse_times(value) -> set[str] | None:
             raise ValueError(f"'{tok}' isn't a weekend block start ({', '.join(WEEKEND_KEYS)})")
         out.add(_WEEKEND_HOUR[h24])
     return out or None
+
+
+def _parse_span(tok: str) -> set[str] | None:
+    """'3:45-7:20' -> {3:45, 5:30}; '9AM-1PM' -> {9AM, 11AM}; '3:45-9:10' -> all three.
+    A span covers the slots starting from its start up to (not including) its end."""
+    parts = re.split(r"\s*[-–]\s*", tok.strip())
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    a_tok, b_tok = parts
+    if re.search(r"(am|pm)", b_tok.lower()) and not re.search(r"(am|pm)", a_tok.lower()) and ":" not in a_tok:
+        a_tok = a_tok + ("am" if b_tok.lower().endswith("am") and int(re.match(r"\d+", a_tok).group()) >= 9 else "pm")
+    try:
+        a = parse_times(a_tok)
+    except ValueError:
+        return None
+    if not a or len(a) != 1:
+        return None
+    a = next(iter(a))
+    keys = WEEKDAY_KEYS if a in WEEKDAY_KEYS else WEEKEND_KEYS
+    try:
+        b = parse_times(b_tok)
+        b = next(iter(b)) if b and len(b) == 1 else None
+    except ValueError:
+        b = None
+    i = keys.index(a)
+    j = keys.index(b) if b in keys else len(keys)
+    return set(keys[i:max(j, i + 1)])
 
 
 def parse_slot(value) -> str | None:
@@ -393,6 +424,30 @@ class LocalProgram:
         return not self.ranges or any(a <= d <= b for a, b in self.ranges)
 
 
+def ranges_overlap(r1: list[tuple[date, date]], r2: list[tuple[date, date]]) -> bool:
+    """Empty means 'every week'."""
+    if not r1 or not r2:
+        return True
+    return any(a1 <= b2 and a2 <= b1 for a1, b1 in r1 for a2, b2 in r2)
+
+
+def local_conflicts(programs: list["LocalProgram"]) -> list[str]:
+    """On-site programs sharing a court at the same day/time with overlapping dates."""
+    out, seen = [], set()
+    on = [lp for lp in programs if lp.on_site and lp.courts]
+    for i, a in enumerate(on):
+        for b in on[i + 1:]:
+            if a.name == b.name or a.day != b.day or a.slot != b.slot or not ranges_overlap(a.ranges, b.ranges):
+                continue
+            shared = sorted(set(a.courts) & set(b.courts))
+            key = (a.name, b.name, a.day, a.slot)
+            if shared and key not in seen:
+                seen.add(key)
+                out.append(f"Locals '{a.name}' and '{b.name}' both use court(s) "
+                           f"{', '.join(map(str, shared))} on {a.day} at {a.slot}")
+    return out
+
+
 @dataclass
 class WeekendDay:
     day: date
@@ -506,18 +561,19 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             days = parse_days(r["days"])
             if not days:
                 raise ValueError(f"days '{r['days']}' should be like 'Tue, Thu'")
-            slot = parse_slot(r["time"])
-            if slot is None:
-                raise ValueError("needs a time")
+            times = parse_times(r["time"])
+            if not times:
+                raise ValueError("needs a time (e.g. 5:30, 3:45-7:20, or 9AM-1PM on weekends)")
             courts = parse_courts(r.get("courts"))
             on_site = blank(r.get("on_site")) or yes(r.get("on_site"))
             staff = parse_names(r.get("coaches"))
             ranges = parse_date_ranges(r.get("dates"), year)
             for day in days:
-                if (day in WEEKEND) != (slot not in WEEKDAY_KEYS):
-                    raise ValueError(f"{day} needs a {'weekend time like 5PM' if day in WEEKEND else 'weekday time like 5:30'}"
-                                     " (put weekday and weekend times on separate rows)")
-                locals_.append(LocalProgram(name, day, slot, courts, staff, on_site, ranges))
+                day_slots = [s for s in SLOT_KEYS if s in times and ((day in WEEKEND) == (s in WEEKEND_KEYS))]
+                if not day_slots:
+                    raise ValueError(f"{day} needs a {'weekend time like 9AM-1PM' if day in WEEKEND else 'weekday time like 5:30'}")
+                for slot in day_slots:
+                    locals_.append(LocalProgram(name, day, slot, courts, staff, on_site, ranges))
             if on_site and not courts:
                 warnings.append(f"Locals '{name}': courts not set yet, so it isn't blocking any courts "
                                 f"(its coaches are still blocked)")
@@ -596,15 +652,8 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             errors.append(f"Closures row {i + 2}: {e}")
 
     # Two on-site locals on one court at the same time is a data error.
-    used: dict[tuple, str] = {}
-    for lp in locals_:
-        if not lp.on_site:
-            continue
-        for c in lp.courts:
-            key = (lp.day, lp.slot, c, tuple(lp.ranges))
-            if key in used and used[key] != lp.name:
-                errors.append(f"Locals '{used[key]}' and '{lp.name}' both use court {c} {lp.day} {lp.slot}")
-            used[key] = lp.name
+    for msg in local_conflicts(locals_):
+        errors.append(msg)
 
     if errors:
         raise ValueError("Please fix these in the input:\n- " + "\n- ".join(errors))

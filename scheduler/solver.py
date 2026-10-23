@@ -225,6 +225,17 @@ def solve(
     # The template itself must be a valid week (it's what people read):
     # recurring 'no' rules and recurring locals rule slots out, head coaches
     # can't be in two places, and no more teams than courts.
+    def recurring_local(lp, wd, s):
+        """A program counts as part of the usual week if it runs on most of
+        this weekday's dates in the period (so a program added for 11/2-12/18
+        shapes November's template, but a one-week clinic doesn't)."""
+        if lp.day != wd or lp.slot != s:
+            return False
+        if not lp.ranges:
+            return True
+        ds = [d for d in open_dates if DAYS[d.weekday()] == wd]
+        return bool(ds) and sum(lp.active(d, s) for d in ds) * 2 >= len(ds)
+
     def recurring_block(t, wd, s):
         team = teams[t]
         for who in [team.name] + team.heads:
@@ -232,7 +243,7 @@ def solve(
                 if r.kind == "no" and not r.ranges and (not r.days or wd in r.days) and (not r.times or s in r.times):
                     return True
         for lp in data.locals:
-            if lp.day == wd and lp.slot == s and not lp.ranges and any(h in lp.coaches for h in team.heads):
+            if recurring_local(lp, wd, s) and any(h in lp.coaches for h in team.heads):
                 return True
         return False
 
@@ -242,7 +253,7 @@ def solve(
     for wd in WEEKDAYS:
         for s in WEEKDAY_KEYS:
             cap = len([c for c in COURTS if not any(
-                lp.on_site and lp.day == wd and lp.slot == s and not lp.ranges and c in lp.courts
+                lp.on_site and recurring_local(lp, wd, s) and c in lp.courts
                 for lp in data.locals)])
             vs = [p[t, wd, s] for t in T if (t, wd, s) in p]
             if len(vs) > cap:
@@ -403,17 +414,21 @@ def solve(
             "age": team.age, "coach": "; ".join(team.staff), "head": "; ".join(team.heads),
             "on_pattern": on_pattern,
         })
-    for d in open_dates:
-        for s in slots_on(d):
-            for lp in locals_at(d, s):
-                if not lp.on_site:
-                    continue
-                for c in lp.courts:
-                    rows.append({
-                        "date": d, "day": DAYS[d.weekday()], "slot": s, "slot_label": SLOTS[s],
-                        "court": c, "kind": "Local", "name": lp.name, "club": "", "age": None,
-                        "coach": "; ".join(lp.coaches), "head": "; ".join(lp.coaches), "on_pattern": True,
-                    })
+    # Locals show on every date they run (even weekend days not open for
+    # practices), so the calendar fills in as soon as a program is added.
+    for d in all_days:
+        if d in data.closures:
+            continue
+        for lp in data.locals:
+            s = lp.slot
+            if not lp.on_site or not lp.active(d, s):
+                continue
+            for c in lp.courts:
+                rows.append({
+                    "date": d, "day": DAYS[d.weekday()], "slot": s, "slot_label": SLOTS[s],
+                    "court": c, "kind": "Local", "name": lp.name, "club": "", "age": None,
+                    "coach": "; ".join(lp.coaches), "head": "; ".join(lp.coaches), "on_pattern": True,
+                })
     assignments = pd.DataFrame(rows)
     if not assignments.empty:
         assignments["o"] = assignments["slot"].map(SLOT_KEYS.index)
@@ -455,8 +470,10 @@ def solve(
         "assistant_conflicts": int(sum(solver.Value(v) for v in asst_conflicts.values())),
         "objective": solver.ObjectiveValue(),
     }
+    shown_weekends = sorted(set(weekend_dates) | ({d for d in assignments["date"] if d.weekday() >= 5}
+                                                  if len(assignments) else set()))
     return ScheduleResult(status_name, assignments, pattern, issues, metrics, data.warnings, start, end,
-                          weekend_dates)
+                          shown_weekends)
 
 
 def _assign_courts(booked, T, courts_on, seed=0, time_limit_s=10.0):

@@ -234,3 +234,39 @@ def test_excel_roundtrip():
     r = solve(back, *NOV, time_limit_s=10)
     assert r.ok
     _check_hard_rules(back, r)
+
+
+def test_program_with_dates_and_span_blocks_only_its_window():
+    teams = [{"team": f"16-C{i}", "age": 16} for i in range(3)]
+    prog = [{"program": "Fall Clinic", "days": "Mon, Wed", "time": "5:30-9:10", "courts": "1-7",
+             "on_site": "Yes", "dates": "11/09/2026-11/20/2026"}]
+    inp = _inp(teams, locals_=prog)
+    r = solve(inp, *NOV, time_limit_s=10)
+    _check_hard_rules(inp, r)
+    a = r.assignments
+    loc = a[a["kind"] == "Local"]
+    assert set(loc["slot"]) == {"5:30", "7:20"} and set(loc["court"]) == set(range(1, 8))
+    assert loc["date"].min() == date(2026, 11, 9) and loc["date"].max() == date(2026, 11, 18)
+    pr = a[a["kind"] == "Practice"]
+    inside = pr[pr["date"].between(date(2026, 11, 9), date(2026, 11, 20)) & pr["day"].isin(["Mon", "Wed"])]
+    assert inside.empty
+
+
+def test_overlapping_programs_on_same_court_rejected():
+    teams = [{"team": "16-A", "age": 16}]
+    progs = [{"program": "A", "days": "Tue", "time": "5:30", "courts": "1-3", "dates": "11/1/2026-11/15/2026"},
+             {"program": "B", "days": "Tue", "time": "5:30", "courts": "3-4", "dates": "11/10/2026-11/30/2026"},
+             {"program": "C", "days": "Tue", "time": "5:30", "courts": "1-4", "dates": "12/1/2026-12/15/2026"}]
+    with pytest.raises(ValueError, match="'A' and 'B'"):
+        clean(_inp(teams, locals_=progs[:2]), *NOV)
+    clean(_inp(teams, locals_=[progs[0], progs[2]]), *NOV)  # different dates: fine
+
+
+def test_weekend_program_shows_even_if_weekend_not_open():
+    teams = [{"team": "16-A", "age": 16}]
+    prog = [{"program": "Girls Local", "days": "Sun", "time": "9AM-1PM", "courts": "1-4",
+             "dates": "11/8/2026-11/8/2026"}]
+    r = solve(_inp(teams, locals_=prog), *NOV, time_limit_s=10)
+    loc = r.assignments[r.assignments["kind"] == "Local"]
+    assert set(loc["date"]) == {date(2026, 11, 8)} and set(loc["slot"]) == {"9AM", "11AM"}
+    assert date(2026, 11, 8) in r.weekend_dates

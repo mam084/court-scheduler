@@ -5,14 +5,21 @@ Run locally:  streamlit run app.py
 
 from __future__ import annotations
 
+import sys
 from datetime import date
 
 import pandas as pd
 import streamlit as st
 
+# Always load the current scheduler code. After a push, Streamlit Cloud can
+# rerun app.py while older scheduler modules are still in memory, which shows
+# up as an ImportError until the app is rebooted.
+for _mod in [m for m in list(sys.modules) if m == "scheduler" or m.startswith("scheduler.")]:
+    del sys.modules[_mod]
+
 from scheduler import ScheduleInput, clean, month_range, simulate, solve
-from scheduler.config import SLOT_KEYS
-from scheduler.data import ATTRS, COLUMNS
+from scheduler.config import COURTS, DAYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
+from scheduler.data import ATTRS, COLUMNS, parse_names
 from scheduler.export import to_excel, to_ics
 from scheduler.solver import week_start
 from scheduler.views import club_stripes, court_grid_html, legend_html, month_calendar_html, month_name, week_dates
@@ -84,7 +91,8 @@ with st.sidebar:
 
 inp: ScheduleInput | None = st.session_state.get("inp")
 
-if run and inp is not None:
+# Adding/removing a program triggers a rebuild so the calendar fills in.
+if (run or st.session_state.pop("resolve", False)) and inp is not None:
     with st.spinner("Building the schedule…"):
         try:
             st.session_state.result = solve(inp, start, end, time_limit_s=time_limit, makeup_closures=makeup)
@@ -133,7 +141,24 @@ else:
             for w in result.warnings:
                 st.markdown(f"- {w}")
 
-tabs = st.tabs(["🏟️ Court view", "📅 Calendar", "🧑‍🏫 Coaches", "🔎 Review", "📝 Inputs"])
+if "flash" in st.session_state:
+    st.success(st.session_state.pop("flash"))
+
+tabs = st.tabs(["🏟️ Court view", "📅 Calendar", "🗓️ Programs", "🧑‍🏫 Coaches", "🔎 Review", "📝 Inputs"])
+TAB_COURT, TAB_CAL, TAB_PROG, TAB_COACH, TAB_REVIEW, TAB_INPUTS = tabs
+
+
+def template_locals(a: pd.DataFrame) -> pd.DataFrame:
+    """Locals that are part of the usual week: running on most of that weekday's dates."""
+    loc = a[(a["kind"] == "Local") & a["day"].isin(WEEKDAYS)]
+    if loc.empty:
+        return loc
+    per_day = {wd: len({d for d in pd.date_range(start, end).date if DAYS[d.weekday()] == wd and d not in closures})
+               for wd in WEEKDAYS}
+    counts = loc.groupby(["name", "day", "slot", "court"])["date"].nunique().reset_index(name="n")
+    keep = counts[counts.apply(lambda r: r["n"] * 2 >= per_day[r["day"]], axis=1)]
+    return loc.drop_duplicates(subset=["day", "slot", "court", "name"]).merge(
+        keep[["name", "day", "slot", "court"]], on=["name", "day", "slot", "court"])
 
 
 def people_options(a: pd.DataFrame) -> list[str]:
@@ -144,7 +169,7 @@ def people_options(a: pd.DataFrame) -> list[str]:
 
 
 # ---------------------------------------------------------- court view --
-with tabs[0]:
+with TAB_COURT:
     if result is None:
         st.caption("No schedule yet.")
     else:
@@ -161,8 +186,7 @@ with tabs[0]:
         st.markdown(legend_html(a.loc[a["kind"] == "Practice", "age"], stripes), unsafe_allow_html=True)
         if pick == "Weekly template":
             tmpl = result.pattern.rename(columns={"team": "name"}).assign(kind="Practice", on_pattern=True)
-            loc = a[(a["kind"] == "Local") & a["day"].isin(["Mon", "Tue", "Wed", "Thu", "Fri"])]
-            loc = loc.drop_duplicates(subset=["day", "slot", "court", "name"])
+            loc = template_locals(a)
             book = pd.concat([tmpl, loc[[c for c in tmpl.columns if c in loc.columns]]], ignore_index=True)
             st.markdown(court_grid_html(book, None, closures, hl or None, stripes), unsafe_allow_html=True)
         else:
@@ -174,19 +198,114 @@ with tabs[0]:
         st.download_button("⬇️ Download schedule (Excel)", to_excel(result, closures), f"schedule_{start:%Y_%m}.xlsx")
 
 # ------------------------------------------------------------ calendar --
-with tabs[1]:
+with TAB_CAL:
     if result is None:
         st.caption("No schedule yet.")
     else:
         a = result.assignments
         c1, c2 = st.columns([2, 1])
         hl = set(c1.multiselect("Only show a club, team or coach", people_options(a), key="cal_filter"))
-        show_locals = c2.toggle("Include locals programs", value=False)
+        show_locals = c2.toggle("Include locals programs", value=True)
         st.markdown(month_calendar_html(a, start, end, closures, hl or None, show_locals, result.weekend_dates),
                     unsafe_allow_html=True)
 
+
+# ------------------------------------------------------------ programs --
+SLOT_CHOICES = [f"{k}" for k in WEEKDAY_KEYS + WEEKEND_KEYS]
+
+
+def slot_label(k: str) -> str:
+    return f"{'Weekday' if k in WEEKDAY_KEYS else 'Weekend'} · {SLOTS[k]}"
+
+
+with TAB_PROG:
+    st.markdown("Add a locals program and it's blocked off on the courts and calendar right away; "
+                "the practice schedule is rebuilt around it.")
+    known_coaches = cleaned.coaches if cleaned else []
+    with st.form("add_program", clear_on_submit=True):
+        c1, c2 = st.columns([2, 1])
+        name = c1.text_input("Program name", placeholder="e.g. Girls 14 League")
+        on_site = c2.checkbox("Uses our courts", value=True,
+                              help="Uncheck for programs somewhere else (e.g. a high school team). "
+                                   "Those only block the coaches.")
+        c1, c2, c3 = st.columns(3)
+        days = c1.multiselect("Days", DAYS, placeholder="e.g. Tue, Thu")
+        p_start = c2.date_input("Start date", value=start, format="MM/DD/YYYY")
+        p_end = c3.date_input("End date", value=end, format="MM/DD/YYYY")
+        c1, c2 = st.columns(2)
+        times = c1.multiselect("Time", SLOT_CHOICES, format_func=slot_label,
+                               help="Pick every timeslot the program uses (e.g. 3:45 and 5:30 for a 3:45–7:20 program).")
+        courts = c2.multiselect("Courts used", COURTS, format_func=lambda c: f"Court {c}",
+                                help="Leave empty if not known yet (it then blocks only the coaches).")
+        c1, c2 = st.columns(2)
+        coaches_sel = c1.multiselect("Coaches working it", known_coaches)
+        coaches_new = c2.text_input("Other coaches", placeholder="Names separated by commas")
+        submitted = st.form_submit_button("➕ Add program", type="primary")
+
+    if submitted:
+        problems = []
+        if not name.strip():
+            problems.append("Give the program a name.")
+        if not days:
+            problems.append("Pick at least one day.")
+        if not times:
+            problems.append("Pick at least one timeslot.")
+        if p_end < p_start:
+            problems.append("The end date is before the start date.")
+        for d in days:
+            ok = [t for t in times if (t in WEEKEND_KEYS) == (d in ("Sat", "Sun"))]
+            if times and not ok:
+                problems.append(f"{d} needs a {'weekend' if d in ('Sat', 'Sun') else 'weekday'} timeslot.")
+        if problems:
+            st.error(" ".join(problems))
+        else:
+            row = {
+                "program": name.strip(), "days": ", ".join(days),
+                "time": ", ".join(sorted(times, key=SLOT_KEYS.index)),
+                "courts": ", ".join(str(c) for c in sorted(courts)) or "TBD",
+                "coaches": "; ".join(dict.fromkeys(coaches_sel + parse_names(coaches_new))),
+                "on_site": "Yes" if on_site else "No",
+                "dates": f"{p_start:%m/%d/%Y}-{p_end:%m/%d/%Y}",
+            }
+            new_locals = pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True)
+            trial = ScheduleInput(inp.teams, inp.availability, inp.wishlist, new_locals, inp.weekends, inp.closures)
+            try:
+                clean(trial, start, end)
+            except ValueError as e:
+                st.error(f"Couldn't add {row['program']}: {e}")
+            else:
+                inp.locals = new_locals
+                st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+                st.session_state.resolve = True
+                st.session_state.flash = (f"Added {row['program']} ({row['days']}, "
+                                          f"{p_start:%b %-d}–{p_end:%b %-d}). Schedule rebuilt around it.")
+                st.rerun()
+
+    st.subheader("Current programs")
+    if inp.locals.empty:
+        st.caption("No programs yet.")
+    else:
+        view = inp.locals.copy().fillna("")
+        view.index = [f"{r['program']} · {r['days']} · {r['time']}" + (f" · {r['dates']}" if r["dates"] else "")
+                      for _, r in view.iterrows()]
+        st.dataframe(view.rename(columns={"program": "Program", "days": "Days", "time": "Time", "courts": "Courts",
+                                          "coaches": "Coaches", "on_site": "On site", "dates": "Dates"}),
+                     hide_index=True, use_container_width=True)
+        c1, c2 = st.columns([3, 1])
+        drop = c1.multiselect("Remove programs", list(view.index), placeholder="Choose programs to remove")
+        if c2.button("🗑️ Remove", disabled=not drop, use_container_width=True):
+            keep = [i for i, lab in enumerate(view.index) if lab not in drop]
+            inp.locals = inp.locals.iloc[keep].reset_index(drop=True)
+            st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+            st.session_state.resolve = True
+            st.session_state.flash = f"Removed {len(drop)} program(s). Schedule rebuilt."
+            st.rerun()
+    st.caption("Programs you add live in this session. Download the inputs spreadsheet to keep them "
+               "(and upload it next time).")
+    st.download_button("⬇️ Download inputs (Excel)", inp.to_excel_bytes(), "club_inputs.xlsx", key="dl_inputs_prog")
+
 # ------------------------------------------------------------- coaches --
-with tabs[2]:
+with TAB_COACH:
     if cleaned is None:
         st.caption("Fix the input errors first.")
     else:
@@ -230,7 +349,7 @@ with tabs[2]:
                                    help="In Google Calendar: Settings → Import & export → Import this file.")
 
 # -------------------------------------------------------------- review --
-with tabs[3]:
+with TAB_REVIEW:
     if result is None:
         st.caption("No schedule yet.")
     elif result.issues.empty:
@@ -244,7 +363,7 @@ with tabs[3]:
                      hide_index=True, use_container_width=True)
 
 # -------------------------------------------------------------- inputs --
-with tabs[4]:
+with TAB_INPUTS:
     st.markdown("Edit any table, then press **⚡ Auto-schedule** again. "
                 "Download the tables as a spreadsheet to keep your changes.")
     help_ = {
@@ -262,7 +381,7 @@ with tabs[4]:
                     "'at least one of these must be used'.",
         "Closures": "Club closed all day.",
     }
-    sig_key = abs(hash(st.session_state.get("inp_sig"))) % 10**8
+    sig_key = abs(hash((st.session_state.get("inp_sig"), st.session_state.get("locals_ver", 0)))) % 10**8
     for sheet, attr in ATTRS.items():
         st.subheader(sheet)
         st.caption(help_[sheet])
