@@ -9,7 +9,6 @@ import pytest
 
 from scheduler import ScheduleInput, clean, simulate, solve
 from scheduler.closures import default_closures
-from scheduler.config import slot_allowed_for_age
 from scheduler.data import (
     COLUMNS, parse_courts, parse_date_ranges, parse_days, parse_names, parse_slot, parse_times,
     parse_weekend_tokens,
@@ -32,7 +31,7 @@ def _check_hard_rules(inp, r):
     for _, row in pr.iterrows():
         t, d, s = teams[row["name"]], row["date"], row["slot"]
         assert d not in data.closures
-        assert slot_allowed_for_age(t.age, s), (t.name, s)
+        assert t.allowed(s), (t.name, s)
         assert not t.start or d >= t.start, (t.name, d)
         if d.weekday() >= 5:
             assert d in data.weekends and s in data.weekends[d].blocks
@@ -99,6 +98,22 @@ def test_age_rules_are_hard():
     pr = r.assignments
     assert not ((pr["age"] > 14) & (pr["slot"] == "3:45")).any()
     assert not ((pr["age"] <= 14) & (pr["slot"] == "7:20")).any()
+
+
+def test_late_ok_exception_allows_7_20_but_avoids_it():
+    teams = [{"team": "14 Black", "age": 14, "head_coach": "Sam", "late_ok": "Yes"},
+             {"team": "14 Gold", "age": 14, "head_coach": "Lee"}]
+    data = clean(_inp(teams), *NOV)
+    assert data.teams[0].allowed("7:20") and not data.teams[1].allowed("7:20")
+    # With 5:30 free, the exception isn't used...
+    r = solve(_inp(teams), *NOV, time_limit_s=10)
+    assert not (r.assignments["slot"] == "7:20").any()
+    # ...but when 3:45 and 5:30 are blocked, 14 Black can go late and 14 Gold can't.
+    avail = [{"who": t, "type": "No", "times": "3:45, 5:30"} for t in ("14 Black", "14 Gold")]
+    r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
+    pr = r.assignments
+    assert (pr[pr["name"] == "14 Black"]["slot"] == "7:20").all() and len(pr[pr["name"] == "14 Black"])
+    assert pr[pr["name"] == "14 Gold"].empty
 
 
 def test_assistant_can_overlap_but_head_cannot():

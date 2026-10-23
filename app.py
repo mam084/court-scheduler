@@ -250,7 +250,8 @@ with tabs[4]:
     help_ = {
         "Teams": "Girls teams can leave head_coach blank (taken from the name, e.g. 18-Jordan). "
                  "start_date = first day the team can practice. weekend_only limits weekends to listed options "
-                 "(`11/1 AM; 11/8 3PM`); weekend_pref is a soft preference (`AM`, `Sat AM; Sun PM`).",
+                 "(`11/1 AM; 11/8 3PM`); weekend_pref is a soft preference (`AM`, `Sat AM; Sun PM`). "
+                 "late_ok = Yes lets a 14s-and-under team practice at 7:20 (avoided unless needed).",
         "Availability": "One row per rule. who = team or coach. type = No (hard) or Not preferred. "
                         "days like `Mon` / `Weekdays`, dates like `11/10-11/16`, times like `5:30` or `3:45` "
                         "(blank = any).",

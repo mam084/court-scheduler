@@ -37,7 +37,7 @@ from ortools.sat.python import cp_model
 
 from .config import (
     COURTS, DAYS, PRACTICES_PER_WEEK, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS,
-    WEIGHTS, slot_allowed_for_age, slot_cost,
+    WEIGHTS, is_late_exception, slot_cost,
 )
 from .data import CleanInput, ScheduleInput, clean
 
@@ -127,7 +127,7 @@ def solve(
             if team.start and d < team.start:
                 continue
             for s in slots_on(d):
-                if not slot_allowed_for_age(team.age, s):
+                if not team.allowed(s):
                     continue
                 if not courts_on(d, s):
                     continue
@@ -161,6 +161,8 @@ def solve(
                     cost += WEIGHTS["not_preferred"]
                 if any(r.kind == "no" and r.matches(d, s) for a in team.assistants for r in rules_for[a]):
                     cost += WEIGHTS["assistant_conflict"]
+                if is_late_exception(team.age, s):
+                    cost += WEIGHTS["late_exception"]
                 if cost:
                     obj.append(cost * y[t, d, s])
 
@@ -211,9 +213,12 @@ def solve(
 
     # Weekday pattern: p[t, weekday, slot]; 2 different days.
     p = {(t, wd, s): m.NewBoolVar(f"p_{t}_{wd}_{s}") for t in T for wd in WEEKDAYS for s in WEEKDAY_KEYS
-         if slot_allowed_for_age(teams[t].age, s)}
+         if teams[t].allowed(s)}
     for t in T:
-        m.Add(sum(v for (tt, _, _), v in p.items() if tt == t) == PRACTICES_PER_WEEK)
+        # Soft so a team with no valid recurring slot can't make the model infeasible.
+        pat_short = m.NewIntVar(0, PRACTICES_PER_WEEK, f"patshort_{t}")
+        m.Add(sum(v for (tt, _, _), v in p.items() if tt == t) + pat_short == PRACTICES_PER_WEEK)
+        obj.append(300 * pat_short)
         for wd in WEEKDAYS:
             m.AddAtMostOne([p[t, wd, s] for s in WEEKDAY_KEYS if (t, wd, s) in p])
 

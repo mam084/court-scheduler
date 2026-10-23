@@ -55,12 +55,18 @@ YOUNG_ONLY_SLOTS = {"3:45"}   # only 14s & under can practice at 3:45
 NOT_FOR_YOUNG = {"7:20", "7PM"}  # 14s & under can't practice this late
 
 
-def slot_allowed_for_age(age: int, slot: str) -> bool:
+def slot_allowed_for_age(age: int, slot: str, late_ok: bool = False) -> bool:
+    """late_ok: a 14s-and-under team that's an exception to the no-7:20 rule."""
     if slot in YOUNG_ONLY_SLOTS and age > YOUNG_MAX_AGE:
         return False
-    if slot in NOT_FOR_YOUNG and age <= YOUNG_MAX_AGE:
+    if slot in NOT_FOR_YOUNG and age <= YOUNG_MAX_AGE and not late_ok:
         return False
     return True
+
+
+def is_late_exception(age: int, slot: str) -> bool:
+    """A young team practicing late (allowed only for late_ok teams, at a cost)."""
+    return slot in NOT_FOR_YOUNG and age <= YOUNG_MAX_AGE
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +89,8 @@ WEIGHTS = {
     "weekend_block": 20,
     # Weekend practice that doesn't match the team's weekend preference.
     "weekend_pref": 12,
+    # A late_ok young team (e.g. 14 Black) practicing at 7:20 / 7 PM.
+    "late_exception": 25,
     # A team's practices on back-to-back days.
     "consecutive_days": 15,
     # Wishlist: practice matching only the 2nd choice / matching neither.

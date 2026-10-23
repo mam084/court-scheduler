@@ -6,7 +6,8 @@ Canonical form is a set of pandas DataFrames, one per spreadsheet sheet
 Sheets / columns
 ----------------
 Teams         team, club, age, head_coach, assistants, start_date, priority,
-              weekend_only, weekend_pref
+              weekend_only, weekend_pref, late_ok (Yes = 14s-and-under team that
+              may practice at 7:20, though it's avoided)
 Availability  who, type, days, dates, times, note
 Wishlist      team, choice, days, times, note
 Locals        program, days, time, courts, coaches, on_site, dates
@@ -37,7 +38,7 @@ from .config import (
 
 COLUMNS = {
     "Teams": ["team", "club", "age", "head_coach", "assistants", "start_date", "priority",
-              "weekend_only", "weekend_pref"],
+              "weekend_only", "weekend_pref", "late_ok"],
     "Availability": ["who", "type", "days", "dates", "times", "note"],
     "Wishlist": ["team", "choice", "days", "times", "note"],
     "Locals": ["program", "days", "time", "courts", "coaches", "on_site", "dates"],
@@ -320,6 +321,10 @@ class Team:
     priority: int
     weekend_only: list[WeekendToken] = field(default_factory=list)
     weekend_pref: list[WeekendToken] = field(default_factory=list)
+    late_ok: bool = False
+
+    def allowed(self, slot: str) -> bool:
+        return slot_allowed_for_age(self.age, slot, self.late_ok)
 
     @property
     def staff(self) -> list[str]:
@@ -483,7 +488,10 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             errors.append(f"{row}: {e}")
             continue
         club = "" if blank(r.get("club")) else str(r["club"]).strip()
-        teams.append(Team(name, club, age, heads, assistants, team_start, priority, w_only, w_pref))
+        late_ok = yes(r.get("late_ok"))
+        if late_ok and age > 14:
+            warnings.append(f"{row}: late_ok only matters for 14s and under, so it's ignored")
+        teams.append(Team(name, club, age, heads, assistants, team_start, priority, w_only, w_pref, late_ok))
 
     team_names = {t.name for t in teams}
     people = {c for t in teams for c in t.staff}
@@ -553,7 +561,7 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             continue
         team = next(t for t in teams if t.name == tname)
         if w.times:
-            bad = sorted((s for s in w.times if not slot_allowed_for_age(team.age, s)), key=SLOT_KEYS.index)
+            bad = sorted((s for s in w.times if not team.allowed(s)), key=SLOT_KEYS.index)
             if bad:
                 warnings.append(f"Wishlist for {tname} includes {', '.join(bad)}, which {team.age}s can't use")
                 w.times -= set(bad)

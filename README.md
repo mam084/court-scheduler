@@ -21,7 +21,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - One team per court per timeslot
 - A head coach is never in two places at once (two teams, or a team plus a local they work)
 - Nothing on a team's or head coach's no-dates, on closure days, or before a team's season start
-- Only 14s and under practice at 3:45, and 14s and under never practice at 7:20
+- Only 14s and under practice at 3:45, and 14s and under never practice at 7:20 (unless the team is marked `late_ok`, and then only when needed)
 - Weekends: only open dates and blocks, only a team's allowed weekend options, and never one team alone in a block
 - At most one practice per team per day, and two per week
 - The weekly template obeys the same rules, so it can be read as a real week
@@ -56,7 +56,7 @@ One `.xlsx` with these sheets. Download a filled-in example from the app's sideb
 
 | Sheet | Columns |
 |---|---|
-| Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`) |
+| Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`), `late_ok` (`Yes` lets a 14s-and-under team practice at 7:20 when needed) |
 | Availability | one row per rule: `who` (team or coach), `type` (`No` or `Not preferred`), `days` (`Mon`, `Weekdays`), `dates` (`11/10-11/16`), `times` (`5:30`, `3:45`), `note` |
 | Wishlist | `team`, `choice` (1 or 2), `days` (`Tue, Thu`; blank = any), `times` (`5:30, 7:20`) |
 | Locals | `program`, `days` (`Tue, Thu`), `time`, `courts` (`1-4`; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional) |
