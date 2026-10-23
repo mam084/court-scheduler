@@ -90,10 +90,18 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
                 continue
             cols.append(wd)
             labels[wd] = f"{wd}\n{d:%b %-d}"
+            full = [tn for tn in result.tournaments
+                    if tn.kind == "local" and tn.covers(d) and set(COURTS) <= set(tn.courts)]
             if d in closures:
                 closed[wd] = f"Closed: {closures[d]}"
             elif not (result.start <= d <= result.end):
                 closed[wd] = "Outside this schedule period"
+            elif full:
+                closed[wd] = f"Local tournament: {full[0].name}"
+            else:
+                trav = [tn.name for tn in result.tournaments if tn.covers(d)]
+                if trav:
+                    labels[wd] += "\n" + "; ".join(trav)
         _grid_sheet(wb, f"Week of {ws_date:%b %-d}", g, labels, closed, cols)
 
     flat = a.copy()
@@ -108,6 +116,17 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
         sh.column_dimensions[get_column_letter(j)].width = w
     for c in sh[1]:
         c.font, c.fill = Font(bold=True, color="FFFFFF"), _head
+
+    if result.tournaments:
+        sh = wb.create_sheet("Tournaments")
+        sh.append(["Tournament", "Type", "Start", "End", "Teams / courts"])
+        for tn in result.tournaments:
+            sh.append([tn.name, tn.kind.title(), f"{tn.start:%Y-%m-%d}", f"{tn.end:%Y-%m-%d}",
+                       ", ".join(tn.teams) if tn.kind == "travel" else "Courts " + ", ".join(map(str, tn.courts))])
+        for j, w in enumerate([28, 9, 12, 12, 50], start=1):
+            sh.column_dimensions[get_column_letter(j)].width = w
+        for c in sh[1]:
+            c.font, c.fill = Font(bold=True, color="FFFFFF"), _head
 
     if len(result.issues):
         sh = wb.create_sheet("Review")

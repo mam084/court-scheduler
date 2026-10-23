@@ -7,12 +7,20 @@ Sheets / columns
 ----------------
 Teams         team, club, age, head_coach, assistants, start_date, priority,
               weekend_only, weekend_pref, late_ok (Yes = 14s-and-under team that
-              may practice at 7:20, though it's avoided)
+              may practice at 7:20, though it's avoided), level (1 = 1s, 2 = 2s;
+              blank = from the name: "Black" 1s, "Green" 2s)
 Availability  who, type, days, dates, times, note
 Wishlist      team, choice, days, times, note
 Locals        program, days, time, courts, coaches, on_site, dates
 Weekends      date, open, courts, group, required, note
 Closures      date, reason
+Tournaments   name, type (Local / Travel), start_date, end_date, club, ages,
+              teams, program, courts, note
+                Local  = hosted here: blocks its courts (default all) all day,
+                         plus the coaches of its locals program
+                Travel = away: the matching teams (club + ages, or listed
+                         teams) can't practice those days and avoid the
+                         days right before and after
 
 Field formats (all forgiving):
   days   "Mon, Wed" · "Tue/Thu" · "Weekdays" · "Sat" · blank = any day
@@ -38,15 +46,16 @@ from .config import (
 
 COLUMNS = {
     "Teams": ["team", "club", "age", "head_coach", "assistants", "start_date", "priority",
-              "weekend_only", "weekend_pref", "late_ok"],
+              "weekend_only", "weekend_pref", "late_ok", "level"],
     "Availability": ["who", "type", "days", "dates", "times", "note"],
     "Wishlist": ["team", "choice", "days", "times", "note"],
     "Locals": ["program", "days", "time", "courts", "coaches", "on_site", "dates"],
     "Weekends": ["date", "open", "courts", "group", "required", "note"],
     "Closures": ["date", "reason"],
+    "Tournaments": ["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts", "note"],
 }
 ATTRS = {"Teams": "teams", "Availability": "availability", "Wishlist": "wishlist",
-         "Locals": "locals", "Weekends": "weekends", "Closures": "closures"}
+         "Locals": "locals", "Weekends": "weekends", "Closures": "closures", "Tournaments": "tournaments"}
 
 
 def empty(sheet: str) -> pd.DataFrame:
@@ -63,6 +72,7 @@ class ScheduleInput:
     closures: pd.DataFrame
     start: date | None = None
     end: date | None = None
+    tournaments: pd.DataFrame = field(default_factory=lambda: empty("Tournaments"))
 
     def sheets(self) -> dict[str, pd.DataFrame]:
         return {sheet: getattr(self, attr) for sheet, attr in ATTRS.items()}
@@ -353,6 +363,7 @@ class Team:
     weekend_only: list[WeekendToken] = field(default_factory=list)
     weekend_pref: list[WeekendToken] = field(default_factory=list)
     late_ok: bool = False
+    level: int | None = None  # 1 = 1s (Black), 2 = 2s (Green), None = unknown
 
     def allowed(self, slot: str) -> bool:
         return slot_allowed_for_age(self.age, slot, self.late_ok)
@@ -459,6 +470,62 @@ class WeekendDay:
 
 
 @dataclass
+class Tournament:
+    name: str
+    kind: str                 # "local" | "travel"
+    start: date
+    end: date
+    teams: list[str]          # travel: teams attending
+    courts: list[int]         # local: courts used (all day)
+    coaches: list[str]        # local: coaches of its locals program
+    club: str = ""
+    ages: list[int] = field(default_factory=list)
+
+    def covers(self, d: date) -> bool:
+        return self.start <= d <= self.end
+
+    @property
+    def multi_day(self) -> bool:
+        return self.end > self.start
+
+    def label(self) -> str:
+        icon = "🏆" if self.kind == "local" else "✈️"
+        return f"{icon} {self.name}"
+
+
+def parse_ages(value, all_ages: list[int] | None = None) -> list[int]:
+    """'15-16' / '15/16' / '15, 16' / '14' / '14U' / '14 & under' -> ages. Blank -> []."""
+    if blank(value):
+        return []
+    s = str(value).lower()
+    nums = [int(n) for n in re.findall(r"\d{1,2}", s)]
+    if "under" in s or re.search(r"\d+\s*u\b", s):
+        lo = min(all_ages) if all_ages else 10
+        return list(range(lo, max(nums) + 1)) if nums else []
+    out = set()
+    for part in re.split(r"[;,/&]|\s+and\s+", s):
+        m = re.match(r"\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})", part)
+        if m:
+            out |= set(range(int(m.group(1)), int(m.group(2)) + 1))
+        else:
+            out |= {int(n) for n in re.findall(r"\d{1,2}", part)}
+    return sorted(out)
+
+
+def _team_level(name: str, value) -> int | None:
+    if not blank(value):
+        m = re.search(r"[12]", str(value))
+        if m:
+            return int(m.group())
+    low = name.lower()
+    if low.endswith("black"):
+        return 1
+    if low.endswith("green"):
+        return 2
+    return None
+
+
+@dataclass
 class CleanInput:
     teams: list[Team]
     rules: list[Rule]
@@ -467,6 +534,7 @@ class CleanInput:
     weekends: dict[date, WeekendDay]
     closures: dict[date, str]
     warnings: list[str]
+    tournaments: list[Tournament] = field(default_factory=list)
 
     @property
     def coaches(self) -> list[str]:
@@ -546,7 +614,8 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
         late_ok = yes(r.get("late_ok"))
         if late_ok and age > 14:
             warnings.append(f"{row}: late_ok only matters for 14s and under, so it's ignored")
-        teams.append(Team(name, club, age, heads, assistants, team_start, priority, w_only, w_pref, late_ok))
+        teams.append(Team(name, club, age, heads, assistants, team_start, priority, w_only, w_pref, late_ok,
+                          _team_level(name, r.get("level"))))
 
     team_names = {t.name for t in teams}
     people = {c for t in teams for c in t.staff}
@@ -655,8 +724,55 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
     for msg in local_conflicts(locals_):
         errors.append(msg)
 
+    # ---- tournaments --------------------------------------------------------
+    tournaments: list[Tournament] = []
+    tdf = getattr(inp, "tournaments", None)
+    all_ages = sorted({t.age for t in teams})
+    for i, r in (tdf.iterrows() if tdf is not None else []):
+        if blank(r.get("name")):
+            continue
+        name = str(r["name"]).strip()
+        row = f"Tournaments row {i + 2} ({name})"
+        try:
+            kind_raw = "" if blank(r.get("type")) else str(r["type"]).strip().lower()
+            if kind_raw.startswith("loc") or kind_raw.startswith("home") or kind_raw.startswith("host"):
+                kind = "local"
+            elif kind_raw.startswith("trav") or kind_raw.startswith("away"):
+                kind = "travel"
+            else:
+                raise ValueError("type should be Local or Travel")
+            t_start = to_date(r["start_date"], year)
+            t_end = t_start if blank(r.get("end_date")) else to_date(r["end_date"], year)
+            if t_end < t_start:
+                raise ValueError("end_date is before start_date")
+            club = "" if blank(r.get("club")) else str(r["club"]).strip()
+            ages = parse_ages(r.get("ages"), all_ages)
+            listed = parse_list(r.get("teams"))
+            unknown = [n for n in listed if n not in team_names]
+            if unknown:
+                warnings.append(f"{row}: team(s) {', '.join(unknown)} aren't on the Teams sheet")
+            if listed:
+                t_teams = [n for n in listed if n in team_names]
+            elif kind == "travel":
+                t_teams = [t.name for t in teams
+                           if (not club or t.club.lower() == club.lower()) and (not ages or t.age in ages)]
+            else:
+                t_teams = []
+            if kind == "travel" and not t_teams:
+                warnings.append(f"{row}: no teams match club '{club or 'any'}' and ages "
+                                f"'{r.get('ages') or 'any'}', so it doesn't affect anyone")
+            courts = parse_courts(r.get("courts")) if not blank(r.get("courts")) else list(COURTS)
+            prog = "" if blank(r.get("program")) else str(r["program"]).strip()
+            coaches = sorted({c for lp in locals_ if lp.name.lower() == prog.lower() for c in lp.coaches}) if prog else []
+            if prog and not any(lp.name.lower() == prog.lower() for lp in locals_):
+                warnings.append(f"{row}: program '{prog}' isn't on the Locals sheet")
+            tournaments.append(Tournament(name, kind, t_start, t_end, t_teams,
+                                          courts if kind == "local" else [], coaches, club, ages))
+        except (ValueError, TypeError, KeyError) as e:
+            errors.append(f"{row}: {e}")
+
     if errors:
         raise ValueError("Please fix these in the input:\n- " + "\n- ".join(errors))
     if not teams:
         raise ValueError("There are no teams to schedule.")
-    return CleanInput(teams, rules, wishes, locals_, weekends, closures, warnings)
+    return CleanInput(teams, rules, wishes, locals_, weekends, closures, warnings, tournaments)

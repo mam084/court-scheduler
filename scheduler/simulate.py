@@ -134,4 +134,14 @@ def simulate(
     closures = pd.DataFrame([{"date": d.strftime("%m/%d/%Y"), "reason": r} for d, r in default_closures(start, end)],
                             columns=COLUMNS["Closures"])
 
-    return ScheduleInput(teams, availability, wishlist, locals_df, weekends, closures, start, end)
+    # ---- one travel tournament for the older boys, on the 2nd weekend --------
+    sats = [d for d in pd.date_range(start, end).date if d.weekday() == 5]
+    tourn = []
+    if len(sats) >= 2 and n_boys:
+        sat = sats[1]
+        tourn.append({"name": "Boys Travel Tournament", "type": "Travel", "start_date": sat.strftime("%m/%d/%Y"),
+                      "end_date": (sat + timedelta(days=1)).strftime("%m/%d/%Y"), "club": "Boys", "ages": "15-18",
+                      "teams": "", "program": "", "courts": "", "note": ""})
+    tournaments = pd.DataFrame(tourn, columns=COLUMNS["Tournaments"])
+
+    return ScheduleInput(teams, availability, wishlist, locals_df, weekends, closures, start, end, tournaments)

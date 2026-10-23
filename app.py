@@ -19,7 +19,7 @@ for _mod in [m for m in list(sys.modules) if m == "scheduler" or m.startswith("s
 
 from scheduler import ScheduleInput, clean, month_range, simulate, solve
 from scheduler.config import COURTS, DAYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
-from scheduler.data import ATTRS, COLUMNS, parse_names
+from scheduler.data import ATTRS, COLUMNS, empty, parse_names
 from scheduler.export import to_excel, to_ics
 from scheduler.solver import week_start
 from scheduler.views import club_stripes, court_grid_html, legend_html, month_calendar_html, month_name, week_dates
@@ -90,6 +90,8 @@ with st.sidebar:
                     disabled="inp" not in st.session_state)
 
 inp: ScheduleInput | None = st.session_state.get("inp")
+if inp is not None and not isinstance(getattr(inp, "tournaments", None), pd.DataFrame):
+    inp.tournaments = empty("Tournaments")  # files/sessions from before tournaments existed
 
 # Adding/removing a program triggers a rebuild so the calendar fills in.
 if (run or st.session_state.pop("resolve", False)) and inp is not None:
@@ -144,8 +146,9 @@ else:
 if "flash" in st.session_state:
     st.success(st.session_state.pop("flash"))
 
-tabs = st.tabs(["🏟️ Court view", "📅 Calendar", "🗓️ Programs", "🧑‍🏫 Coaches", "🔎 Review", "📝 Inputs"])
-TAB_COURT, TAB_CAL, TAB_PROG, TAB_COACH, TAB_REVIEW, TAB_INPUTS = tabs
+tabs = st.tabs(["🏟️ Court view", "📅 Calendar", "🗓️ Programs", "🏆 Tournaments", "🧑‍🏫 Coaches", "🔎 Review",
+                "📝 Inputs"])
+TAB_COURT, TAB_CAL, TAB_PROG, TAB_TOURN, TAB_COACH, TAB_REVIEW, TAB_INPUTS = tabs
 
 
 def template_locals(a: pd.DataFrame) -> pd.DataFrame:
@@ -189,11 +192,13 @@ with TAB_COURT:
             loc = template_locals(a)
             book = pd.concat([tmpl, loc[[c for c in tmpl.columns if c in loc.columns]]], ignore_index=True)
             st.markdown(court_grid_html(book, None, closures, hl or None, stripes), unsafe_allow_html=True)
+            st.caption("Courts are ranked 1 → 7 → 6 → 5 → 3 → 4 → 2; older and 1s teams get the better courts.")
         else:
             ws = weeks[options.index(pick) - 1]
             dd = week_dates(ws, start, end, result.weekend_dates)
             book = a[a["date"].map(week_start) == ws]
-            st.markdown(court_grid_html(book, dd, closures, hl or None, stripes), unsafe_allow_html=True)
+            st.markdown(court_grid_html(book, dd, closures, hl or None, stripes, result.tournaments),
+                        unsafe_allow_html=True)
 
         st.download_button("⬇️ Download schedule (Excel)", to_excel(result, closures), f"schedule_{start:%Y_%m}.xlsx")
 
@@ -206,8 +211,8 @@ with TAB_CAL:
         c1, c2 = st.columns([2, 1])
         hl = set(c1.multiselect("Only show a club, team or coach", people_options(a), key="cal_filter"))
         show_locals = c2.toggle("Include locals programs", value=True)
-        st.markdown(month_calendar_html(a, start, end, closures, hl or None, show_locals, result.weekend_dates),
-                    unsafe_allow_html=True)
+        st.markdown(month_calendar_html(a, start, end, closures, hl or None, show_locals, result.weekend_dates,
+                                        result.tournaments), unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------ programs --
@@ -268,7 +273,8 @@ with TAB_PROG:
                 "dates": f"{p_start:%m/%d/%Y}-{p_end:%m/%d/%Y}",
             }
             new_locals = pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True)
-            trial = ScheduleInput(inp.teams, inp.availability, inp.wishlist, new_locals, inp.weekends, inp.closures)
+            trial = ScheduleInput(inp.teams, inp.availability, inp.wishlist, new_locals, inp.weekends, inp.closures,
+                                  tournaments=inp.tournaments)
             try:
                 clean(trial, start, end)
             except ValueError as e:
@@ -303,6 +309,89 @@ with TAB_PROG:
     st.caption("Programs you add live in this session. Download the inputs spreadsheet to keep them "
                "(and upload it next time).")
     st.download_button("⬇️ Download inputs (Excel)", inp.to_excel_bytes(), "club_inputs.xlsx", key="dl_inputs_prog")
+
+# --------------------------------------------------------- tournaments --
+with TAB_TOURN:
+    st.markdown("**Local** tournaments are hosted here and take over courts for the whole day. "
+                "**Travel** tournaments don't use our courts, but the teams going can't practice those days, "
+                "avoid the days right before and after, and get priority for their two practices that week.")
+    team_list = cleaned.teams if cleaned else []
+    clubs = sorted({t.club for t in team_list if t.club})
+    ages_all = sorted({t.age for t in team_list})
+    program_names = sorted({lp.name for lp in cleaned.locals}) if cleaned else []
+
+    with st.container(border=True):
+        c1, c2 = st.columns([2, 1])
+        t_name = c1.text_input("Tournament name", placeholder="e.g. Boys 14 Local Tournament", key="t_name")
+        t_kind = c2.radio("Type", ["Local", "Travel"], horizontal=True, key="t_kind")
+        c1, c2 = st.columns(2)
+        t_start = c1.date_input("Start date", value=start, format="MM/DD/YYYY", key="t_start")
+        t_end = c2.date_input("End date", value=t_start, format="MM/DD/YYYY", key="t_end")
+        if t_kind == "Local":
+            c1, c2 = st.columns(2)
+            t_prog = c1.selectbox("Locals program", ["(none)"] + program_names, key="t_prog",
+                                  help="Its coaches are blocked for the day.")
+            t_courts = c2.multiselect("Courts used", COURTS, default=COURTS, key="t_courts",
+                                      format_func=lambda c: f"Court {c}")
+            t_club, t_ages, t_teams = "", [], []
+        else:
+            c1, c2 = st.columns(2)
+            t_club = c1.selectbox("Club", ["Any"] + clubs, key="t_club")
+            t_ages = c2.multiselect("Age groups", ages_all, key="t_ages", format_func=lambda a: f"{a}s")
+            match = [] if (t_club == "Any" and not t_ages) else [
+                t.name for t in team_list if (t_club == "Any" or t.club == t_club) and (not t_ages or t.age in t_ages)]
+            t_teams = st.multiselect("Teams going", [t.name for t in team_list], default=match,
+                                     key=f"t_teams_{t_club}_{'-'.join(map(str, t_ages))}",
+                                     help="Filled in from the club and ages; remove teams that aren't going.")
+            t_prog, t_courts = "(none)", []
+        add_t = st.button("➕ Add tournament", type="primary")
+
+    if add_t:
+        problems = []
+        if not t_name.strip():
+            problems.append("Give the tournament a name.")
+        if t_end < t_start:
+            problems.append("The end date is before the start date.")
+        if t_kind == "Travel" and not t_teams:
+            problems.append("Pick at least one team that's going.")
+        if t_kind == "Local" and not t_courts:
+            problems.append("Pick the courts it uses.")
+        if problems:
+            st.error(" ".join(problems))
+        else:
+            row = {"name": t_name.strip(), "type": t_kind,
+                   "start_date": f"{t_start:%m/%d/%Y}", "end_date": f"{t_end:%m/%d/%Y}",
+                   "club": "" if t_club in ("", "Any") else t_club,
+                   "ages": ", ".join(map(str, t_ages)), "teams": ", ".join(t_teams),
+                   "program": "" if t_prog == "(none)" else t_prog,
+                   "courts": ", ".join(map(str, sorted(t_courts))) if t_kind == "Local" else "", "note": ""}
+            inp.tournaments = pd.concat([inp.tournaments, pd.DataFrame([row])], ignore_index=True)
+            st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+            st.session_state.resolve = True
+            span = f"{t_start:%b %-d}" + ("" if t_end == t_start else f"–{t_end:%b %-d}")
+            st.session_state.flash = f"Added {row['name']} ({t_kind.lower()}, {span}). Schedule rebuilt around it."
+            st.session_state.pop("t_name", None)  # clear the form for the next one
+            st.rerun()
+
+    st.subheader("Tournaments")
+    if inp.tournaments.empty:
+        st.caption("None yet.")
+    else:
+        tv = inp.tournaments.copy().fillna("")
+        tv.index = [f"{r['name']} · {r['type']} · {r['start_date']}" for _, r in tv.iterrows()]
+        st.dataframe(tv[["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts"]]
+                     .rename(columns=lambda c: c.replace("_", " ").title()), hide_index=True, use_container_width=True)
+        c1, c2 = st.columns([3, 1])
+        drop_t = c1.multiselect("Remove tournaments", list(tv.index), placeholder="Choose tournaments to remove")
+        if c2.button("🗑️ Remove", disabled=not drop_t, use_container_width=True, key="rm_tourn"):
+            keep = [i for i, lab in enumerate(tv.index) if lab not in drop_t]
+            inp.tournaments = inp.tournaments.iloc[keep].reset_index(drop=True)
+            st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+            st.session_state.resolve = True
+            st.session_state.flash = f"Removed {len(drop_t)} tournament(s). Schedule rebuilt."
+            st.rerun()
+    st.caption("Tournaments you add live in this session. Download the inputs spreadsheet to keep them.")
+    st.download_button("⬇️ Download inputs (Excel)", inp.to_excel_bytes(), "club_inputs.xlsx", key="dl_inputs_tourn")
 
 # ------------------------------------------------------------- coaches --
 with TAB_COACH:
@@ -380,6 +469,9 @@ with TAB_INPUTS:
         "Weekends": "Open weekend days. open like `9AM-9PM`. Days sharing a group with required = Yes mean "
                     "'at least one of these must be used'.",
         "Closures": "Club closed all day.",
+        "Tournaments": "type = Local (hosted here: blocks its courts all day; blank courts = all) or Travel "
+                       "(away: the teams matching club + ages, or the listed teams, can't practice those days "
+                       "and avoid the days right before and after). Ages like `15-16` or `14U`.",
     }
     sig_key = abs(hash((st.session_state.get("inp_sig"), st.session_state.get("locals_ver", 0)))) % 10**8
     for sheet, attr in ATTRS.items():

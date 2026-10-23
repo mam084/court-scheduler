@@ -58,6 +58,10 @@ CSS = """
 .cs-cal .cs-datenum { font-weight: 700; color: #1F2A44; margin-bottom: 3px; }
 .cs-cal .cs-out { background: #F1F2F4; }
 .cs-cal .cs-chip { padding: 2px 5px; margin-bottom: 3px; font-size: 11.5px; }
+.cs-tourn { background: #FFF1D6; color: #7A4B00; border-left-color: #E8A33D !important; font-weight: 600; }
+.cs-travel { background: #E8F0FF; color: #1F3F7A; border-left-color: #4A7BD0 !important; font-weight: 600; }
+.cs-notes { font-family: system-ui, sans-serif; font-size: 12.5px; margin: 2px 0 8px; display:flex; flex-wrap:wrap; gap:6px; }
+.cs-notes .cs-chip { margin: 0; }
 </style>
 """
 
@@ -120,12 +124,23 @@ def _chip(r, stripes, highlight=None, compact=False) -> str:
             f'<b><span class="cs-time">{r["slot"]}</span> {name}</b><span>{html.escape(coaches)}</span></div>')
 
 
+def _tourn_chip(tn, compact=False) -> str:
+    cls = "cs-tourn" if tn.kind == "local" else "cs-travel"
+    extra = ""
+    if tn.kind == "travel" and not compact:
+        extra = f"<span style='font-weight:400'> · {html.escape(', '.join(tn.teams))}</span>"
+    span = f"{tn.start:%a %-m/%-d}" + ("" if not tn.multi_day else f"–{tn.end:%a %-m/%-d}")
+    title = f"{tn.name} ({'local, courts ' + ', '.join(map(str, tn.courts)) if tn.kind == 'local' else 'travel'}) {span}"
+    return f'<div class="cs-chip {cls}" title="{html.escape(title)}">{html.escape(tn.label())}{extra}</div>'
+
+
 def court_grid_html(
     bookings: pd.DataFrame,
     day_dates: dict[str, date] | None = None,
     closures: dict[date, str] | None = None,
     highlight: set[str] | None = None,
     stripes: dict | None = None,
+    tournaments: list | None = None,
 ) -> str:
     """Club layout: courts as rows, days as columns, practices listed with
     their times in each box. `day_dates` is an ordered {day: date} for a
@@ -135,15 +150,34 @@ def court_grid_html(
     stripes = stripes or club_stripes(bookings["club"] if "club" in bookings else [])
     cols = list(day_dates) if day_dates else list(WEEKDAYS)
 
-    blocked = {}
+    tournaments = tournaments or []
+    blocked, partial, notes = {}, {}, []
     for wd in cols:
         d = (day_dates or {}).get(wd)
         if d is not None and d in closures:
             blocked[wd] = f"Closed: {html.escape(closures[d])}"
         elif d is not None and d == date.min:
             blocked[wd] = "Outside this schedule period"
+        elif d is not None:
+            for tn in tournaments:
+                if not tn.covers(d):
+                    continue
+                if tn.kind == "local" and set(COURTS) <= set(tn.courts):
+                    blocked[wd] = html.escape(tn.label())
+                elif tn.kind == "local":
+                    partial.setdefault(wd, []).append(tn)
+                elif tn not in notes:
+                    notes.append(tn)
+    if day_dates:
+        for tn in tournaments:  # list everything happening this week above the grid
+            if tn.kind == "local" and tn not in notes and any(
+                    d not in (None, date.min) and tn.covers(d) for d in day_dates.values()):
+                notes.append(tn)
 
-    out = [CSS, '<div class="cs-wrap"><table class="cs-grid"><thead><tr><th class="cs-day"></th>']
+    out = [CSS]
+    if notes:
+        out.append('<div class="cs-notes">' + "".join(_tourn_chip(tn) for tn in notes) + "</div>")
+    out.append('<div class="cs-wrap"><table class="cs-grid"><thead><tr><th class="cs-day"></th>')
     for wd in cols:
         d = (day_dates or {}).get(wd)
         sub = f'<br><small style="font-weight:400;opacity:.8">{d:%b %-d}</small>' if d and d != date.min else ""
@@ -159,10 +193,10 @@ def court_grid_html(
                     out.append(f'<td class="cs-closed" rowspan="{len(COURTS)}">{blocked[wd]}</td>')
                 continue
             cell = court_rows[court_rows["day"] == wd].copy() if len(court_rows) else court_rows
-            chips = ""
+            chips = "".join(_tourn_chip(tn, compact=True) for tn in partial.get(wd, []) if c in tn.courts)
             if len(cell):
                 cell["o"] = cell["slot"].map(SLOT_KEYS.index)
-                chips = "".join(_chip(r, stripes, highlight) for _, r in cell.sort_values("o").iterrows())
+                chips += "".join(_chip(r, stripes, highlight) for _, r in cell.sort_values("o").iterrows())
             cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
             out.append(f"<td{cls}>{chips}</td>")
         out.append("</tr>")
@@ -196,6 +230,7 @@ def month_calendar_html(
     highlight: set[str] | None = None,
     include_locals: bool = False,
     weekend_dates: list[date] | None = None,
+    tournaments: list | None = None,
 ) -> str:
     """Month calendar (Mon–Fri, plus Sat/Sun when any weekend is open);
     each day lists its practices (time, team, court)."""
@@ -231,10 +266,11 @@ def month_calendar_html(
                 out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.5">{d:%-d}</div></td>')
                 continue
             g = by_date.get(d)
-            chips = ""
+            chips = "".join(_tourn_chip(tn, compact=True) for tn in (tournaments or []) if tn.covers(d)
+                            and (not highlight or tn.kind == "local" or set(tn.teams) & set(highlight)))
             if g is not None:
                 g = g.assign(o=g["slot"].map(SLOT_KEYS.index)).sort_values(["o", "court"])
-                chips = "".join(_chip(r, stripes, None, compact=True) for _, r in g.iterrows())
+                chips += "".join(_chip(r, stripes, None, compact=True) for _, r in g.iterrows())
             cls = ' class="cs-wkend"' if d.weekday() >= 5 else ""
             out.append(f'<td{cls}><div class="cs-datenum">{d:%-d}</div>{chips}</td>')
         out.append("</tr>")

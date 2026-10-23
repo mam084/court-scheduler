@@ -6,6 +6,20 @@ stays readable.
 
 COURTS = [1, 2, 3, 4, 5, 6, 7]
 
+# Court quality, best first. Court 2 is clearly the worst.
+COURT_RANK = [1, 7, 6, 5, 3, 4, 2]
+# Cost of using a court, by its rank (best = 0). The jump at the end makes
+# the solver move a team to another time rather than put it on Court 2,
+# unless that time is a lot worse for the team.
+COURT_RANK_COST = [0, 1, 2, 3, 4, 6, 20]
+COURT_COST = {c: COURT_RANK_COST[i] for i, c in enumerate(COURT_RANK)}
+
+
+def team_court_weight(age: int, level: int | None) -> int:
+    """How much a team 'deserves' the better courts: older first, 1s over 2s."""
+    level_bonus = {1: 4, 2: 0}.get(level, 2)
+    return 2 * max(0, age - 11) + level_bonus
+
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 WEEKDAYS = DAYS[:5]
 WEEKEND = DAYS[5:]
@@ -89,6 +103,13 @@ WEIGHTS = {
     "weekend_block": 20,
     # Weekend practice that doesn't match the team's weekend preference.
     "weekend_pref": 12,
+    # Travel tournaments: a practice the day before / after the tournament,
+    # extra for a late practice the night before. The week leading into a
+    # tournament also weighs missed practices 1.5x.
+    "tournament_rest": 100,
+    "tournament_late_eve": 60,
+    # Keeping a team on its home court (stage 2).
+    "home_court": 8,
     # A late_ok young team (e.g. 14 Black) practicing at 7:20 / 7 PM.
     "late_exception": 25,
     # A team's practices on back-to-back days.

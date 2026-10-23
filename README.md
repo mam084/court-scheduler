@@ -2,7 +2,7 @@
 
 Auto-schedules a volleyball club's team practices across 7 courts, one month at a time, and shows the result in the club's own court layout.
 
-Each team practices twice a week on one court: weekdays in one of three timeslots (3:45–5:30, 5:30–7:20, 7:20–9:10), or on open weekend days in 2-hour blocks (9 AM–9 PM). Locals programs are blocked off first, no-dates are respected, coaches running two teams get them back-to-back, and the schedule stays the same week to week wherever possible. It handles a girls side and a boys side sharing the same courts and coaches.
+Each team practices twice a week on one court: weekdays in one of three timeslots (3:45–5:30, 5:30–7:20, 7:20–9:10), or on open weekend days in 2-hour blocks (9 AM–9 PM). Locals programs are blocked off first, no-dates are respected, coaches running two teams get them back-to-back, and the schedule stays the same week to week wherever possible. It handles a girls side and a boys side sharing the same courts and coaches, local and travel tournaments, and a court quality ranking.
 
 ![Court view](docs/court_view.png)
 
@@ -23,6 +23,8 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - Nothing on a team's or head coach's no-dates, on closure days, or before a team's season start
 - Only 14s and under practice at 3:45, and 14s and under never practice at 7:20 (unless the team is marked `late_ok`, and then only when needed)
 - Weekends: only open dates and blocks, only a team's allowed weekend options, and never one team alone in a block
+- Local tournaments take their courts (all by default) for the whole day, plus the coaches of their locals program
+- Teams at a travel tournament don't practice on tournament days
 - At most one practice per team per day, and two per week
 - The weekly template obeys the same rules, so it can be read as a real week
 
@@ -35,6 +37,8 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 | Same weekly schedule, weekdays over weekends | Makeups are flagged in the Review tab |
 | Ranked wishlists | 1st choice, then 2nd choice day/time combos |
 | Coach double-ups | A coach's two teams back-to-back on the same day (girls at 5:30, boys at 7:20) |
+| Travel tournament rest | No practice the day before or after (especially no late practice the night before); the week leading in gets priority for 2 practices |
+| Court quality | Courts ranked 1 → 7 → 6 → 5 → 3 → 4 → 2. Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot older and 1s (Black) teams get the better courts |
 | Assistant coaches free | Assistants can be double-booked, at a cost |
 | Not-preferred days, weekend AM/PM preferences | |
 | Non-consecutive days, same slot both days, home court | |
@@ -45,6 +49,7 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 
 - **Court view:** courts as rows and days as columns, with each practice, its time and its coaches in the box. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
 - **Calendar:** a month view, filterable by club, team or coach.
+- **Tournaments:** add a local tournament (dates, courts, locals program) or a travel tournament (dates, club, age groups, then trim the list of teams going). It shows on the court view, calendar and Excel export, and the schedule is rebuilt around it.
 - **Programs:** add a locals program (name, days, start and end dates, timeslots, courts, coaches, on/off-site) and it's blocked off on the courts and calendar right away, with the practice schedule rebuilt around it. Remove programs the same way.
 - **Coaches:** each coach's head and assistant teams, locals, no-dates and full schedule, plus an `.ics` download for Google Calendar.
 - **Review:** everything that differs from the ideal schedule, with the reason.
@@ -57,12 +62,13 @@ One `.xlsx` with these sheets. Download a filled-in example from the app's sideb
 
 | Sheet | Columns |
 |---|---|
-| Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`), `late_ok` (`Yes` lets a 14s-and-under team practice at 7:20 when needed) |
+| Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`), `late_ok` (`Yes` lets a 14s-and-under team practice at 7:20 when needed), `level` (`1` or `2`; blank = from the name, "Black" 1s and "Green" 2s) |
 | Availability | one row per rule: `who` (team or coach), `type` (`No` or `Not preferred`), `days` (`Mon`, `Weekdays`), `dates` (`11/10-11/16`), `times` (`5:30`, `3:45`), `note` |
 | Wishlist | `team`, `choice` (1 or 2), `days` (`Tue, Thu`; blank = any), `times` (`5:30, 7:20`) |
 | Locals | `program`, `days` (`Tue, Thu`), `time` (`5:30`, `3:45-7:20`, weekend `9AM-1PM`), `courts` (`1-4`; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional, e.g. `11/02/2026-12/18/2026`) |
 | Weekends | `date`, `open` (`9AM-9PM`), `courts`, `group` + `required` (days in a required group: at least one gets used) |
 | Closures | `date`, `reason` |
+| Tournaments | `name`, `type` (`Local` or `Travel`), `start_date`, `end_date`, `club`, `ages` (`15-16`, `14U`), `teams` (optional: overrides club + ages), `program` (local: its coaches are busy), `courts` (local; blank = all) |
 
 Every field is forgiving: `Tuesdays and Thursdays`, `Tue/Thu`, `530pm` and `Nov 15-16` all work.
 
@@ -101,4 +107,4 @@ tests/                  hard-rule and parsing tests
 - [ ] Coaches request changes and the director approves them, with the solver checking each change
 - [ ] Live Google Calendar sync
 - [ ] Monthly prompt for coaches to submit next month's no-dates
-- [ ] Tournament-aware rules (2 practices before a tournament weekend, rest after multi-day events)
+- [x] Local and travel tournaments, court quality ranking

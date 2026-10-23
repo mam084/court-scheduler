@@ -36,8 +36,8 @@ import pandas as pd
 from ortools.sat.python import cp_model
 
 from .config import (
-    COURTS, DAYS, PRACTICES_PER_WEEK, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS,
-    WEIGHTS, is_late_exception, slot_cost,
+    COURT_COST, COURT_RANK, COURTS, DAYS, PRACTICES_PER_WEEK, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS,
+    WEIGHTS, is_late_exception, slot_cost, team_court_weight,
 )
 from .data import CleanInput, ScheduleInput, clean
 
@@ -53,6 +53,7 @@ class ScheduleResult:
     start: date | None = None
     end: date | None = None
     weekend_dates: list[date] = field(default_factory=list)
+    tournaments: list = field(default_factory=list)   # data.Tournament objects, for display
 
     @property
     def ok(self) -> bool:
@@ -88,10 +89,28 @@ def solve(
     def locals_at(d, s):
         return [lp for lp in data.locals if lp.active(d, s)]
 
+    local_tourn = [tn for tn in data.tournaments if tn.kind == "local"]
+    travel_tourn = [tn for tn in data.tournaments if tn.kind == "travel"]
+
     def courts_on(d, s):
         base = COURTS if d.weekday() < 5 else data.weekends[d].courts
         blocked = {c for lp in locals_at(d, s) if lp.on_site for c in lp.courts}
+        blocked |= {c for tn in local_tourn if tn.covers(d) for c in tn.courts}
         return [c for c in base if c not in blocked]
+
+    # Travel tournaments: days a team is away, and the days right around them.
+    away = defaultdict(set)                 # team name -> dates at a tournament
+    rest_days = defaultdict(dict)           # team name -> {date: (tournament, 'before'|'after')}
+    lead_in_weeks = defaultdict(set)        # team name -> week starts leading into a tournament
+    for tn in travel_tourn:
+        for name in tn.teams:
+            d = tn.start
+            while d <= tn.end:
+                away[name].add(d)
+                d += timedelta(days=1)
+            rest_days[name].setdefault(tn.start - timedelta(days=1), (tn, "before"))
+            rest_days[name].setdefault(tn.end + timedelta(days=1), (tn, "after"))
+            lead_in_weeks[name].add(week_start(tn.start - timedelta(days=1)))
 
     weeks: dict[date, list[date]] = defaultdict(list)
     for d in open_dates:
@@ -111,6 +130,9 @@ def solve(
         for s in slots_on(d):
             for lp in locals_at(d, s):
                 coach_local[d, s].update(lp.coaches)
+            for tn in local_tourn:  # running a local tournament: busy all day
+                if tn.covers(d):
+                    coach_local[d, s].update(tn.coaches)
 
     rules_for = defaultdict(list)
     for r in data.rules:
@@ -126,6 +148,8 @@ def solve(
         for d in open_dates:
             if team.start and d < team.start:
                 continue
+            if d in away[team.name]:
+                continue  # at a travel tournament
             for s in slots_on(d):
                 if not team.allowed(s):
                     continue
@@ -163,6 +187,11 @@ def solve(
                     cost += WEIGHTS["assistant_conflict"]
                 if is_late_exception(team.age, s):
                     cost += WEIGHTS["late_exception"]
+                if d in rest_days[team.name]:
+                    tn, when = rest_days[team.name][d]
+                    cost += WEIGHTS["tournament_rest"]
+                    if when == "before" and s in ("7:20", "7PM", "5PM"):
+                        cost += WEIGHTS["tournament_late_eve"]
                 if cost:
                     obj.append(cost * y[t, d, s])
 
@@ -176,9 +205,23 @@ def solve(
     for d in open_dates:
         for s in slots_on(d):
             vs = [y[t, d, s] for t in T if (t, d, s) in y]
-            cap = len(courts_on(d, s))
+            open_courts = courts_on(d, s)
+            cap = len(open_courts)
             if len(vs) > cap:
                 m.Add(sum(vs) <= cap)
+            # Court quality: the k-th team in a timeslot gets the k-th best open
+            # court, so crowding a slot onto bad courts (Court 2) costs more
+            # than moving a team to a time with a better court free.
+            costs = sorted(COURT_COST[c] for c in open_courts)[:len(vs)]
+            if len(vs) > 1 and any(costs):
+                cum = [0]
+                for c_ in costs:
+                    cum.append(cum[-1] + c_)
+                n = m.NewIntVar(0, len(costs), f"n_{d}_{s}")
+                m.Add(n == sum(vs))
+                cv = m.NewIntVar(0, cum[-1], f"cc_{d}_{s}")
+                m.AddElement(n, cum, cv)
+                obj.append(cv)
 
     heads_of, asst_of = defaultdict(list), defaultdict(list)
     for t in T:
@@ -311,6 +354,8 @@ def solve(
                 continue
             target = 1 if (team.start and team.start > ws) else PRACTICES_PER_WEEK
             w = WEIGHTS["missed_practice"] * team.priority
+            if ws in lead_in_weeks[team.name]:  # get both practices in before a tournament
+                w = int(w * 1.5)
             s1 = m.NewBoolVar(f"short1_{t}_{ws}")
             terms = [s1]
             obj.append(w * s1)
@@ -398,7 +443,8 @@ def solve(
     pattern_slots = [(t, wd, s) for (t, wd, s), v in p.items() if solver.Value(v)]
 
     # ---------------------------------------------- stage 2: courts --
-    home_court, court_of = _assign_courts(booked, T, courts_on, seed)
+    weights = {t: team_court_weight(teams[t].age, teams[t].level) for t in T}
+    home_court, court_of = _assign_courts(booked, T, courts_on, weights, seed)
     elapsed = time.time() - t0
 
     rows = []
@@ -473,12 +519,13 @@ def solve(
     shown_weekends = sorted(set(weekend_dates) | ({d for d in assignments["date"] if d.weekday() >= 5}
                                                   if len(assignments) else set()))
     return ScheduleResult(status_name, assignments, pattern, issues, metrics, data.warnings, start, end,
-                          shown_weekends)
+                          shown_weekends, data.tournaments)
 
 
-def _assign_courts(booked, T, courts_on, seed=0, time_limit_s=10.0):
-    """Stage 2: put each booked practice on an open court, keeping teams on
-    one home court as much as possible. Returns (home_court, court_of)."""
+def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0):
+    """Stage 2: put each booked practice on an open court. Better courts go
+    to older and 1s teams (court quality x team weight), and teams stay on a
+    home court where they can. Returns (home_court, court_of)."""
     m = cp_model.CpModel()
     x, home = {}, {}
     for t in T:
@@ -494,7 +541,9 @@ def _assign_courts(booked, T, courts_on, seed=0, time_limit_s=10.0):
             by_slot[d, s, c].append(x[t, d, s, c])
             ch = m.NewBoolVar(f"ch_{t}_{d}_{s}_{c}")
             m.Add(ch >= x[t, d, s, c] - home[t, c])
-            changes.append(ch)
+            changes.append(WEIGHTS["home_court"] * ch)
+            if COURT_COST[c]:
+                changes.append(COURT_COST[c] * weights[t] * x[t, d, s, c])
         m.AddExactlyOne([x[t, d, s, c] for c in opts])
     for vs in by_slot.values():
         if len(vs) > 1:
@@ -530,6 +579,18 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
                 continue
             if d in data.closures:
                 reasons.append(f"usual {wd} {sl} falls on {data.closures[d] or 'a closure'} ({d:%-m/%-d})")
+                continue
+            tn_here = [tn for tn in data.tournaments if tn.covers(d) and
+                       ((tn.kind == "travel" and team.name in tn.teams) or (tn.kind == "local" and len(tn.courts) == len(COURTS)))]
+            if tn_here:
+                tn = tn_here[0]
+                reasons.append(f"{'away at' if tn.kind == 'travel' else 'courts taken by'} {tn.name} on usual {wd} {d:%-m/%-d}")
+                continue
+            near = [tn for tn in data.tournaments if tn.kind == "travel" and team.name in tn.teams and
+                    d in (tn.start - timedelta(days=1), tn.end + timedelta(days=1))]
+            if near:
+                tn = near[0]
+                reasons.append(f"usual {wd} {d:%-m/%-d} is the day {'before' if d < tn.start else 'after'} {tn.name}")
                 continue
             for who in [team.name] + team.heads:
                 hit = [r for r in rules_for[who] if r.kind == "no" and r.matches(d, sl)]
@@ -581,6 +642,17 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
                         "week_of": week_start(d),
                         "issue": f"Assistant {c} double-booked {d:%a %-m/%-d} {sl}",
                         "detail": f"{c} is on {' and '.join(on)} at the same time"})
+
+    if len(a):
+        for tn in data.tournaments:
+            if tn.kind != "travel":
+                continue
+            for when, d in (("before", tn.start - timedelta(days=1)), ("after", tn.end + timedelta(days=1))):
+                hit = a[(a["kind"] == "Practice") & (a["date"] == d) & a["name"].isin(tn.teams)]
+                for _, r in hit.iterrows():
+                    out.append({"severity": "Medium", "team": r["name"], "week_of": week_start(d),
+                                "issue": f"Practice the day {when} {tn.name}: {d:%a %-m/%-d} {r['slot']}",
+                                "detail": "no other open slot that week kept both practices"})
 
     for (t, d), v in consec_vars.items():
         if solver.Value(v):

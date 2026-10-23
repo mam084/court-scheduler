@@ -270,3 +270,61 @@ def test_weekend_program_shows_even_if_weekend_not_open():
     loc = r.assignments[r.assignments["kind"] == "Local"]
     assert set(loc["date"]) == {date(2026, 11, 8)} and set(loc["slot"]) == {"9AM", "11AM"}
     assert date(2026, 11, 8) in r.weekend_dates
+
+
+def _with_tournaments(inp, rows):
+    df = pd.DataFrame(rows)
+    for c in COLUMNS["Tournaments"]:
+        if c not in df:
+            df[c] = ""
+    inp.tournaments = df[COLUMNS["Tournaments"]]
+    return inp
+
+
+def test_local_tournament_blocks_its_courts_all_day():
+    teams = [{"team": f"16-T{i}", "age": 16} for i in range(4)]
+    inp = _with_tournaments(_inp(teams), [
+        {"name": "Boys 14 Local", "type": "Local", "start_date": "11/18/2026", "end_date": "11/18/2026"},
+        {"name": "Girls Mini", "type": "Local", "start_date": "11/11/2026", "courts": "1-5"}])
+    r = solve(inp, *NOV, time_limit_s=15)
+    _check_hard_rules(inp, r)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert pr[pr["date"] == date(2026, 11, 18)].empty
+    assert set(pr[pr["date"] == date(2026, 11, 11)]["court"]) <= {6, 7}
+    assert {tn.name for tn in r.tournaments} == {"Boys 14 Local", "Girls Mini"}
+
+
+def test_travel_tournament_keeps_teams_home_and_rested():
+    teams = [{"team": "15 Black", "age": 15, "head_coach": "Al"}, {"team": "15 Green", "age": 15, "head_coach": "Bo"},
+             {"team": "16 Black", "age": 16, "head_coach": "Cy"}, {"team": "15-Girls", "age": 15}]
+    for t in teams:
+        t["club"] = "Girls" if "-" in t["team"] else "Boys"
+    weekends = [{"date": "11/14/2026"}, {"date": "11/15/2026"}]
+    inp = _with_tournaments(_inp(teams, weekends=weekends), [
+        {"name": "15/16 Boys Travel", "type": "Travel", "start_date": "11/13/2026", "end_date": "11/15/2026",
+         "club": "Boys", "ages": "15-16", "teams": "15 Black, 16 Black"}])
+    r = solve(inp, *NOV, time_limit_s=15)
+    _check_hard_rules(inp, r)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    going = pr[pr["name"].isin(["15 Black", "16 Black"])]
+    assert going[going["date"].between(date(2026, 11, 13), date(2026, 11, 15))].empty
+    assert going[going["date"].isin([date(2026, 11, 12), date(2026, 11, 16)])].empty   # rest days
+    # ...and they still get 2 practices the week leading in (Mon-Wed).
+    lead = going[going["date"].between(date(2026, 11, 9), date(2026, 11, 11))]
+    assert (lead.groupby("name").size() == 2).all() and len(lead) == 4
+
+
+def test_court_quality_and_team_levels():
+    data = clean(_inp([{"team": "16 Black", "age": 16, "head_coach": "A"},
+                       {"team": "16 Green", "age": 16, "head_coach": "B"},
+                       {"team": "16-Ann", "age": 16, "level": "1"}]), *NOV)
+    assert [t.level for t in data.teams] == [1, 2, 1]
+    # Six teams wanting the same slot: Court 2 (worst) is never used, and the
+    # older 1s team gets Court 1.
+    teams = [{"team": "18 Black", "age": 18, "head_coach": "A"}] + \
+            [{"team": f"15-G{i}", "age": 15} for i in range(5)]
+    wish = [{"team": t["team"], "choice": 1, "days": "Tue, Thu", "times": "5:30"} for t in teams]
+    r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=15)
+    pr = r.assignments
+    assert 2 not in set(pr["court"])
+    assert (pr[pr["name"] == "18 Black"]["court"] == 1).all()
