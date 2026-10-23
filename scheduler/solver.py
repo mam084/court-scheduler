@@ -1,27 +1,28 @@
 """The auto-scheduler: a constraint-programming model (Google OR-Tools CP-SAT).
 
-How it thinks
--------------
-For every open date in the period, every timeslot and every court, the
-model decides whether each team practices there. On top of that, each team
-gets a *recurring weekly pattern* (2 day/slot pairs plus a home court), and
-the model is rewarded for keeping actual practices on that pattern, so the
-result is "the same weekly schedule wherever possible, with makeups only
-when a coach's no-date or a closure forces one".
+Stage 1 decides when every team practices (date + weekday timeslot or
+weekend 2-hour block) and gives each team a recurring weekday pattern.
+Stage 2 assigns courts, keeping each team on a home court.
 
 Hard rules (never broken)
-  - Locals programs block their courts.
-  - One team per court per timeslot.
-  - A coach is never in two places at once (two teams, or a team + a local).
-  - Nothing on a coach's no-dates, nothing on closure days.
-  - A team practices at most once a day and at most twice a week.
+  - On-site locals block their courts; closures block whole days.
+  - No more teams than open courts in any timeslot.
+  - A head coach is never in two places at once (two teams, or a team + a
+    local they work). Assistants can be, at a cost.
+  - 'No' availability rows for a team or its head coach.
+  - Age rules: only 14s & under at 3:45; 14s & under never at 7:20 / 7 PM.
+  - No practices before a team's season start date.
+  - Weekends: only open dates/blocks, only a team's weekend_only options,
+    and never one team alone in a weekend block.
+  - At most one practice per team per day and two per week.
 
-Soft preferences (traded off by the weights in config.py)
-  - Every team gets its 2 practices each full week (heaviest; older teams win ties).
-  - Practices stay on the team's weekly pattern and home court.
-  - Non-consecutive days; same timeslot both days.
-  - Younger teams earlier, older teams later, 3:45 only when needed.
-  - Coaches' preferred days and timeslots.
+Soft preferences (weights in config.py)
+  - 2 practices per week (shortfalls spread, older teams first).
+  - Required weekends get used ("14th or 15th must be used").
+  - Same weekday pattern each week; weekdays over weekends.
+  - Ranked wishlists, not-preferred days/times, weekend preferences.
+  - Coach double-ups (a coach's teams back-to-back the same day).
+  - Non-consecutive days, same slot both days, home court, age fit.
 """
 
 from __future__ import annotations
@@ -34,7 +35,10 @@ from datetime import date, timedelta
 import pandas as pd
 from ortools.sat.python import cp_model
 
-from .config import COURTS, PRACTICES_PER_WEEK, SLOT_KEYS, SLOTS, WEEKDAYS, WEIGHTS, slot_cost
+from .config import (
+    COURTS, DAYS, PRACTICES_PER_WEEK, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS,
+    WEIGHTS, slot_allowed_for_age, slot_cost,
+)
 from .data import CleanInput, ScheduleInput, clean
 
 
@@ -42,12 +46,13 @@ from .data import CleanInput, ScheduleInput, clean
 class ScheduleResult:
     status: str
     assignments: pd.DataFrame          # every booking: practices + locals
-    pattern: pd.DataFrame              # each team's recurring weekly template
+    pattern: pd.DataFrame              # each team's recurring weekday template
     issues: pd.DataFrame               # things a human should look at
     metrics: dict
     warnings: list[str] = field(default_factory=list)
     start: date | None = None
     end: date | None = None
+    weekend_dates: list[date] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -62,249 +67,395 @@ def solve(
     inp: ScheduleInput,
     start: date,
     end: date,
-    time_limit_s: float = 20.0,
+    time_limit_s: float = 30.0,
     makeup_closures: bool = True,
     seed: int = 0,
 ) -> ScheduleResult:
-    data: CleanInput = clean(inp)
+    data: CleanInput = clean(inp, start, end)
     t0 = time.time()
-
-    # ------------------------------------------------------------ dates --
-    all_weekdays = [d for d in pd.date_range(start, end).date if d.weekday() < 5]
-    dates = [d for d in all_weekdays if d not in data.closures]
-    weeks: dict[date, list[date]] = defaultdict(list)
-    for d in dates:
-        weeks[week_start(d)].append(d)
-
-    # A "full" week is one where the 2-practice target applies. Weeks cut
-    # off by the start/end of the period only follow the pattern (the rest
-    # of that week belongs to the neighbouring month).
-    full_week = {}
-    for ws in weeks:
-        span = [ws + timedelta(days=i) for i in range(5)]
-        inside = all(start <= d <= end for d in span)
-        has_closure = any(d in data.closures for d in span)
-        full_week[ws] = inside and (makeup_closures or not has_closure)
-
-    # Courts blocked by locals on a weekday/slot, and who's working them.
-    local_courts: dict[tuple[str, str], set[int]] = defaultdict(set)
-    local_coaches: dict[tuple[str, str], set[str]] = defaultdict(set)
-    for lp in data.locals:
-        local_courts[(lp.day, lp.slot)].update(lp.courts)
-        local_coaches[(lp.day, lp.slot)].update(lp.coaches)
-
     teams = data.teams
     T = range(len(teams))
 
-    # =====================================================================
-    # Stage 1: which day and timeslot each team practices.
-    # Courts are interchangeable here, so we only need "no more teams than
-    # free courts" per timeslot. This keeps the model ~7x smaller.
-    # =====================================================================
+    # ------------------------------------------------------------ dates --
+    all_days = list(pd.date_range(start, end).date)
+    open_dates = [d for d in all_days if d not in data.closures and
+                  (d.weekday() < 5 or d in data.weekends)]
+    weekend_dates = [d for d in open_dates if d.weekday() >= 5]
+
+    def slots_on(d):
+        return WEEKDAY_KEYS if d.weekday() < 5 else data.weekends[d].blocks
+
+    def locals_at(d, s):
+        return [lp for lp in data.locals if lp.active(d, s)]
+
+    def courts_on(d, s):
+        base = COURTS if d.weekday() < 5 else data.weekends[d].courts
+        blocked = {c for lp in locals_at(d, s) if lp.on_site for c in lp.courts}
+        return [c for c in base if c not in blocked]
+
+    weeks: dict[date, list[date]] = defaultdict(list)
+    for d in open_dates:
+        weeks[week_start(d)].append(d)
+
+    def week_kind(ws):
+        """'full' when the 2-practice target applies, else 'partial'."""
+        span = [ws + timedelta(days=i) for i in range(5)]
+        if not all(start <= d <= end for d in span):
+            return "partial"
+        if not makeup_closures and any(d in data.closures for d in span):
+            return "partial"
+        return "full"
+
+    coach_local = defaultdict(set)  # (d, s) -> coaches working a local then
+    for d in open_dates:
+        for s in slots_on(d):
+            for lp in locals_at(d, s):
+                coach_local[d, s].update(lp.coaches)
+
+    rules_for = defaultdict(list)
+    for r in data.rules:
+        rules_for[r.who].append(r)
+
     m = cp_model.CpModel()
     obj = []
 
-    def free_courts(d, s):
-        return len(COURTS) - len(local_courts[(WEEKDAYS[d.weekday()], s)])
-
-    y = {}  # (t, d, s) -> team t practices on date d in slot s
+    # ---------------------------------------------- decision variables --
+    y = {}
     for t in T:
         team = teams[t]
-        for d in dates:
-            wd = WEEKDAYS[d.weekday()]
-            blocked_slots = data.no_dates.get((team.coach, d), set())
-            for s in SLOT_KEYS:
-                if s in blocked_slots or team.coach in local_coaches[(wd, s)]:
-                    continue  # coach unavailable or working a local then
-                if free_courts(d, s) <= 0:
+        for d in open_dates:
+            if team.start and d < team.start:
+                continue
+            for s in slots_on(d):
+                if not slot_allowed_for_age(team.age, s):
+                    continue
+                if not courts_on(d, s):
+                    continue
+                if d.weekday() >= 5 and team.weekend_only and not any(w.matches(d, s) for w in team.weekend_only):
+                    continue
+                if any(r.kind == "no" and r.matches(d, s) for r in rules_for[team.name]):
+                    continue
+                if any(r.kind == "no" and r.matches(d, s) for h in team.heads for r in rules_for[h]):
+                    continue
+                if any(h in coach_local[d, s] for h in team.heads):
                     continue
                 y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
+
+                # fixed costs of this particular practice
+                cost = 0
+                if d.weekday() >= 5:
+                    cost += WEIGHTS["weekend"]
+                    if team.weekend_pref and not any(w.matches(d, s) for w in team.weekend_pref):
+                        cost += WEIGHTS["weekend_pref"]
+                else:
+                    cost += WEIGHTS["slot_fit"] * slot_cost(team.age, s)
+                    wishes = data.wishes.get(team.name)
+                    if wishes:
+                        hit = [w.choice for w in wishes if w.matches(d, s)]
+                        if not hit:
+                            cost += WEIGHTS["wish_miss"]
+                        elif min(hit) > 1:
+                            cost += WEIGHTS["wish_second"]
+                who = [team.name] + team.staff
+                if any(r.kind == "not_preferred" and r.matches(d, s) for w_ in who for r in rules_for[w_]):
+                    cost += WEIGHTS["not_preferred"]
+                if any(r.kind == "no" and r.matches(d, s) for a in team.assistants for r in rules_for[a]):
+                    cost += WEIGHTS["assistant_conflict"]
+                if cost:
+                    obj.append(cost * y[t, d, s])
 
     def ys(t, d, s):
         return y.get((t, d, s), 0)
 
     def y_day(t, d):
-        return sum(ys(t, d, s) for s in SLOT_KEYS)
-
-    # Recurring pattern: p[t, weekday, slot].
-    p = {(t, wd, s): m.NewBoolVar(f"p_{t}_{wd}_{s}") for t in T for wd in WEEKDAYS for s in SLOT_KEYS}
+        return sum(ys(t, d, s) for s in slots_on(d))
 
     # ---------------------------------------------------- hard rules --
-    # No more teams than free courts.
-    for d in dates:
-        for s in SLOT_KEYS:
+    for d in open_dates:
+        for s in slots_on(d):
             vs = [y[t, d, s] for t in T if (t, d, s) in y]
-            if len(vs) > free_courts(d, s):
-                m.Add(sum(vs) <= free_courts(d, s))
+            cap = len(courts_on(d, s))
+            if len(vs) > cap:
+                m.Add(sum(vs) <= cap)
 
-    # A coach can't be in two places at once.
-    coach_teams = defaultdict(list)
+    heads_of, asst_of = defaultdict(list), defaultdict(list)
     for t in T:
-        coach_teams[teams[t].coach].append(t)
-    for coach, ts in coach_teams.items():
-        if len(ts) < 2:
-            continue
-        for d in dates:
-            for s in SLOT_KEYS:
-                vs = [y[t, d, s] for t in ts if (t, d, s) in y]
-                if len(vs) > 1:
-                    m.AddAtMostOne(vs)
+        for h in teams[t].heads:
+            heads_of[h].append(t)
+        for a in teams[t].assistants:
+            if a not in teams[t].heads:
+                asst_of[a].append(t)
 
-    # Team: at most one practice per day, at most two per week.
+    asst_conflicts = {}
+    for c in set(heads_of) | set(asst_of):
+        for d in open_dates:
+            for s in slots_on(d):
+                H = [y[t, d, s] for t in heads_of[c] if (t, d, s) in y]
+                A = [y[t, d, s] for t in asst_of[c] if (t, d, s) in y]
+                busy = 1 if c in coach_local[d, s] else 0
+                if len(H) > 1:
+                    m.AddAtMostOne(H)  # head coach: never two teams at once
+                if A and (len(H) + len(A) + busy) > 1:
+                    ov = m.NewIntVar(0, len(A), f"ov_{c}_{d}_{s}")
+                    m.Add(ov >= sum(H) + sum(A) + busy - 1)
+                    asst_conflicts[c, d, s] = ov
+                    obj.append(WEIGHTS["assistant_conflict"] * ov)
+
     for t in T:
-        for d in dates:
-            vs = [y[t, d, s] for s in SLOT_KEYS if (t, d, s) in y]
+        for d in open_dates:
+            vs = [y[t, d, s] for s in slots_on(d) if (t, d, s) in y]
             if len(vs) > 1:
                 m.AddAtMostOne(vs)
         for ws, wdates in weeks.items():
             m.Add(sum(y_day(t, d) for d in wdates) <= PRACTICES_PER_WEEK)
 
-    # Pattern shape: 2 different days, one slot each.
+    # Weekday pattern: p[t, weekday, slot]; 2 different days.
+    p = {(t, wd, s): m.NewBoolVar(f"p_{t}_{wd}_{s}") for t in T for wd in WEEKDAYS for s in WEEKDAY_KEYS
+         if slot_allowed_for_age(teams[t].age, s)}
     for t in T:
-        m.Add(sum(p[t, wd, s] for wd in WEEKDAYS for s in SLOT_KEYS) == PRACTICES_PER_WEEK)
+        m.Add(sum(v for (tt, _, _), v in p.items() if tt == t) == PRACTICES_PER_WEEK)
         for wd in WEEKDAYS:
-            m.AddAtMostOne([p[t, wd, s] for s in SLOT_KEYS])
+            m.AddAtMostOne([p[t, wd, s] for s in WEEKDAY_KEYS if (t, wd, s) in p])
+
+    # The template itself must be a valid week (it's what people read):
+    # recurring 'no' rules and recurring locals rule slots out, head coaches
+    # can't be in two places, and no more teams than courts.
+    def recurring_block(t, wd, s):
+        team = teams[t]
+        for who in [team.name] + team.heads:
+            for r in rules_for[who]:
+                if r.kind == "no" and not r.ranges and (not r.days or wd in r.days) and (not r.times or s in r.times):
+                    return True
+        for lp in data.locals:
+            if lp.day == wd and lp.slot == s and not lp.ranges and any(h in lp.coaches for h in team.heads):
+                return True
+        return False
+
+    for (t, wd, s), v in p.items():
+        if recurring_block(t, wd, s):
+            m.Add(v == 0)
+    for wd in WEEKDAYS:
+        for s in WEEKDAY_KEYS:
+            cap = len([c for c in COURTS if not any(
+                lp.on_site and lp.day == wd and lp.slot == s and not lp.ranges and c in lp.courts
+                for lp in data.locals)])
+            vs = [p[t, wd, s] for t in T if (t, wd, s) in p]
+            if len(vs) > cap:
+                m.Add(sum(vs) <= cap)
+    for t_list in [[t for t in T if h in teams[t].heads] for h in {h for tm in teams for h in tm.heads}]:
+        if len(t_list) > 1:
+            for wd in WEEKDAYS:
+                for s in WEEKDAY_KEYS:
+                    vs = [p[t, wd, s] for t in t_list if (t, wd, s) in p]
+                    if len(vs) > 1:
+                        m.AddAtMostOne(vs)
+
+    # Weekend blocks: never one team alone; reward sharing blocks.
+    block_used = {}
+    for d in weekend_dates:
+        for s in slots_on(d):
+            vs = [y[t, d, s] for t in T if (t, d, s) in y]
+            if not vs:
+                continue
+            u = m.NewBoolVar(f"wb_{d}_{s}")
+            m.Add(sum(vs) >= 2 * u)
+            m.Add(sum(vs) <= len(vs) * u)
+            block_used[d, s] = u
+            obj.append(WEIGHTS["weekend_block"] * u)
+
+    # Required weekends ("14th or 15th must be used").
+    groups = defaultdict(list)
+    for d in weekend_dates:
+        wd = data.weekends[d]
+        if wd.required:
+            groups[wd.group or f"{d}"].append(d)
+    group_unused = {}
+    for g, gdates in groups.items():
+        us = [u for (d, s), u in block_used.items() if d in gdates]
+        miss = m.NewBoolVar(f"wreq_{g}")
+        if us:
+            m.Add(sum(us) >= 1 - miss)
+        else:
+            m.Add(miss == 1)
+        group_unused[g] = (miss, gdates)
+        obj.append(WEIGHTS["weekend_required"] * miss)
 
     # ----------------------------------------------- soft preferences --
     short_vars, off_vars, consec_vars = {}, {}, {}
-
+    no_slot_weeks = []  # (t, ws): team has started but nothing is possible that week
     for t in T:
         team = teams[t]
-        coach = data.coaches.get(team.coach)
-
-        # 2 practices per full week. Losing a team's *second* practice of a
-        # week costs much more than losing its first, so shortfalls get
-        # spread (one practice each for many teams, not zero for a few).
-        # Older teams are weighted higher via priority.
         for ws, wdates in weeks.items():
-            if not full_week[ws]:
+            if week_kind(ws) != "full":
                 continue
-            s1 = m.NewBoolVar(f"short1_{t}_{ws}")
-            s2 = m.NewBoolVar(f"short2_{t}_{ws}")
-            m.Add(s1 + s2 >= PRACTICES_PER_WEEK - sum(y_day(t, d) for d in wdates))
-            m.Add(s2 <= s1)
-            short_vars[t, ws] = (s1, s2)
+            if team.start and team.start > ws + timedelta(days=6):
+                continue
+            if not any((t, d, s) in y for d in wdates for s in slots_on(d)):
+                no_slot_weeks.append((t, ws))
+                continue
+            target = 1 if (team.start and team.start > ws) else PRACTICES_PER_WEEK
             w = WEIGHTS["missed_practice"] * team.priority
-            obj += [w * s1, 4 * w * s2]
+            s1 = m.NewBoolVar(f"short1_{t}_{ws}")
+            terms = [s1]
+            obj.append(w * s1)
+            if target == 2:
+                s2 = m.NewBoolVar(f"short2_{t}_{ws}")
+                m.Add(s2 <= s1)
+                terms.append(s2)
+                obj.append(4 * w * s2)
+            m.Add(sum(terms) >= target - sum(y_day(t, d) for d in wdates))
+            short_vars[t, ws] = (terms, target)
 
-        for d in dates:
-            wd = WEEKDAYS[d.weekday()]
-            for s in SLOT_KEYS:
+        for d in open_dates:
+            if d.weekday() >= 5 or (team.start and d < team.start):
+                continue
+            wd = DAYS[d.weekday()]
+            for s in WEEKDAY_KEYS:
+                if (t, wd, s) not in p:
+                    continue
                 v = ys(t, d, s)
-                # Off pattern: practicing at a day/slot that isn't the template.
                 if (t, d, s) in y:
                     off = m.NewBoolVar(f"off_{t}_{d}_{s}")
                     m.Add(off >= v - p[t, wd, s])
                     off_vars[t, d, s] = off
                     obj.append(WEIGHTS["off_pattern"] * off)
-                    # Age-appropriate timeslot + coach preferences.
-                    cost = WEIGHTS["slot_fit"] * slot_cost(team.age, s)
-                    if coach and coach.preferred_days and wd not in coach.preferred_days:
-                        cost += WEIGHTS["coach_pref_day"]
-                    if coach and coach.preferred_slots and s not in coach.preferred_slots:
-                        cost += WEIGHTS["coach_pref_slot"]
-                    if cost:
-                        obj.append(cost * v)
-                # Pattern miss: template says practice, but none today.
                 miss = m.NewBoolVar(f"miss_{t}_{d}_{s}")
                 m.Add(miss >= p[t, wd, s] - v)
                 obj.append(WEIGHTS["off_pattern"] * 2 * miss)
 
-        # Back-to-back days within a week.
-        for d in dates:
+        for d in open_dates:
             nxt = d + timedelta(days=1)
-            if nxt in dates and week_start(nxt) == week_start(d):
+            if nxt in open_dates and week_start(nxt) == week_start(d):
+                a, b = y_day(t, d), y_day(t, nxt)
+                if isinstance(a, int) or isinstance(b, int):
+                    continue
                 cons = m.NewBoolVar(f"cons_{t}_{d}")
-                m.Add(cons >= y_day(t, d) + y_day(t, nxt) - 1)
+                m.Add(cons >= a + b - 1)
                 consec_vars[t, d] = cons
                 obj.append(WEIGHTS["consecutive_days"] * cons)
 
-        # Same timeslot both days of the pattern.
         used = []
-        for s in SLOT_KEYS:
+        for s in WEEKDAY_KEYS:
+            ps = [p[t, wd, s] for wd in WEEKDAYS if (t, wd, s) in p]
+            if not ps:
+                continue
             u = m.NewBoolVar(f"slotused_{t}_{s}")
-            for wd in WEEKDAYS:
-                m.Add(u >= p[t, wd, s])
+            for v in ps:
+                m.Add(u >= v)
             used.append(u)
         obj.append(WEIGHTS["split_timeslot"] * sum(used))
 
-    m.Minimize(sum(obj))
+    # Double-ups: a coach's teams back-to-back on the same day.
+    pairs = set()
+    for c in set(heads_of) | set(asst_of):
+        ts = sorted(set(heads_of[c]) | set(asst_of[c]))
+        for i in range(len(ts)):
+            for j in range(i + 1, len(ts)):
+                pairs.add((ts[i], ts[j]))
+    doubles = []
+    for t1, t2 in sorted(pairs):
+        for d in open_dates:
+            sl = slots_on(d)
+            for k in range(len(sl) - 1):
+                s_a, s_b = sl[k], sl[k + 1]
+                for a, b in ((t1, t2), (t2, t1)):
+                    if (a, d, s_a) in y and (b, d, s_b) in y:
+                        bv = m.NewBoolVar(f"dbl_{a}_{b}_{d}_{s_a}")
+                        m.Add(bv <= y[a, d, s_a])
+                        m.Add(bv <= y[b, d, s_b])
+                        doubles.append(bv)
+                        obj.append(-WEIGHTS["double_up"] * bv)
 
+    m.Minimize(sum(obj))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_s
     solver.parameters.num_search_workers = 8
     solver.parameters.random_seed = seed
     status = solver.Solve(m)
     status_name = solver.StatusName(status)
-
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return ScheduleResult(status_name, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(),
-                              {"solve_seconds": round(time.time() - t0, 1)}, data.warnings, start, end)
+                              {"solve_seconds": round(time.time() - t0, 1)}, data.warnings, start, end,
+                              weekend_dates)
 
     booked = [(t, d, s) for (t, d, s), v in y.items() if solver.Value(v)]
     pattern_slots = [(t, wd, s) for (t, wd, s), v in p.items() if solver.Value(v)]
 
-    # =====================================================================
-    # Stage 2: courts. Give each team a home court and keep it there as
-    # often as possible.
-    # =====================================================================
-    home_court, court_of = _assign_courts(booked, T, local_courts, seed)
+    # ---------------------------------------------- stage 2: courts --
+    home_court, court_of = _assign_courts(booked, T, courts_on, seed)
     elapsed = time.time() - t0
 
-    # ------------------------------------------------- read solution --
     rows = []
     for (t, d, s) in booked:
         team = teams[t]
+        if (t, d, s) in off_vars:
+            on_pattern = not solver.Value(off_vars[t, d, s])
+        else:
+            on_pattern = d.weekday() < 5
         rows.append({
-            "date": d, "day": WEEKDAYS[d.weekday()], "slot": s, "slot_label": SLOTS[s],
-            "court": court_of[t, d, s], "kind": "Practice", "name": team.name, "age": team.age,
-            "coach": team.coach,
-            "on_pattern": not solver.Value(off_vars[t, d, s]),
+            "date": d, "day": DAYS[d.weekday()], "slot": s, "slot_label": SLOTS[s],
+            "court": court_of[t, d, s], "kind": "Practice", "name": team.name, "club": team.club,
+            "age": team.age, "coach": "; ".join(team.staff), "head": "; ".join(team.heads),
+            "on_pattern": on_pattern,
         })
-    for d in dates:
-        wd = WEEKDAYS[d.weekday()]
-        for lp in data.locals:
-            if lp.day == wd:
+    for d in open_dates:
+        for s in slots_on(d):
+            for lp in locals_at(d, s):
+                if not lp.on_site:
+                    continue
                 for c in lp.courts:
                     rows.append({
-                        "date": d, "day": wd, "slot": lp.slot, "slot_label": SLOTS[lp.slot],
-                        "court": c, "kind": "Local", "name": lp.name, "age": None,
-                        "coach": "; ".join(lp.coaches), "on_pattern": True,
+                        "date": d, "day": DAYS[d.weekday()], "slot": s, "slot_label": SLOTS[s],
+                        "court": c, "kind": "Local", "name": lp.name, "club": "", "age": None,
+                        "coach": "; ".join(lp.coaches), "head": "; ".join(lp.coaches), "on_pattern": True,
                     })
     assignments = pd.DataFrame(rows)
     if not assignments.empty:
-        assignments["slot_order"] = assignments["slot"].map(SLOT_KEYS.index)
-        assignments = assignments.sort_values(["date", "slot_order", "court"]).drop(columns="slot_order")
-        assignments = assignments.reset_index(drop=True)
+        assignments["o"] = assignments["slot"].map(SLOT_KEYS.index)
+        assignments = assignments.sort_values(["date", "o", "court"]).drop(columns="o").reset_index(drop=True)
 
-    pattern_rows = []
-    for (t, wd, s) in sorted(pattern_slots, key=lambda k: (k[0], WEEKDAYS.index(k[1]))):
-        pattern_rows.append({"team": teams[t].name, "age": teams[t].age, "coach": teams[t].coach,
-                             "day": wd, "slot": s, "slot_label": SLOTS[s], "court": home_court[t]})
-    pattern = pd.DataFrame(pattern_rows)
+    pattern = pd.DataFrame([
+        {"team": teams[t].name, "club": teams[t].club, "age": teams[t].age,
+         "coach": "; ".join(teams[t].staff), "head": "; ".join(teams[t].heads),
+         "day": wd, "slot": s, "slot_label": SLOTS[s], "court": home_court[t]}
+        for (t, wd, s) in sorted(pattern_slots, key=lambda k: (k[0], WEEKDAYS.index(k[1])))
+    ])
 
-    issues = _issues(data, teams, solver, short_vars, off_vars, consec_vars, assignments, weeks, pattern_slots)
+    issues = _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflicts,
+                     group_unused, assignments, pattern_slots, rules_for, coach_local, heads_of, asst_of,
+                     no_slot_weeks)
 
-    practices = assignments[assignments["kind"] == "Practice"] if not assignments.empty else assignments
-    required = sum(PRACTICES_PER_WEEK for t in T for ws in weeks if full_week[ws])
-    in_full = practices[practices["date"].map(lambda d: full_week[week_start(d)])] if len(practices) else practices
+    practices = assignments[assignments["kind"] == "Practice"] if len(assignments) else assignments
+    weekday_pr = practices[practices["date"].map(lambda d: d.weekday() < 5)] if len(practices) else practices
+    wish_hits = wish_total = 0
+    for _, r in weekday_pr.iterrows():
+        ws_ = data.wishes.get(r["name"])
+        if ws_:
+            wish_total += 1
+            wish_hits += any(w.choice == 1 and w.matches(r["date"], r["slot"]) for w in ws_)
     metrics = {
         "status": status_name,
         "solve_seconds": round(elapsed, 1),
         "teams": len(teams),
         "practices_scheduled": int(len(practices)),
-        "full_week_practices_required": int(required),
-        "full_week_practices_scheduled": int(len(in_full)),
-        "on_pattern_pct": round(float(100 * practices["on_pattern"].mean()), 1) if len(practices) else 0.0,
+        "practices_required": int(sum(tg for (_, tg) in short_vars.values()))
+        + sum(1 if (teams[t].start and teams[t].start > ws) else PRACTICES_PER_WEEK for t, ws in no_slot_weeks),
+        "missed_practices": int(sum(solver.Value(v) for (terms, _) in short_vars.values() for v in terms))
+        + sum(1 if (teams[t].start and teams[t].start > ws) else PRACTICES_PER_WEEK for t, ws in no_slot_weeks),
+        "weekend_practices": int(len(practices) - len(weekday_pr)),
+        "on_pattern_pct": round(float(100 * weekday_pr["on_pattern"].mean()), 1) if len(weekday_pr) else 0.0,
+        "wishlist_pct": round(100 * wish_hits / wish_total, 1) if wish_total else None,
         "practices_at_3_45": int((practices["slot"] == "3:45").sum()) if len(practices) else 0,
-        "back_to_back_weeks": int(sum(solver.Value(v) for v in consec_vars.values())),
+        "double_ups": int(sum(solver.Value(v) for v in doubles)),
+        "assistant_conflicts": int(sum(solver.Value(v) for v in asst_conflicts.values())),
         "objective": solver.ObjectiveValue(),
     }
-    return ScheduleResult(status_name, assignments, pattern, issues, metrics, data.warnings, start, end)
+    return ScheduleResult(status_name, assignments, pattern, issues, metrics, data.warnings, start, end,
+                          weekend_dates)
 
 
-def _assign_courts(booked, T, local_courts, seed=0, time_limit_s=10.0):
-    """Stage 2: put each booked practice on a free court, keeping teams on
+def _assign_courts(booked, T, courts_on, seed=0, time_limit_s=10.0):
+    """Stage 2: put each booked practice on an open court, keeping teams on
     one home court as much as possible. Returns (home_court, court_of)."""
     m = cp_model.CpModel()
     x, home = {}, {}
@@ -315,12 +466,10 @@ def _assign_courts(booked, T, local_courts, seed=0, time_limit_s=10.0):
     by_slot = defaultdict(list)
     changes = []
     for (t, d, s) in booked:
-        wd = WEEKDAYS[d.weekday()]
-        opts = [c for c in COURTS if c not in local_courts[(wd, s)]]
+        opts = courts_on(d, s)
         for c in opts:
             x[t, d, s, c] = m.NewBoolVar(f"x_{t}_{d}_{s}_{c}")
             by_slot[d, s, c].append(x[t, d, s, c])
-            # moved off home court
             ch = m.NewBoolVar(f"ch_{t}_{d}_{s}_{c}")
             m.Add(ch >= x[t, d, s, c] - home[t, c])
             changes.append(ch)
@@ -335,63 +484,90 @@ def _assign_courts(booked, T, local_courts, seed=0, time_limit_s=10.0):
     solver.parameters.random_seed = seed
     status = solver.Solve(m)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        raise RuntimeError("Court assignment failed – this shouldn't happen if stage 1 respected capacity.")
+        raise RuntimeError("Court assignment failed, which shouldn't happen if stage 1 respected capacity.")
     home_court = {t: next(c for c in COURTS if solver.Value(home[t, c])) for t in T}
     court_of = {(t, d, s): c for (t, d, s, c), v in x.items() if solver.Value(v)}
     return home_court, court_of
 
 
-def _issues(data, teams, solver, short_vars, off_vars, consec_vars, assignments, weeks, pattern_slots) -> pd.DataFrame:
+def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflicts, group_unused,
+            assignments, pattern_slots, rules_for, coach_local, heads_of, asst_of,
+            no_slot_weeks=()) -> pd.DataFrame:
     """Plain-language list of everything that isn't the 'ideal' schedule."""
     out = []
-
-    usual = defaultdict(list)  # team index -> [(weekday, slot)]
+    usual = defaultdict(list)
     for (t, wd, sl) in pattern_slots:
         usual[t].append((wd, sl))
 
     def why(t, ws):
-        """Which of the team's usual practices that week couldn't happen, and why."""
         team = teams[t]
         reasons = []
         for wd, sl in sorted(usual[t], key=lambda k: WEEKDAYS.index(k[0])):
             d = ws + timedelta(days=WEEKDAYS.index(wd))
+            if team.start and d < team.start:
+                continue
             if d in data.closures:
                 reasons.append(f"usual {wd} {sl} falls on {data.closures[d] or 'a closure'} ({d:%-m/%-d})")
-            elif sl in data.no_dates.get((team.coach, d), set()):
-                reasons.append(f"{team.coach} unavailable on usual {wd} {d:%-m/%-d}")
+                continue
+            for who in [team.name] + team.heads:
+                hit = [r for r in rules_for[who] if r.kind == "no" and r.matches(d, sl)]
+                if hit:
+                    reasons.append(f"{who} unavailable on usual {wd} {d:%-m/%-d}"
+                                   + (f" ({hit[0].note})" if hit[0].note else ""))
+                    break
+            else:
+                busy = [h for h in team.heads if h in coach_local[d, sl]]
+                if busy:
+                    reasons.append(f"{busy[0]} working a local on usual {wd} {d:%-m/%-d}")
         return "; ".join(reasons)
 
-    for (t, ws), (s1, s2) in short_vars.items():
-        n = solver.Value(s1) + solver.Value(s2)
+    for (t, ws), (terms, target) in short_vars.items():
+        n = sum(solver.Value(v) for v in terms)
         if n:
-            team = teams[t]
-            out.append({"severity": "High", "team": team.name, "week_of": ws,
-                        "issue": f"Only {PRACTICES_PER_WEEK - n} practice(s) this week",
-                        "detail": (why(t, ws) + "; " if why(t, ws) else "") + "no open court for a makeup"})
+            r = why(t, ws)
+            out.append({"severity": "High", "team": teams[t].name, "week_of": ws,
+                        "issue": f"Only {target - n} of {target} practice(s) this week",
+                        "detail": (r + "; " if r else "") + "no open slot for a makeup"})
+
+    for t, ws in no_slot_weeks:
+        team = teams[t]
+        nos = [r.describe() for who in [team.name] + team.heads for r in rules_for[who] if r.kind == "no"]
+        out.append({"severity": "High", "team": team.name, "week_of": ws,
+                    "issue": "No practice possible this week",
+                    "detail": "every open slot is blocked" + (f" (no-dates: {'; '.join(nos)})" if nos else "")
+                    + ("; weekend limited to its listed dates" if team.weekend_only else "")})
+
+    for g, (miss, gdates) in group_unused.items():
+        if solver.Value(miss):
+            out.append({"severity": "High", "team": "(all)", "week_of": week_start(min(gdates)),
+                        "issue": "Required weekend not used: " + " or ".join(f"{d:%a %-m/%-d}" for d in gdates),
+                        "detail": "no two teams could share a block there"})
 
     for (t, d, sl), v in off_vars.items():
         if solver.Value(v):
-            team = teams[t]
-            out.append({"severity": "Medium", "team": team.name, "week_of": week_start(d),
+            out.append({"severity": "Medium", "team": teams[t].name, "week_of": week_start(d),
                         "issue": f"Makeup / moved: {d:%a %-m/%-d} {sl}",
                         "detail": why(t, week_start(d)) or "differs from the usual weekly slot"})
 
+    a = assignments
+    for (c, d, sl), v in asst_conflicts.items():
+        if solver.Value(v):
+            on = [teams[t].name for t in heads_of[c] + asst_of[c]
+                  if len(a) and ((a["name"] == teams[t].name) & (a["date"] == d) & (a["slot"] == sl)).any()]
+            on += [lp.name for lp in data.locals if lp.active(d, sl) and c in lp.coaches]
+            out.append({"severity": "Medium", "team": ", ".join(n for n in on if any(t.name == n for t in teams)),
+                        "week_of": week_start(d),
+                        "issue": f"Assistant {c} double-booked {d:%a %-m/%-d} {sl}",
+                        "detail": f"{c} is on {' and '.join(on)} at the same time"})
+
     for (t, d), v in consec_vars.items():
         if solver.Value(v):
-            team = teams[t]
-            out.append({"severity": "Low", "team": team.name, "week_of": week_start(d),
-                        "issue": f"Back-to-back days: {d:%a} & {(d + timedelta(days=1)):%a %-m/%-d}",
-                        "detail": ""})
-
-    if not assignments.empty:
-        early = assignments[(assignments["kind"] == "Practice") & (assignments["slot"] == "3:45")]
-        for _, r in early.iterrows():
-            out.append({"severity": "Low", "team": r["name"], "week_of": week_start(r["date"]),
-                        "issue": f"3:45 practice {r['date']:%a %-m/%-d}", "detail": "used because later slots were full"})
+            out.append({"severity": "Low", "team": teams[t].name, "week_of": week_start(d),
+                        "issue": f"Back-to-back days: {d:%a} & {(d + timedelta(days=1)):%a %-m/%-d}", "detail": ""})
 
     df = pd.DataFrame(out, columns=["severity", "team", "week_of", "issue", "detail"])
     if not df.empty:
         order = {"High": 0, "Medium": 1, "Low": 2}
-        df = df.sort_values(["severity", "week_of", "team"], key=lambda c: c.map(order) if c.name == "severity" else c)
+        df = df.assign(o=df["severity"].map(order)).sort_values(["o", "week_of", "team"]).drop(columns="o")
         df = df.reset_index(drop=True)
     return df

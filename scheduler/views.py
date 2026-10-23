@@ -1,29 +1,34 @@
 """HTML renderings of a schedule: court grid (club layout), month calendar.
 
-Plain HTML/CSS so it renders the same in Streamlit, in an exported page,
-or anywhere else. Chips carry their own background + text colors so they
-read correctly in light and dark themes.
+Plain HTML/CSS so it renders the same in Streamlit or anywhere else.
+Chips are colored by age group, with a left stripe for the club, and carry
+their own background + text colors so they read in light and dark themes.
 """
 
 from __future__ import annotations
 
 import calendar
-import hashlib
 import html
 from datetime import date, timedelta
 
 import pandas as pd
 
-from .config import COURTS, SLOT_KEYS, WEEKDAYS
+from .config import COURTS, DAYS, SLOT_KEYS, WEEKDAYS
 
-# Soft, distinguishable team colors (background, text).
-PALETTE = [
-    ("#DCEBFF", "#0B3D91"), ("#FFE3D6", "#8A2E0B"), ("#DFF5E1", "#1B5E20"),
-    ("#F3E1FF", "#5B1A8C"), ("#FFF4C2", "#6B5200"), ("#D8F4F6", "#0B5C66"),
-    ("#FFDDEA", "#8C1340"), ("#E6E9FF", "#2E3A9E"), ("#D6DEE8", "#24384F"),
-    ("#FCE6C9", "#7A4300"), ("#E0E0E0", "#2B2B2B"), ("#D9F2E9", "#0F5940"),
-]
+# Age group -> (background, text).
+AGE_COLORS = {
+    12: ("#FFF4C2", "#6B5200"),
+    13: ("#FFE3D6", "#8A2E0B"),
+    14: ("#FFDDEA", "#8C1340"),
+    15: ("#F3E1FF", "#5B1A8C"),
+    16: ("#DCEBFF", "#0B3D91"),
+    17: ("#D8F4F6", "#0B5C66"),
+    18: ("#DFF5E1", "#1B5E20"),
+}
+DEFAULT_COLOR = ("#E6E9FF", "#2E3A9E")
 LOCAL_COLORS = ("#ECEFF3", "#3B4250")
+# Club -> stripe color (matches the club sheet: red/pink girls, green boys).
+CLUB_STRIPES = ["#D7263D", "#2E7D32", "#1F4E99", "#F29E4C", "#6A4C93"]
 
 CSS = """
 <style>
@@ -31,22 +36,25 @@ CSS = """
 .cs-grid { border-collapse: collapse; width: 100%; min-width: 860px; table-layout: fixed;
            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; font-size: 12.5px; }
 .cs-grid th { background: #1F2A44; color: #fff; padding: 6px 4px; font-weight: 600; text-align: center; }
-.cs-grid th.cs-day { width: 82px; }
-.cs-grid td { border: 1px solid #C9CED8; vertical-align: top; padding: 4px; background: #FAFBFC; height: 70px; }
+.cs-grid th.cs-wkend { background: #3A4A6B; }
+.cs-grid th.cs-day { width: 76px; }
+.cs-grid td { border: 1px solid #C9CED8; vertical-align: top; padding: 4px; background: #FAFBFC; height: 64px; }
+.cs-grid td.cs-wkend { background: #F3F5FA; }
 .cs-grid td.cs-daycell { background: #EEF1F6; color: #1F2A44; font-weight: 600; text-align: center; vertical-align: middle; }
-.cs-grid td.cs-daycell small { display: block; font-weight: 400; color: #5A6478; }
 .cs-grid td.cs-closed { background: repeating-linear-gradient(45deg,#F4F4F4,#F4F4F4 8px,#E9E9E9 8px,#E9E9E9 16px);
                         color: #6B6B6B; text-align: center; vertical-align: middle; font-style: italic; }
-.cs-chip { border-radius: 6px; padding: 3px 6px; margin: 0 0 4px 0; line-height: 1.25; border: 1px solid rgba(0,0,0,.08); }
+.cs-chip { border-radius: 6px; padding: 3px 6px 3px 7px; margin: 0 0 4px 0; line-height: 1.25;
+           border: 1px solid rgba(0,0,0,.08); border-left-width: 4px; }
 .cs-chip b { display: block; font-size: 12.5px; }
 .cs-chip span { font-size: 11.5px; opacity: .85; }
 .cs-chip.cs-local { background-image: repeating-linear-gradient(135deg, transparent, transparent 6px, rgba(0,0,0,.04) 6px, rgba(0,0,0,.04) 12px); }
-.cs-chip.cs-moved { border: 2px dashed #C0392B; }
-.cs-chip.cs-dim { opacity: .22; }
+.cs-chip.cs-moved { outline: 2px dashed #C0392B; outline-offset: -2px; }
+.cs-chip.cs-dim { opacity: .2; }
 .cs-time { font-variant-numeric: tabular-nums; font-weight: 600; }
-.cs-legend { display:flex; flex-wrap:wrap; gap:6px; margin: 6px 0 10px; font-family: system-ui, sans-serif; font-size: 12px; }
+.cs-legend { display:flex; flex-wrap:wrap; gap:6px; margin: 6px 0 10px; font-family: system-ui, sans-serif; font-size: 12px; align-items:center; }
 .cs-legend .cs-chip { margin: 0; }
-.cs-cal td { height: 96px; }
+.cs-legend .cs-lbl { color: #5A6478; margin: 0 2px 0 8px; }
+.cs-cal td { height: 92px; }
 .cs-cal .cs-datenum { font-weight: 700; color: #1F2A44; margin-bottom: 3px; }
 .cs-cal .cs-out { background: #F1F2F4; }
 .cs-cal .cs-chip { padding: 2px 5px; margin-bottom: 3px; font-size: 11.5px; }
@@ -54,71 +62,81 @@ CSS = """
 """
 
 
-def team_color(name: str) -> tuple[str, str]:
-    h = int(hashlib.md5(name.encode()).hexdigest(), 16)
-    return PALETTE[h % len(PALETTE)]
-
-
-def color_map(names) -> dict[str, tuple[str, str]]:
-    """Stable, collision-avoiding colors for a set of team names."""
-    out, used = {}, set()
-    for n in sorted(set(names)):
-        h = int(hashlib.md5(n.encode()).hexdigest(), 16)
-        for k in range(len(PALETTE)):
-            idx = (h + k) % len(PALETTE)
-            if idx not in used or len(used) >= len(PALETTE):
-                used.add(idx)
-                out[n] = PALETTE[idx]
-                break
+def club_stripes(clubs) -> dict[str, str]:
+    """Girls side red, boys side green (like the club's sheet); others get the next colors."""
+    names = sorted({c for c in clubs if isinstance(c, str) and c})
+    out, rest = {}, iter(CLUB_STRIPES[2:])
+    for c in names:
+        low = c.lower()
+        if "girl" in low or "sdvbc" in low:
+            out[c] = CLUB_STRIPES[0]
+        elif "boy" in low or "seaside" in low:
+            out[c] = CLUB_STRIPES[1]
+        else:
+            out[c] = next(rest, "#9AA3B2")
     return out
 
 
-def _chip(r, colors, highlight: set[str] | None, compact=False) -> str:
+def _colors(r) -> tuple[str, str]:
+    if r["kind"] == "Local":
+        return LOCAL_COLORS
+    try:
+        return AGE_COLORS.get(int(r["age"]), DEFAULT_COLOR)
+    except (TypeError, ValueError):
+        return DEFAULT_COLOR
+
+
+def _hit(r, highlight) -> bool:
+    if not highlight:
+        return True
+    coaches = [c.strip() for c in str(r.get("coach") or "").split(";")]
+    return r["name"] in highlight or r.get("club") in highlight or any(c in highlight for c in coaches)
+
+
+def _chip(r, stripes, highlight=None, compact=False) -> str:
     is_local = r["kind"] == "Local"
-    bg, fg = LOCAL_COLORS if is_local else colors.get(r["name"], team_color(r["name"]))
+    bg, fg = _colors(r)
+    stripe = stripes.get(r.get("club"), "#9AA3B2") if not is_local else "#9AA3B2"
     cls = ["cs-chip"]
     if is_local:
         cls.append("cs-local")
-    if not is_local and not r.get("on_pattern", True):
+    weekday = DAYS.index(r["day"]) < 5 if r.get("day") in DAYS else True
+    if not is_local and weekday and not r.get("on_pattern", True):
         cls.append("cs-moved")
-    if highlight:
-        hit = r["name"] in highlight or any(c.strip() in highlight for c in str(r["coach"]).split(";"))
-        if not hit:
-            cls.append("cs-dim")
+    if not _hit(r, highlight):
+        cls.append("cs-dim")
     name = html.escape(str(r["name"]))
-    coach = html.escape(str(r["coach"])) if r["coach"] else ""
+    coaches = " · ".join(c.strip() for c in str(r.get("coach") or "").split(";") if c.strip())
+    style = f"background:{bg};color:{fg};border-left-color:{stripe}"
+    title = f"{r['slot_label']} · {coaches}" + ("" if "cs-moved" not in cls else " · moved from usual time")
     if compact:
-        court = f" · Ct {r['court']}" if "court" in r and not is_local else ""
-        return (f'<div class="{" ".join(cls)}" style="background:{bg};color:{fg}">'
+        court = f" · Ct {r['court']}" if not is_local else ""
+        return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
                 f'<span class="cs-time">{r["slot"]}</span> {name}{court}</div>')
-    title = f"{r['slot_label']} · {coach}" + ("" if r.get("on_pattern", True) else " · moved from usual time")
-    if is_local:  # one line; coaches show on hover
-        return (f'<div class="{" ".join(cls)}" style="background:{bg};color:{fg}" title="{html.escape(title)}">'
+    if is_local:
+        return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
                 f'<span class="cs-time">{r["slot"]}</span> {name}</div>')
-    return (f'<div class="{" ".join(cls)}" style="background:{bg};color:{fg}" title="{html.escape(title)}">'
-            f'<b><span class="cs-time">{r["slot"]}</span> {name}</b><span>{coach}</span></div>')
+    return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
+            f'<b><span class="cs-time">{r["slot"]}</span> {name}</b><span>{html.escape(coaches)}</span></div>')
 
 
 def court_grid_html(
     bookings: pd.DataFrame,
-    day_dates: dict[str, date | None] | None = None,
+    day_dates: dict[str, date] | None = None,
     closures: dict[date, str] | None = None,
     highlight: set[str] | None = None,
-    colors: dict | None = None,
+    stripes: dict | None = None,
 ) -> str:
-    """Club layout: courts as rows, weekdays as columns, practices listed
-    with their times inside each court/day box.
-
-    `bookings` needs columns: day, slot, slot_label, court, kind, name, coach
-    (and optionally on_pattern). `day_dates` maps Mon..Fri to a real date
-    for a specific week, or is None for the recurring template.
-    """
+    """Club layout: courts as rows, days as columns, practices listed with
+    their times in each box. `day_dates` is an ordered {day: date} for a
+    specific week (weekend days only when open; date.min = outside the
+    period); None shows the recurring Mon–Fri template."""
     closures = closures or {}
-    colors = colors or color_map(bookings.loc[bookings["kind"] == "Practice", "name"]) if len(bookings) else {}
+    stripes = stripes or club_stripes(bookings["club"] if "club" in bookings else [])
+    cols = list(day_dates) if day_dates else list(WEEKDAYS)
 
-    # Days that are closed or outside the period become one shaded column.
     blocked = {}
-    for wd in WEEKDAYS:
+    for wd in cols:
         d = (day_dates or {}).get(wd)
         if d is not None and d in closures:
             blocked[wd] = f"Closed: {html.escape(closures[d])}"
@@ -126,35 +144,47 @@ def court_grid_html(
             blocked[wd] = "Outside this schedule period"
 
     out = [CSS, '<div class="cs-wrap"><table class="cs-grid"><thead><tr><th class="cs-day"></th>']
-    for wd in WEEKDAYS:
+    for wd in cols:
         d = (day_dates or {}).get(wd)
         sub = f'<br><small style="font-weight:400;opacity:.8">{d:%b %-d}</small>' if d and d != date.min else ""
-        out.append(f"<th>{wd}{sub}</th>")
+        cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
+        out.append(f"<th{cls}>{wd}{sub}</th>")
     out.append("</tr></thead><tbody>")
     for i, c in enumerate(COURTS):
         out.append(f'<tr><td class="cs-daycell">Court {c}</td>')
         court_rows = bookings[bookings["court"] == c] if len(bookings) else bookings
-        for wd in WEEKDAYS:
+        for wd in cols:
             if wd in blocked:
                 if i == 0:
                     out.append(f'<td class="cs-closed" rowspan="{len(COURTS)}">{blocked[wd]}</td>')
                 continue
-            cell = court_rows[court_rows["day"] == wd].copy()
-            cell["o"] = cell["slot"].map(SLOT_KEYS.index)
-            chips = "".join(_chip(r, colors, highlight) for _, r in cell.sort_values("o").iterrows())
-            out.append(f"<td>{chips}</td>")
+            cell = court_rows[court_rows["day"] == wd].copy() if len(court_rows) else court_rows
+            chips = ""
+            if len(cell):
+                cell["o"] = cell["slot"].map(SLOT_KEYS.index)
+                chips = "".join(_chip(r, stripes, highlight) for _, r in cell.sort_values("o").iterrows())
+            cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
+            out.append(f"<td{cls}>{chips}</td>")
         out.append("</tr>")
     out.append("</tbody></table></div>")
     return "".join(out)
 
 
-def legend_html(colors: dict, show_local=True) -> str:
-    items = [f'<div class="cs-chip" style="background:{bg};color:{fg}">{html.escape(n)}</div>'
-             for n, (bg, fg) in sorted(colors.items(), key=lambda kv: (int(kv[0].split()[0]) if kv[0].split()[0].isdigit() else 99, kv[0]))]
-    if show_local:
-        bg, fg = LOCAL_COLORS
-        items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg}">Locals program</div>')
-    items.append('<div class="cs-chip cs-moved" style="background:#fff;color:#C0392B">Moved / makeup</div>')
+def legend_html(ages, stripes: dict) -> str:
+    items = ['<span class="cs-lbl">Age</span>']
+    for a in sorted({int(x) for x in ages if pd.notna(x)}):
+        bg, fg = AGE_COLORS.get(a, DEFAULT_COLOR)
+        items.append(f'<div class="cs-chip" style="background:{bg};color:{fg};border-left-color:{bg}">{a}s</div>')
+    if stripes:
+        items.append('<span class="cs-lbl">Club</span>')
+        for club, col in stripes.items():
+            items.append(f'<div class="cs-chip" style="background:#fff;color:#1F2A44;border-left-color:{col}">'
+                         f'{html.escape(club)}</div>')
+    bg, fg = LOCAL_COLORS
+    items.append('<span class="cs-lbl"></span>')
+    items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};border-left-color:#9AA3B2">Locals</div>')
+    items.append('<div class="cs-chip cs-moved" style="background:#fff;color:#C0392B;border-left-color:#fff">'
+                 'Moved / makeup</div>')
     return CSS + '<div class="cs-legend">' + "".join(items) + "</div>"
 
 
@@ -164,31 +194,32 @@ def month_calendar_html(
     end: date,
     closures: dict[date, str] | None = None,
     highlight: set[str] | None = None,
-    colors: dict | None = None,
     include_locals: bool = False,
+    weekend_dates: list[date] | None = None,
 ) -> str:
-    """Mon-Fri month calendar; each day lists its practices (time, team, court)."""
+    """Month calendar (Mon–Fri, plus Sat/Sun when any weekend is open);
+    each day lists its practices (time, team, court)."""
     closures = closures or {}
+    weekend_dates = set(weekend_dates or [])
+    stripes = club_stripes(assignments["club"]) if "club" in assignments else {}
     df = assignments if include_locals else assignments[assignments["kind"] == "Practice"]
     if include_locals and len(df):
-        # one chip per local program per day, not one per court
-        df = df.drop_duplicates(subset=["date", "slot", "name"])
-    colors = colors or color_map(assignments.loc[assignments["kind"] == "Practice", "name"])
-    if highlight:
-        df = df[df.apply(lambda r: r["name"] in highlight or any(
-            c.strip() in highlight for c in str(r["coach"]).split(";")), axis=1)]
+        df = df.drop_duplicates(subset=["date", "slot", "name"])  # one chip per local, not per court
+    if highlight and len(df):
+        df = df[df.apply(lambda r: _hit(r, highlight), axis=1)]
     by_date = {d: g for d, g in df.groupby("date")} if len(df) else {}
 
+    show_days = list(WEEKDAYS) + ([d for d in ("Sat", "Sun")] if weekend_dates else [])
     out = [CSS, '<div class="cs-wrap"><table class="cs-grid cs-cal"><thead><tr>']
-    out += [f"<th>{wd}</th>" for wd in WEEKDAYS]
+    out += [f'<th{" class=cs-wkend" if wd not in WEEKDAYS else ""}>{wd}</th>' for wd in show_days]
     out.append("</tr></thead><tbody>")
     first = start
-    while first.weekday() >= 5:  # month starts on a weekend: begin at Monday
+    while first.weekday() >= 5 and first not in weekend_dates:
         first += timedelta(days=1)
     ws = first - timedelta(days=first.weekday())
     while ws <= end:
         out.append("<tr>")
-        for i in range(5):
+        for i, wd in enumerate(show_days):
             d = ws + timedelta(days=i)
             if d < start or d > end:
                 out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.4">{d:%-d}</div></td>')
@@ -196,23 +227,32 @@ def month_calendar_html(
             if d in closures:
                 out.append(f'<td class="cs-closed"><div class="cs-datenum">{d:%-d}</div>{html.escape(closures[d])}</td>')
                 continue
+            if d.weekday() >= 5 and d not in weekend_dates:
+                out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.5">{d:%-d}</div></td>')
+                continue
             g = by_date.get(d)
             chips = ""
             if g is not None:
                 g = g.assign(o=g["slot"].map(SLOT_KEYS.index)).sort_values(["o", "court"])
-                chips = "".join(_chip(r, colors, None, compact=True) for _, r in g.iterrows())
-            out.append(f'<td><div class="cs-datenum">{d:%-d}</div>{chips}</td>')
+                chips = "".join(_chip(r, stripes, None, compact=True) for _, r in g.iterrows())
+            cls = ' class="cs-wkend"' if d.weekday() >= 5 else ""
+            out.append(f'<td{cls}><div class="cs-datenum">{d:%-d}</div>{chips}</td>')
         out.append("</tr>")
         ws += timedelta(days=7)
     out.append("</tbody></table></div>")
     return "".join(out)
 
 
-def week_dates(ws: date, start: date, end: date) -> dict[str, date]:
-    """Mon..Fri -> date, with date.min for days outside the period."""
+def week_dates(ws: date, start: date, end: date, weekend_dates=()) -> dict[str, date]:
+    """Ordered {day: date} for a week: Mon–Fri always (date.min outside the
+    period), Sat/Sun only when that weekend day is open."""
     out = {}
-    for i, wd in enumerate(WEEKDAYS):
+    for i, wd in enumerate(DAYS):
         d = ws + timedelta(days=i)
+        if i >= 5:
+            if d in set(weekend_dates):
+                out[wd] = d
+            continue
         out[wd] = d if start <= d <= end else date.min
     return out
 

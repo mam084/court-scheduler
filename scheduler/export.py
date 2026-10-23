@@ -13,14 +13,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .config import COURTS, SLOT_KEYS, SLOTS, WEEKDAYS
+from .config import COURTS, DAYS, SLOT_KEYS, SLOT_TIMES, SLOTS, WEEKDAYS
 from .solver import ScheduleResult, week_start
-
-SLOT_TIMES = {  # 24h start/end for calendar events
-    "3:45": ((15, 45), (17, 30)),
-    "5:30": ((17, 30), (19, 20)),
-    "7:20": ((19, 20), (21, 10)),
-}
 
 _thin = Side(style="thin", color="C9CED8")
 _border = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
@@ -33,18 +27,20 @@ def _cell_text(rows: pd.DataFrame) -> str:
     rows = rows.assign(o=rows["slot"].map(SLOT_KEYS.index)).sort_values("o")
     lines = []
     for _, r in rows.iterrows():
-        mark = " *" if r["kind"] == "Practice" and not r.get("on_pattern", True) else ""
-        who = f" ({r['coach']})" if r["coach"] else ""
+        weekday = r.get("day") in WEEKDAYS
+        mark = " *" if r["kind"] == "Practice" and weekday and not r.get("on_pattern", True) else ""
+        who = f" ({str(r['coach']).replace('; ', ', ')})" if r["coach"] else ""
         lines.append(f"{r['slot']} {r['name']}{who}{mark}")
     return "\n".join(lines)
 
 
-def _grid_sheet(wb, title, bookings, day_labels, closed=None):
-    """Courts as rows, weekdays as columns."""
+def _grid_sheet(wb, title, bookings, day_labels, closed=None, cols=None):
+    """Courts as rows, days as columns."""
     ws = wb.create_sheet(title=title[:31])
     closed = closed or {}
+    cols = cols or list(WEEKDAYS)
     ws.cell(1, 1, "").fill = _head
-    for j, wd in enumerate(WEEKDAYS, start=2):
+    for j, wd in enumerate(cols, start=2):
         cell = ws.cell(1, j, day_labels.get(wd, wd))
         cell.font, cell.fill = Font(bold=True, color="FFFFFF"), _head
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -55,7 +51,7 @@ def _grid_sheet(wb, title, bookings, day_labels, closed=None):
         rc.alignment = Alignment(horizontal="center", vertical="center")
         court_rows = bookings[bookings["court"] == c] if len(bookings) else bookings
         n_lines = 1
-        for j, wd in enumerate(WEEKDAYS, start=2):
+        for j, wd in enumerate(cols, start=2):
             if wd in closed:
                 cell = ws.cell(i, j, closed[wd] if i == 2 else "")
                 cell.fill = _closed
@@ -68,7 +64,7 @@ def _grid_sheet(wb, title, bookings, day_labels, closed=None):
             cell.border = _border
         ws.row_dimensions[i].height = max(30, 15 * n_lines + 4)
     ws.column_dimensions["A"].width = 10
-    for j in range(2, len(WEEKDAYS) + 2):
+    for j in range(2, len(cols) + 2):
         ws.column_dimensions[get_column_letter(j)].width = 30
     ws.freeze_panes = "B2"
     return ws
@@ -85,26 +81,30 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
     tmpl = pd.concat([tmpl, locals_[tmpl.columns.intersection(locals_.columns)]], ignore_index=True)
     _grid_sheet(wb, "Weekly Template", tmpl, {})
 
+    weekend_open = set(result.weekend_dates)
     for ws_date, g in a.groupby(a["date"].map(week_start)):
-        labels, closed = {}, {}
-        for i, wd in enumerate(WEEKDAYS):
+        labels, closed, cols = {}, {}, []
+        for i, wd in enumerate(DAYS):
             d = ws_date + timedelta(days=i)
+            if i >= 5 and d not in weekend_open:
+                continue
+            cols.append(wd)
             labels[wd] = f"{wd}\n{d:%b %-d}"
             if d in closures:
                 closed[wd] = f"Closed: {closures[d]}"
             elif not (result.start <= d <= result.end):
                 closed[wd] = "Outside this schedule period"
-        _grid_sheet(wb, f"Week of {ws_date:%b %-d}", g, labels, closed)
+        _grid_sheet(wb, f"Week of {ws_date:%b %-d}", g, labels, closed, cols)
 
     flat = a.copy()
     flat["date"] = pd.to_datetime(flat["date"]).dt.strftime("%Y-%m-%d")
-    flat = flat[["date", "day", "slot_label", "court", "kind", "name", "coach", "on_pattern"]]
-    flat.columns = ["Date", "Day", "Time", "Court", "Type", "Team / Program", "Coach(es)", "On usual schedule"]
+    flat = flat[["date", "day", "slot_label", "court", "kind", "name", "club", "coach", "on_pattern"]]
+    flat.columns = ["Date", "Day", "Time", "Court", "Type", "Team / Program", "Club", "Coach(es)", "On usual schedule"]
     sh = wb.create_sheet("All Bookings")
     sh.append(list(flat.columns))
     for row in flat.itertuples(index=False):
         sh.append(list(row))
-    for j, w in enumerate([12, 6, 12, 7, 9, 26, 22, 18], start=1):
+    for j, w in enumerate([12, 6, 14, 7, 9, 22, 10, 24, 18], start=1):
         sh.column_dimensions[get_column_letter(j)].width = w
     for c in sh[1]:
         c.font, c.fill = Font(bold=True, color="FFFFFF"), _head
