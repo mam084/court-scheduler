@@ -260,7 +260,7 @@ def month_calendar_html(
                 out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.4">{d:%-d}</div></td>')
                 continue
             if d in closures:
-                out.append(f'<td class="cs-closed"><div class="cs-datenum">{d:%-d}</div>{html.escape(closures[d])}</td>')
+                out.append(f'<td class="cs-closed"><div class="cs-datenum">{_daynum(d, start)}</div>{html.escape(closures[d])}</td>')
                 continue
             if d.weekday() >= 5 and d not in weekend_dates:
                 out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.5">{d:%-d}</div></td>')
@@ -272,11 +272,26 @@ def month_calendar_html(
                 g = g.assign(o=g["slot"].map(SLOT_KEYS.index)).sort_values(["o", "court"])
                 chips += "".join(_chip(r, stripes, None, compact=True) for _, r in g.iterrows())
             cls = ' class="cs-wkend"' if d.weekday() >= 5 else ""
-            out.append(f'<td{cls}><div class="cs-datenum">{d:%-d}</div>{chips}</td>')
+            out.append(f'<td{cls}><div class="cs-datenum">{_daynum(d, start)}</div>{chips}</td>')
         out.append("</tr>")
         ws += timedelta(days=7)
     out.append("</tbody></table></div>")
     return "".join(out)
+
+
+def _daynum(d: date, start: date) -> str:
+    """Day number, with the month on the 1st and on the first day shown (ranges can span months)."""
+    return f"{d:%b %-d}" if d.day == 1 or d == start else f"{d:%-d}"
+
+
+def range_label(start: date, end: date) -> str:
+    if start.year != end.year:
+        return f"{start:%b %-d, %Y} – {end:%b %-d, %Y}"
+    if start.month != end.month:
+        return f"{start:%b %-d} – {end:%b %-d, %Y}"
+    if start.day == 1 and (end + timedelta(days=1)).month != end.month:
+        return f"{calendar.month_name[start.month]} {start.year}"
+    return f"{start:%b %-d}–{end:%-d, %Y}"
 
 
 def week_dates(ws: date, start: date, end: date, weekend_dates=()) -> dict[str, date]:

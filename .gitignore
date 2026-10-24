@@ -12,3 +12,6 @@ data/*
 *.ics
 schedule_*.xlsx
 club_inputs.xlsx
+
+# Local saved-schedule database (real club data)
+storage/

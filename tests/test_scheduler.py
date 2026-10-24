@@ -328,3 +328,55 @@ def test_court_quality_and_team_levels():
     pr = r.assignments
     assert 2 not in set(pr["court"])
     assert (pr[pr["name"] == "18 Black"]["court"] == 1).all()
+
+
+# ------------------------------------------------------------- storage --
+
+def _store_roundtrip(store):
+    from scheduler.storage import make_payload, new_id, read_payload
+    inp = simulate(5, 3, 3, seed=2, start=date(2026, 11, 3), end=date(2026, 12, 4))
+    inp = _with_tournaments(inp, [{"name": "Boys Local", "type": "Local", "start_date": "11/18/2026"}])
+    r = solve(inp, date(2026, 11, 3), date(2026, 12, 4), time_limit_s=10)
+    pid = new_id()
+    store.save(pid, "Nov 3 – Dec 4", make_payload(inp, date(2026, 11, 3), date(2026, 12, 4),
+                                                  {"time_limit": 20, "makeup": False}, r))
+    assert pid in [p["id"] for p in store.list()]
+    rec = store.get(pid)
+    inp2, s, e, settings, r2 = read_payload(rec["payload"])
+    assert (s, e) == (date(2026, 11, 3), date(2026, 12, 4)) and settings == {"time_limit": 20, "makeup": False}
+    assert len(inp2.teams) == len(inp.teams) and len(inp2.tournaments) == 1
+    assert len(r2.assignments) == len(r.assignments) and r2.metrics["practices_scheduled"] == r.metrics["practices_scheduled"]
+    assert isinstance(r2.assignments["date"].iloc[0], date) and [t.name for t in r2.tournaments] == ["Boys Local"]
+    # The reloaded inputs solve again just like the originals.
+    r3 = solve(inp2, s, e, time_limit_s=10)
+    assert r3.ok
+    store.rename(pid, "Renamed")
+    assert store.get(pid)["name"] == "Renamed"
+    store.delete(pid)
+    assert store.get(pid) is None
+
+
+def test_storage_roundtrip_sqlite(tmp_path):
+    from scheduler.storage import Store
+    _store_roundtrip(Store(f"sqlite:///{tmp_path / 'test.db'}"))
+
+
+@pytest.mark.skipif(not __import__("os").environ.get("TEST_DATABASE_URL"), reason="no Postgres configured")
+def test_storage_roundtrip_postgres():
+    import os
+    from scheduler.storage import Store
+    _store_roundtrip(Store(os.environ["TEST_DATABASE_URL"]))
+
+
+def test_date_range_partial_weeks_and_new_year():
+    inp = simulate(4, 2, 2, seed=5, start=date(2026, 12, 15), end=date(2027, 1, 15))
+    inp.availability = pd.concat([inp.availability, pd.DataFrame([{
+        "who": inp.teams.iloc[0]["team"], "type": "No", "dates": "1/5-1/6", "days": "", "times": "", "note": ""}])],
+        ignore_index=True)
+    data = clean(inp, date(2026, 12, 15), date(2027, 1, 15))
+    assert any(r.ranges == [(date(2027, 1, 5), date(2027, 1, 6))] for r in data.rules)  # 1/5 means next year
+    r = solve(inp, date(2026, 12, 15), date(2027, 1, 15), time_limit_s=20)
+    assert r.ok
+    _check_hard_rules(inp, r)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert pr["date"].min() >= date(2026, 12, 15) and pr["date"].max() <= date(2027, 1, 15)

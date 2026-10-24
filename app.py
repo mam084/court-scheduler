@@ -5,6 +5,8 @@ Run locally:  streamlit run app.py
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 from datetime import date
 
@@ -22,97 +24,236 @@ from scheduler.config import COURTS, DAYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKD
 from scheduler.data import ATTRS, COLUMNS, empty, parse_names
 from scheduler.export import to_excel, to_ics
 from scheduler.solver import week_start
-from scheduler.views import club_stripes, court_grid_html, legend_html, month_calendar_html, month_name, week_dates
+from scheduler.storage import Store, database_url, make_payload, new_id, read_payload
+from scheduler.views import club_stripes, court_grid_html, legend_html, month_calendar_html, range_label, week_dates
 
 st.set_page_config(page_title="Court Scheduler", page_icon="🏐", layout="wide")
 
 
-def next_month(today: date) -> tuple[int, int]:
-    return (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
+def next_month(today: date) -> tuple[date, date]:
+    y, m = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
+    return month_range(y, m)
 
 
-def blank_template(start: date) -> bytes:
-    """Template workbook with one example row per sheet."""
-    ex = simulate(2, 1, 1, start.year, start.month, seed=1)
+def blank_template(start: date, end: date) -> bytes:
+    """Template workbook with example rows on each sheet."""
+    ex = simulate(2, 1, 1, seed=1, start=start, end=end)
     for attr in ATTRS.values():
         setattr(ex, attr, getattr(ex, attr).head(2))
     return ex.to_excel_bytes()
 
 
+def secret(name: str):
+    try:
+        return st.secrets.get(name)
+    except Exception:  # noqa: BLE001  (no secrets file)
+        return None
+
+
+# ------------------------------------------------------------ password --
+APP_PASSWORD = secret("APP_PASSWORD")
+if APP_PASSWORD and not st.session_state.get("authed"):
+    st.title("🏐 Court Scheduler")
+    pw = st.text_input("Club password", type="password")
+    if pw and pw == str(APP_PASSWORD):
+        st.session_state.authed = True
+        st.rerun()
+    elif pw:
+        st.error("That password isn't right.")
+    st.stop()
+
+
+# ------------------------------------------------------- saved schedules --
+@st.cache_resource
+def get_store(url: str | None) -> Store:
+    return Store(url)
+
+
+store = get_store(database_url())
+PROJECT_KEYS = ["project_id", "project_name", "inp", "result", "result_period", "inp_sig", "last_saved",
+                "range_start", "range_end", "time_limit", "makeup"]
+
+
+def payload_hash(payload: dict) -> str:
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def open_project(pid: str) -> bool:
+    rec = store.get(pid)
+    if rec is None:
+        return False
+    inp_, s_, e_, settings, result_ = read_payload(rec["payload"])
+    st.session_state.update(
+        project_id=pid, project_name=rec["name"], inp=inp_, result=result_,
+        result_period=(result_.start, result_.end) if result_ else None,
+        inp_sig=("project", pid, str(rec["updated_at"])),
+        range_start=s_, range_end=e_,
+        time_limit=int(settings.get("time_limit", 30)), makeup=bool(settings.get("makeup", True)),
+        last_saved=payload_hash(rec["payload"]),
+    )
+    st.query_params["project"] = pid
+    return True
+
+
+def close_project():
+    for k in PROJECT_KEYS:
+        st.session_state.pop(k, None)
+    st.query_params.clear()
+
+
+# Opening a link like ...?project=abc (or refreshing) reopens that schedule.
+qp = st.query_params.get("project")
+if qp and st.session_state.get("project_id") != qp:
+    if not open_project(qp):
+        st.query_params.clear()
+        st.session_state.flash_warn = "That saved schedule wasn't found (it may have been deleted)."
+
 # ---------------------------------------------------------------- sidebar --
 with st.sidebar:
     st.title("🏐 Court Scheduler")
+    saved = store.list()
+    names = {p["id"]: p["name"] for p in saved}
+    current = st.session_state.get("project_id")
+    options = ["__new__"] + list(names)
+    choice = st.selectbox("Schedule", options, index=options.index(current) if current in options else 0,
+                          format_func=lambda o: "➕ New schedule" if o == "__new__" else names[o],
+                          key=f"picker_{current}")
+    if choice != (current or "__new__"):
+        if choice == "__new__":
+            close_project()
+        else:
+            open_project(choice)
+        st.rerun()
 
-    ny, nm = next_month(date.today())
-    c1, c2 = st.columns(2)
-    month = c1.selectbox("Month", range(1, 13), index=nm - 1,
-                         format_func=lambda m: date(2000, m, 1).strftime("%B"))
-    year = c2.number_input("Year", 2024, 2035, ny, step=1)
-    start, end = month_range(int(year), int(month))
-
-    source = st.radio("Input data", ["Upload spreadsheet", "Simulated club"], horizontal=True)
-
-    if source == "Simulated club":
-        with st.expander("Simulation settings", expanded=False):
-            n_girls = st.slider("Girls teams", 0, 24, 6)
-            n_boys = st.slider("Boys teams", 0, 12, 4)
-            n_locals = st.slider("Locals programs", 0, 6, 4)
-            seed = st.number_input("Random seed", 0, 9999, 7, help="Change for a different simulated club")
-        sig = ("sim", n_girls, n_boys, n_locals, seed, start)
-        if st.session_state.get("inp_sig") != sig:
-            st.session_state.inp = simulate(n_girls, n_boys, n_locals, start.year, start.month, int(seed))
-            st.session_state.inp_sig = sig
-            st.session_state.pop("result", None)
-    else:
-        up = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"])
-        if up is not None:
-            sig = ("upload", up.name, up.size)
-            if st.session_state.get("inp_sig") != sig:
+    if current is None:
+        # ------------------------------------------------- new schedule --
+        st.subheader("New schedule")
+        d_start, d_end = next_month(date.today())
+        new_name = st.text_input("Name", placeholder="e.g. Nov 3 – Dec 4 practices")
+        new_start = st.date_input("From", value=d_start, format="MM/DD/YYYY")
+        new_end = st.date_input("To", value=d_end, format="MM/DD/YYYY")
+        source = st.radio("Start from", ["Upload spreadsheet", "Simulated club"], horizontal=True)
+        up = None
+        if source == "Upload spreadsheet":
+            up = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"])
+            st.download_button("Download blank template", blank_template(new_start, new_end),
+                               "court_scheduler_template.xlsx",
+                               help="Sheets: Teams, Availability, Wishlist, Locals, Weekends, Closures, Tournaments. "
+                                    "Example rows show the format.")
+        else:
+            with st.expander("Simulation settings", expanded=False):
+                n_girls = st.slider("Girls teams", 0, 24, 6)
+                n_boys = st.slider("Boys teams", 0, 12, 4)
+                n_locals = st.slider("Locals programs", 0, 6, 4)
+                seed = st.number_input("Random seed", 0, 9999, 7, help="Change for a different simulated club")
+        if st.button("Create schedule", type="primary", use_container_width=True):
+            problems = []
+            if new_end < new_start:
+                problems.append("The end date is before the start date.")
+            if source == "Upload spreadsheet" and up is None:
+                problems.append("Upload the club spreadsheet first.")
+            new_inp = None
+            if not problems:
                 try:
-                    st.session_state.inp = ScheduleInput.from_excel(up)
-                    st.session_state.inp_sig = sig
-                    st.session_state.pop("result", None)
+                    if source == "Upload spreadsheet":
+                        new_inp = ScheduleInput.from_excel(up)
+                    else:
+                        new_inp = simulate(n_girls, n_boys, n_locals, seed=int(seed), start=new_start, end=new_end)
+                except Exception as e:  # noqa: BLE001
+                    problems.append(f"Couldn't read that file: {e}")
+            if problems:
+                st.error(" ".join(problems))
+            else:
+                pid = new_id()
+                label = new_name.strip() or range_label(new_start, new_end)
+                store.save(pid, label, make_payload(new_inp, new_start, new_end,
+                                                    {"time_limit": 30, "makeup": True}, None))
+                open_project(pid)
+                st.session_state.resolve = True  # build it right away
+                st.session_state.flash = f"Created “{label}”. It saves automatically; bookmark this page to come back."
+                st.rerun()
+        st.caption(f"Schedules are saved to a {store.kind}" +
+                   ("." if store.permanent else " on the app server and can be cleared when the app restarts."))
+    else:
+        # ---------------------------------------------- open schedule --
+        st.caption("✅ Saved automatically. Bookmark or share this page's link to come back to it.")
+        st.date_input("From", key="range_start", format="MM/DD/YYYY")
+        st.date_input("To", key="range_end", format="MM/DD/YYYY")
+        with st.expander("Replace data with a spreadsheet"):
+            rep = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"], key=f"replace_{current}")
+            if rep is not None and st.button("Replace all input tables", use_container_width=True):
+                try:
+                    st.session_state.inp = ScheduleInput.from_excel(rep)
+                    st.session_state.inp_sig = ("project", current, rep.name, rep.size)
+                    st.session_state.result = None
+                    st.session_state.resolve = True
+                    st.session_state.flash = f"Replaced the inputs with {rep.name}."
+                    st.rerun()
                 except Exception as e:  # noqa: BLE001
                     st.error(f"Couldn't read that file: {e}")
-        elif st.session_state.get("inp_sig", ("",))[0] != "upload":
-            st.session_state.pop("inp", None)
-        st.download_button("Download blank template", blank_template(start), "court_scheduler_template.xlsx",
-                           help="Sheets: Teams, Availability, Wishlist, Locals, Weekends, Closures. "
-                                "Example rows show the format.")
+        with st.expander("Solver settings", expanded=False):
+            st.slider("Time limit (seconds)", 5, 120, key="time_limit")
+            st.checkbox("Make up practices lost to closures", key="makeup",
+                        help="If on, a team whose usual day is a closure gets a makeup that week "
+                             "(on another weekday or an open weekend).")
+        run = st.button("⚡ Auto-schedule", type="primary", use_container_width=True)
+        with st.expander("Rename or delete"):
+            nn = st.text_input("Name", value=st.session_state.get("project_name", ""), key=f"rename_{current}")
+            if st.button("Rename", use_container_width=True) and nn.strip():
+                store.rename(current, nn.strip())
+                st.session_state.project_name = nn.strip()
+                st.rerun()
+            sure = st.checkbox("Yes, delete this schedule for everyone", key=f"del_{current}")
+            if st.button("🗑️ Delete schedule", disabled=not sure, use_container_width=True):
+                store.delete(current)
+                close_project()
+                st.session_state.flash = "Schedule deleted."
+                st.rerun()
+        if not store.permanent:
+            st.caption("⚠️ Saved on the app server only: it survives refreshes but can be cleared when the app "
+                       "restarts. Connect a database (see README) to keep schedules permanently.")
 
-    with st.expander("Solver settings", expanded=False):
-        time_limit = st.slider("Time limit (seconds)", 5, 120, 30)
-        makeup = st.checkbox("Make up practices lost to closures", value=True,
-                             help="If on, a team whose usual day is a closure gets a makeup that week "
-                                  "(on another weekday or an open weekend).")
+if "flash_warn" in st.session_state:
+    st.warning(st.session_state.pop("flash_warn"))
 
-    run = st.button("⚡ Auto-schedule", type="primary", use_container_width=True,
-                    disabled="inp" not in st.session_state)
+if st.session_state.get("project_id") is None:
+    st.header("🏐 Court Scheduler")
+    if "flash" in st.session_state:
+        st.success(st.session_state.pop("flash"))
+    st.info("Create a new schedule in the sidebar (pick its dates, then upload your club spreadsheet or try the "
+            "simulated club), or open a saved one from the **Schedule** menu.")
+    if saved:
+        st.markdown("**Saved schedules**")
+        for p in saved:
+            st.markdown(f"- [{p['name']}](?project={p['id']}) · updated {p['updated_at']:%b %-d, %-I:%M %p}")
+    st.stop()
 
-inp: ScheduleInput | None = st.session_state.get("inp")
-if inp is not None and not isinstance(getattr(inp, "tournaments", None), pd.DataFrame):
-    inp.tournaments = empty("Tournaments")  # files/sessions from before tournaments existed
+inp: ScheduleInput = st.session_state.inp
+if not isinstance(getattr(inp, "tournaments", None), pd.DataFrame):
+    inp.tournaments = empty("Tournaments")
+start, end = st.session_state.range_start, st.session_state.range_end
+time_limit, makeup = st.session_state.time_limit, st.session_state.makeup
+if end < start:
+    st.error("The schedule's end date is before its start date.")
+    st.stop()
+inp.start, inp.end = start, end
 
-# Adding/removing a program triggers a rebuild so the calendar fills in.
-if (run or st.session_state.pop("resolve", False)) and inp is not None:
+# Auto-schedule button, or adding/removing a program or tournament, rebuilds.
+if run or st.session_state.pop("resolve", False):
     with st.spinner("Building the schedule…"):
         try:
             st.session_state.result = solve(inp, start, end, time_limit_s=time_limit, makeup_closures=makeup)
             st.session_state.result_period = (start, end)
         except ValueError as e:
-            st.session_state.pop("result", None)
+            st.session_state.result = None
             st.error(str(e))
 
 result = st.session_state.get("result")
 if result is not None and st.session_state.get("result_period") != (start, end):
-    result = None  # month changed since the last run
+    result = None  # dates changed since the last run
 
 # ------------------------------------------------------------------ header --
-st.header(f"Practice schedule · {month_name(start)}")
-if inp is None:
-    st.info("Upload your club spreadsheet in the sidebar, or switch to the simulated club to try it out. "
-            "Download the blank template there to see the format.")
-    st.stop()
+st.header(f"{st.session_state.project_name} · {range_label(start, end)}")
 
 try:
     cleaned = clean(inp, start, end)
@@ -122,7 +263,7 @@ except ValueError as e:
     cleaned, closures = None, {}
 
 if result is None:
-    st.info("Press **⚡ Auto-schedule** in the sidebar to build the schedule. "
+    st.info("Press **⚡ Auto-schedule** in the sidebar to build the schedule for these dates. "
             "You can review and edit the inputs in the **Inputs** tab first.")
 elif not result.ok:
     st.error(f"No schedule found ({result.status}). Check for more teams than open courts, "
@@ -200,7 +341,7 @@ with TAB_COURT:
             st.markdown(court_grid_html(book, dd, closures, hl or None, stripes, result.tournaments),
                         unsafe_allow_html=True)
 
-        st.download_button("⬇️ Download schedule (Excel)", to_excel(result, closures), f"schedule_{start:%Y_%m}.xlsx")
+        st.download_button("⬇️ Download schedule (Excel)", to_excel(result, closures), f"schedule_{start:%Y%m%d}-{end:%Y%m%d}.xlsx")
 
 # ------------------------------------------------------------ calendar --
 with TAB_CAL:
@@ -433,7 +574,7 @@ with TAB_COACH:
                         "name": "Team / Program", "role": "Role"}),
                     hide_index=True, use_container_width=True)
                 st.download_button(f"📆 Add {coach}'s schedule to Google Calendar (.ics)",
-                                   to_ics(result, coach), f"{coach.replace(' ', '_')}_{start:%Y_%m}.ics",
+                                   to_ics(result, coach), f"{coach.replace(' ', '_')}_{start:%Y%m%d}-{end:%Y%m%d}.ics",
                                    mime="text/calendar",
                                    help="In Google Calendar: Settings → Import & export → Import this file.")
 
@@ -488,3 +629,17 @@ with TAB_INPUTS:
                                 key=f"edit_{attr}_{sig_key}", hide_index=True)
         setattr(inp, attr, edited)
     st.download_button("⬇️ Download inputs (Excel)", inp.to_excel_bytes(), "club_inputs.xlsx")
+
+
+# ----------------------------------------------------------- autosave --
+# Save the inputs, dates, settings and latest schedule whenever anything
+# changed this run, so a refresh or a new visit picks up where you left off.
+_payload = make_payload(inp, start, end, {"time_limit": time_limit, "makeup": makeup},
+                        st.session_state.get("result"))
+_h = payload_hash(_payload)
+if _h != st.session_state.get("last_saved"):
+    try:
+        store.save(st.session_state.project_id, st.session_state.project_name, _payload)
+        st.session_state.last_saved = _h
+    except Exception as e:  # noqa: BLE001
+        st.toast(f"Couldn't save: {e}", icon="⚠️")

@@ -50,9 +50,13 @@ def simulate(
     year: int = 2026,
     month: int = 11,
     seed: int = 7,
+    start: date | None = None,
+    end: date | None = None,
 ) -> ScheduleInput:
+    """Simulated club for a month, or for any start/end date range."""
     rng = random.Random(seed)
-    start, end = month_range(year, month)
+    if start is None or end is None:
+        start, end = month_range(year, month)
     names = rng.sample(FIRST_NAMES, k=len(FIRST_NAMES))
     pool = iter(names + [f"Coach{i}" for i in range(1, 200)])
 

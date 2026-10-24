@@ -91,6 +91,31 @@ class ScheduleInput:
                     ws.column_dimensions[ws.cell(1, i).column_letter].width = min(48, width)
         return buf.getvalue()
 
+    def to_records(self) -> dict[str, list[dict]]:
+        """Plain JSON-able form (all values as text) for saving."""
+        out = {}
+        for sheet, df in self.sheets().items():
+            d = df.copy()
+            for c in COLUMNS[sheet]:
+                if c not in d.columns:
+                    d[c] = ""
+            d = d[COLUMNS[sheet]].astype(object)
+            d = d.map(lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v))
+                      else v.strftime("%m/%d/%Y") if isinstance(v, (date, datetime)) else str(v))
+            out[sheet] = d.to_dict(orient="records")
+        return out
+
+    @classmethod
+    def from_records(cls, records: dict[str, list[dict]]) -> "ScheduleInput":
+        frames = {}
+        for sheet, cols in COLUMNS.items():
+            df = pd.DataFrame(records.get(sheet, []))
+            for c in cols:
+                if c not in df.columns:
+                    df[c] = ""
+            frames[ATTRS[sheet]] = df[cols].astype(object) if len(df) else empty(sheet)
+        return cls(**frames)
+
     @classmethod
     def from_excel(cls, file) -> "ScheduleInput":
         xl = pd.read_excel(file, sheet_name=None, dtype=str)
@@ -254,22 +279,29 @@ _MONTHS = {m: i for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
 
 
-def _one_date(tok: str, year: int, month_hint: int | None = None) -> date:
+def _year(year, month: int) -> int:
+    """`year` is a fixed year, or a function month -> year (for ranges that
+    cross New Year, so '1/5' in a Dec 15 - Jan 15 schedule means next year)."""
+    return year(month) if callable(year) else year
+
+
+def _one_date(tok: str, year, month_hint: int | None = None) -> date:
     tok = tok.strip().lower().replace(",", "")
     m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", tok)
     if m:
         return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
     m = re.match(r"^(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?$", tok)
     if m:
-        y = int(m.group(3)) if m.group(3) else year
+        y = int(m.group(3)) if m.group(3) else _year(year, int(m.group(1)))
         y = y + 2000 if y < 100 else y
         return date(y, int(m.group(1)), int(m.group(2)))
     m = re.match(r"^([a-z]{3})[a-z]*\.?\s*(\d{1,2})(?:st|nd|rd|th)?$", tok)
     if m and m.group(1) in _MONTHS:
-        return date(year, _MONTHS[m.group(1)], int(m.group(2)))
+        mo = _MONTHS[m.group(1)]
+        return date(_year(year, mo), mo, int(m.group(2)))
     m = re.match(r"^(\d{1,2})(?:st|nd|rd|th)?$", tok)
     if m and month_hint:
-        return date(year, month_hint, int(m.group(1)))
+        return date(_year(year, month_hint), month_hint, int(m.group(1)))
     raise ValueError(f"Can't read date '{tok}'")
 
 
@@ -291,6 +323,8 @@ def parse_date_ranges(value, year: int) -> list[tuple[date, date]]:
         a = _one_date(parts[0], year)
         if len(parts) == 2:
             b = _one_date(parts[1], year, month_hint=a.month)
+            if b < a and b.month < a.month:  # e.g. 12/28-1/3
+                b = b.replace(year=a.year + 1)
             if b < a:
                 raise ValueError(f"Date range '{tok}' ends before it starts")
             out.append((a, b))
@@ -304,7 +338,7 @@ def to_date(value, year: int | None = None) -> date:
         return pd.Timestamp(value).date()
     s = re.sub(r"\s+00:00:00$", "", str(value).strip())
     try:
-        return _one_date(s, year or date.today().year)
+        return _one_date(s, year if year is not None else date.today().year)
     except ValueError:
         return pd.to_datetime(s).date()
 
@@ -575,7 +609,11 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
     """Validate and normalise. Raises ValueError listing every problem the
     solver can't work around; softer issues come back as warnings."""
     start = start or inp.start or date.today()
-    year = start.year
+    end = end or inp.end or start
+    if end.year == start.year:
+        year = start.year
+    else:  # schedule crosses New Year: months before the start month are next year
+        year = lambda month: start.year if month >= start.month else end.year  # noqa: E731
     errors: list[str] = []
     warnings: list[str] = []
 

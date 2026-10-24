@@ -116,14 +116,16 @@ def solve(
     for d in open_dates:
         weeks[week_start(d)].append(d)
 
-    def week_kind(ws):
-        """'full' when the 2-practice target applies, else 'partial'."""
+    def week_target(ws):
+        """Practices each team should get that week. A week cut off by the
+        schedule's start or end is prorated: 3+ weekdays inside the range
+        still count as a full week, 2 weekdays get 1 practice, and a single
+        day just follows the usual pattern."""
         span = [ws + timedelta(days=i) for i in range(5)]
-        if not all(start <= d <= end for d in span):
-            return "partial"
+        inside = sum(start <= d <= end for d in span)
         if not makeup_closures and any(d in data.closures for d in span):
-            return "partial"
-        return "full"
+            return 0
+        return PRACTICES_PER_WEEK if inside >= 3 else (1 if inside == 2 else 0)
 
     coach_local = defaultdict(set)  # (d, s) -> coaches working a local then
     for d in open_dates:
@@ -345,14 +347,16 @@ def solve(
     for t in T:
         team = teams[t]
         for ws, wdates in weeks.items():
-            if week_kind(ws) != "full":
+            week_goal = week_target(ws)
+            if not week_goal:
                 continue
             if team.start and team.start > ws + timedelta(days=6):
                 continue
             if not any((t, d, s) in y for d in wdates for s in slots_on(d)):
-                no_slot_weeks.append((t, ws))
+                no_slot_weeks.append((t, ws, min(week_goal, 1 if (team.start and team.start > ws)
+                                                 else PRACTICES_PER_WEEK)))
                 continue
-            target = 1 if (team.start and team.start > ws) else PRACTICES_PER_WEEK
+            target = min(week_goal, 1 if (team.start and team.start > ws) else PRACTICES_PER_WEEK)
             w = WEIGHTS["missed_practice"] * team.priority
             if ws in lead_in_weeks[team.name]:  # get both practices in before a tournament
                 w = int(w * 1.5)
@@ -505,9 +509,9 @@ def solve(
         "teams": len(teams),
         "practices_scheduled": int(len(practices)),
         "practices_required": int(sum(tg for (_, tg) in short_vars.values()))
-        + sum(1 if (teams[t].start and teams[t].start > ws) else PRACTICES_PER_WEEK for t, ws in no_slot_weeks),
+        + sum(goal for _, _, goal in no_slot_weeks),
         "missed_practices": int(sum(solver.Value(v) for (terms, _) in short_vars.values() for v in terms))
-        + sum(1 if (teams[t].start and teams[t].start > ws) else PRACTICES_PER_WEEK for t, ws in no_slot_weeks),
+        + sum(goal for _, _, goal in no_slot_weeks),
         "weekend_practices": int(len(practices) - len(weekday_pr)),
         "on_pattern_pct": round(float(100 * weekday_pr["on_pattern"].mean()), 1) if len(weekday_pr) else 0.0,
         "wishlist_pct": round(100 * wish_hits / wish_total, 1) if wish_total else None,
@@ -612,7 +616,7 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
                         "issue": f"Only {target - n} of {target} practice(s) this week",
                         "detail": (r + "; " if r else "") + "no open slot for a makeup"})
 
-    for t, ws in no_slot_weeks:
+    for t, ws, _goal in no_slot_weeks:
         team = teams[t]
         nos = [r.describe() for who in [team.name] + team.heads for r in rules_for[who] if r.kind == "no"]
         out.append({"severity": "High", "team": team.name, "week_of": ws,

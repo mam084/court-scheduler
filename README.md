@@ -1,6 +1,6 @@
 # 🏐 Court Scheduler
 
-Auto-schedules a volleyball club's team practices across 7 courts, one month at a time, and shows the result in the club's own court layout.
+Auto-schedules a volleyball club's team practices across 7 courts for any date range (say Nov 3 – Dec 4), shows the result in the club's own court layout, and saves each schedule so the club can come back to it.
 
 Each team practices twice a week on one court: weekdays in one of three timeslots (3:45–5:30, 5:30–7:20, 7:20–9:10), or on open weekend days in 2-hour blocks (9 AM–9 PM). Locals programs are blocked off first, no-dates are respected, coaches running two teams get them back-to-back, and the schedule stays the same week to week wherever possible. It handles a girls side and a boys side sharing the same courts and coaches, local and travel tournaments, and a court quality ranking.
 
@@ -47,6 +47,8 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 
 ## App
 
+- **Saved schedules:** create a schedule (name, dates, then upload the club spreadsheet or try the simulated club). Everything saves automatically: inputs, programs and tournaments you add, edits, dates, and the latest solved schedule. Refreshing or reopening the page's link (`?project=…`) picks up where you left off, and the **Schedule** menu lists every saved schedule.
+
 - **Court view:** courts as rows and days as columns, with each practice, its time and its coaches in the box. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
 - **Calendar:** a month view, filterable by club, team or coach.
 - **Tournaments:** add a local tournament (dates, courts, locals program) or a travel tournament (dates, club, age groups, then trim the list of teams going). It shows on the court view, calendar and Excel export, and the schedule is rebuilt around it.
@@ -55,6 +57,21 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 - **Review:** everything that differs from the ideal schedule, with the reason.
 - **Inputs:** edit any table in place and re-run.
 - **Exports:** an Excel workbook in the club's grid layout (template, one sheet per week, all bookings, review).
+
+## Saving schedules permanently
+
+Saved schedules go to a database when `DATABASE_URL` is set, and to a local SQLite file (`storage/`, git-ignored) otherwise. The local file is fine on your own computer, but on Streamlit Community Cloud it's wiped whenever the app restarts or redeploys. To keep schedules for good, connect a free Postgres database:
+
+1. Create a free project at [supabase.com](https://supabase.com) (or [neon.tech](https://neon.tech)).
+2. Copy its connection string. In Supabase: **Connect** → **Session pooler** → URI, with your database password filled in.
+3. In Streamlit Community Cloud, go to your app's **Settings → Secrets** and add:
+
+   ```toml
+   DATABASE_URL = "postgresql://postgres.xxxx:YOUR-PASSWORD@aws-0-us-west-1.pooler.supabase.com:5432/postgres"
+   APP_PASSWORD = "something-the-coaches-know"   # optional: asks for a password before showing anything
+   ```
+
+The table is created automatically on first run. Since saved schedules contain real coach data, also set `APP_PASSWORD` or make the Streamlit app private.
 
 ## Input spreadsheet
 
@@ -94,6 +111,7 @@ scheduler/
   solver.py             two-stage CP-SAT scheduler
   views.py              court grid + month calendar (HTML)
   export.py             Excel workbook + per-coach .ics
+  storage.py            saved schedules (SQLite or Postgres via DATABASE_URL)
 tests/                  hard-rule and parsing tests
 ```
 
@@ -103,7 +121,8 @@ tests/                  hard-rule and parsing tests
 - [x] Weekends, season start dates, assistants, ranked wishlists, coach double-ups
 - [x] Court view, calendar view, coach view
 - [x] Excel export, per-coach calendar files
-- [ ] Coach profiles with logins (Supabase or similar)
+- [x] Any date range; saved schedules that survive refreshes (Postgres via `DATABASE_URL`)
+- [ ] Coach profiles with logins
 - [ ] Coaches request changes and the director approves them, with the solver checking each change
 - [ ] Live Google Calendar sync
 - [ ] Monthly prompt for coaches to submit next month's no-dates
