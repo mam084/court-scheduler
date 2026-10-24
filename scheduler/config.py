@@ -4,7 +4,28 @@ Everything the club might want to tune lives here so the solver code
 stays readable.
 """
 
-COURTS = [1, 2, 3, 4, 5, 6, 7]
+COURTS = [1, 2, 3, 4, 5, 6, 7]          # courts team practices can use
+# The practice court: programs (locals, privates) can use it, team
+# practices never do. Stored as court 8 so everything else stays numeric.
+PRACTICE_COURT = 8
+ALL_COURTS = COURTS + [PRACTICE_COURT]  # every court a program can book
+
+
+def court_name(c) -> str:
+    """'Court 3', or 'Practice court' for the practice court."""
+    try:
+        c = int(c)
+    except (TypeError, ValueError):
+        return str(c)
+    return "Practice court" if c == PRACTICE_COURT else f"Court {c}"
+
+
+def court_short(c) -> str:
+    """Compact label: '3' or 'P'."""
+    try:
+        return "P" if int(c) == PRACTICE_COURT else str(int(c))
+    except (TypeError, ValueError):
+        return str(c)
 
 # Court quality, best first. Court 2 is clearly the worst.
 COURT_RANK = [1, 7, 6, 5, 3, 4, 2]

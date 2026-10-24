@@ -111,7 +111,7 @@ def solve(
     travel_tourn = [tn for tn in data.tournaments if tn.kind == "travel"]
 
     def courts_on(d, s):
-        base = COURTS if d.weekday() < 5 else data.weekends[d].courts
+        base = COURTS if d.weekday() < 5 else [c for c in data.weekends[d].courts if c in COURTS]
         blocked = {c for lp in locals_at(d, s) if lp.on_site for c in lp.courts}
         blocked |= {c for tn in local_tourn if tn.covers(d) for c in tn.courts}
         return [c for c in base if c not in blocked]
