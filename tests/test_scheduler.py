@@ -708,3 +708,18 @@ def test_breaking_a_no_date_beats_practicing_next_to_a_tournament():
     assert date(2026, 11, 13) not in set(wk["date"])            # not the day before
     assert date(2026, 11, 16) not in set(pr["date"])            # nor the day after
     assert [(b["date"], b["head_out"]) for b in r.broken] == [(date(2026, 11, 11), ["Ana"])]
+
+
+def test_saturday_then_sunday_avoided():
+    """Weekdays only fit 1 practice a week (Fri), so teams need a weekend
+    practice every week. Sundays are open too, but taking one right after a
+    Saturday practice is avoided: every week uses its Saturday instead."""
+    teams = [{"team": f"16-W{i}", "age": 16} for i in range(4)]
+    avail = [{"who": t["team"], "type": "No", "days": "Mon, Tue, Wed, Thu"} for t in teams]
+    weekends = [{"date": d, "open": "9AM-9PM"} for d in ("11/7", "11/8", "11/14", "11/15", "11/21", "11/22", "11/28")]
+    r = solve(_inp(teams, avail, weekends=weekends), *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    for name, g in pr.groupby("name"):
+        days = set(g["date"])
+        assert not any(d.weekday() == 5 and d + pd.Timedelta(days=1) in days for d in days), name
+    assert r.shortfalls.empty

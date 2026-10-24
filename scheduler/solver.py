@@ -517,7 +517,7 @@ def solve(
                 cons = m.NewBoolVar(f"cons_{t}_{d}")
                 m.Add(cons >= a + b - 1)
                 consec_vars[t, d] = cons
-                obj.append(WEIGHTS["consecutive_days"] * cons)
+                obj.append((WEIGHTS["consecutive_days"] + (WEIGHTS["sat_sun"] if d.weekday() == 5 else 0)) * cons)
 
         used = []
         for s in WEEKDAY_KEYS:
@@ -852,8 +852,10 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
 
     for (t, d), v in consec_vars.items():
         if solver.Value(v):
-            out.append({"severity": "Low", "team": teams[t].name, "week_of": week_start(d),
-                        "issue": f"Back-to-back days: {d:%a} & {(d + timedelta(days=1)):%a %-m/%-d}", "detail": ""})
+            sat = d.weekday() == 5
+            out.append({"severity": "Medium" if sat else "Low", "team": teams[t].name, "week_of": week_start(d),
+                        "issue": f"Back-to-back days: {d:%a} & {(d + timedelta(days=1)):%a %-m/%-d}",
+                        "detail": "no other open slot kept 2 practices both weeks" if sat else ""})
 
     df = pd.DataFrame(out, columns=["severity", "team", "week_of", "issue", "detail"])
     if not df.empty:

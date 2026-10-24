@@ -45,7 +45,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 | Court quality | Courts ranked 1 → 7 → 6 → 5 → 3 → 4 → 2. Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot older and 1s (Black) teams get the better courts |
 | Assistant coaches free | Assistants can be double-booked, at a cost |
 | Not-preferred days, weekend AM/PM preferences | |
-| A day apart | Back-to-back days are avoided, including Sat → Sun |
+| A day apart | Back-to-back weekdays are mildly avoided; Saturday then Sunday is strongly avoided |
 | Same slot both days, home court | |
 
 Closures default to the major family holidays: New Year's Day, July 4, Thanksgiving and the day after, Christmas Eve and Day, and New Year's Eve. The club practices on minor holidays like Labor Day.

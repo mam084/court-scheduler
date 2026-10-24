@@ -172,6 +172,9 @@ WEIGHTS = {
     # A team's practices on back-to-back days, including Sat -> Sun
     # (practices should have a day in between when possible).
     "consecutive_days": 40,
+    # Extra on top for Saturday then Sunday: back-to-back weekdays are fine,
+    # back-to-back weekend days are really not.
+    "sat_sun": 300,
     # Wishlist: practice matching only the 2nd choice / matching neither.
     "wish_second": 6,
     "wish_miss": 16,
