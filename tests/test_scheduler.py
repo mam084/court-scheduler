@@ -37,9 +37,13 @@ def _check_hard_rules(inp, r):
             assert d in data.weekends and s in data.weekends[d].blocks
             if t.weekend_only:
                 assert any(w.matches(d, s) for w in t.weekend_only), (t.name, d, s)
+        broken = {(b["team"], b["date"], b["slot"]) for b in r.broken}
         for rule in data.rules:
             if rule.kind == "no" and rule.matches(d, s):
-                assert rule.who != t.name and rule.who not in t.heads, (t.name, rule)
+                if rule.who == t.name or rule.who in t.heads:
+                    # Only allowed as a flagged last resort, never over a hand removal.
+                    assert not rule.manual, (t.name, rule)
+                    assert (t.name, d, s) in broken, (t.name, rule)
         for lp in data.locals:
             if lp.active(d, s):
                 assert not set(lp.coaches) & set(t.heads), (t.name, lp.name, d, s)
@@ -108,12 +112,16 @@ def test_late_ok_exception_allows_7_20_but_avoids_it():
     # With 5:30 free, the exception isn't used...
     r = solve(_inp(teams), *NOV, time_limit_s=10)
     assert not (r.assignments["slot"] == "7:20").any()
-    # ...but when 3:45 and 5:30 are blocked, 14 Black can go late and 14 Gold can't.
+    # ...but when 3:45 and 5:30 are blocked, 14 Black goes late. 14 Gold can't
+    # go late, so its no-dates are broken (and flagged) to keep 2 a week.
     avail = [{"who": t, "type": "No", "times": "3:45, 5:30"} for t in ("14 Black", "14 Gold")]
     r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
     pr = r.assignments
     assert (pr[pr["name"] == "14 Black"]["slot"] == "7:20").all() and len(pr[pr["name"] == "14 Black"])
-    assert pr[pr["name"] == "14 Gold"].empty
+    gold = pr[pr["name"] == "14 Gold"]
+    assert len(gold) and not (gold["slot"] == "7:20").any()
+    assert {b["team"] for b in r.broken} == {"14 Gold"}
+    assert r.shortfalls.empty
 
 
 def test_assistant_can_overlap_but_head_cannot():
@@ -148,9 +156,16 @@ def test_recurring_and_ranged_no_dates():
              {"who": "14-Ari", "type": "No", "days": "Wed", "times": "5:30"}]
     r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
     pr = r.assignments
-    assert not (pr["day"] == "Mon").any()
-    assert not pr["date"].between(date(2026, 11, 10), date(2026, 11, 13)).any()
-    assert pr[(pr["day"] == "Wed") & (pr["slot"] == "5:30")].empty
+    # The week of 11/8 is blocked Mon-Fri, so two no-dates there are broken
+    # (and flagged) to keep 2 practices. Everywhere else they hold.
+    broken = {(b["date"], b["slot"]) for b in r.broken}
+    assert len(broken) == 2 and all(date(2026, 11, 9) <= d <= date(2026, 11, 13) for d, _ in broken)
+    rest = pr[~pr.apply(lambda x: (x["date"], x["slot"]) in broken, axis=1)]
+    assert not (rest["day"] == "Mon").any()
+    assert not rest["date"].between(date(2026, 11, 10), date(2026, 11, 13)).any()
+    assert rest[(rest["day"] == "Wed") & (rest["slot"] == "5:30")].empty
+    assert r.shortfalls.empty
+    assert r.issues["issue"].str.startswith("No-date broken").sum() == 2
 
 
 def test_start_dates_and_required_weekend():
@@ -396,8 +411,10 @@ def test_court_2_used_before_missing_a_practice():
 
 def test_practice_counts_flag_short_weeks():
     teams = [{"team": "15-A", "age": 15}, {"team": "15-B", "age": 15}]
-    avail = [{"who": "15-A", "type": "No", "dates": "11/9-11/13"}]  # 15-A can't make that whole week
-    r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
+    # 15-A is away at a travel tournament that whole week, so it can't practice.
+    inp = _with_tournaments(_inp(teams), [{"name": "Away", "type": "Travel", "start_date": "11/9/2026",
+                                           "end_date": "11/13/2026", "teams": "15-A"}])
+    r = solve(inp, *NOV, time_limit_s=10)
     sf = r.shortfalls
     assert list(sf["team"]) == ["15-A"] and sf["week_of"].iloc[0] == date(2026, 11, 8) and sf["short"].iloc[0] == 2
     pc = r.practice_counts
@@ -529,3 +546,31 @@ def test_views_always_show_weekends():
     assert ">Sun<" in grid and ">Sat<" in grid and "weekend not open" in grid
     cal = month_calendar_html(empty, date(2026, 11, 1), date(2026, 11, 30))
     assert ">Sun<" in cal and ">Sat<" in cal
+
+
+def test_no_dates_broken_only_as_last_resort_head_coach_first():
+    """When no-dates leave fewer than 2 days, the head coach's no-date is
+    broken first on a day an assistant is free; hand removals never are."""
+    teams = [{"team": "15-Kit", "age": 15, "head_coach": "Kit", "assistants": "Ash"}]
+    avail = [{"who": "Kit", "type": "No", "dates": "11/9-11/12"},    # head out Mon-Thu
+             {"who": "Ash", "type": "No", "dates": "11/9-11/10"},    # assistant out Mon-Tue
+             {"who": "15-Kit", "type": "No", "dates": "11/13"}]      # team out Fri
+    r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
+    wk = r.assignments[r.assignments["date"].between(date(2026, 11, 9), date(2026, 11, 13))]
+    assert len(wk) == 2 and r.shortfalls.empty
+    # Wed/Thu: only Kit's no-date is broken, and Ash is free to run it.
+    assert set(wk["day"]) <= {"Wed", "Thu"}
+    assert all(b["head_out"] == ["Kit"] and b["free_asst"] == ["Ash"] and not b["team_out"] for b in r.broken)
+    assert len(r.broken) == 2
+
+
+def test_second_weekend_practice_avoided():
+    """Weekdays full: a team gets 1 weekend practice a week, not 2."""
+    teams = [{"team": f"16-W{i}", "age": 16} for i in range(4)]
+    avail = [{"who": t["team"], "type": "No", "days": "Mon, Tue, Wed, Thu"} for t in teams]
+    weekends = [{"date": d, "open": "9AM-9PM"} for d in ("11/7", "11/8", "11/14", "11/15", "11/21", "11/22")]
+    r = solve(_inp(teams, avail, weekends=weekends), *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    we = pr[pr["date"].map(lambda d: d.weekday() >= 5)]
+    per = we.groupby(["name", we["date"].map(week_start)]).size()
+    assert (per <= 1).all(), per[per > 1]

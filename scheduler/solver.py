@@ -57,6 +57,8 @@ class ScheduleResult:
     tournaments: list = field(default_factory=list)   # data.Tournament objects, for display
     # One row per team per week: team, week_of, target, scheduled, short
     practice_counts: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # Practices that had to land on a no-date so the team still got 2 that week.
+    broken: list = field(default_factory=list)
 
     @property
     def shortfalls(self) -> pd.DataFrame:
@@ -202,6 +204,7 @@ def solve(
 
     # ---------------------------------------------- decision variables --
     y = {}
+    broken = {}  # (t, d, s) -> details, for practices that land on a no-date
     for t in T:
         team = teams[t]
         for d in open_dates:
@@ -216,13 +219,35 @@ def solve(
                         continue
                     if d.weekday() >= 5 and team.weekend_only and not any(w.matches(d, s) for w in team.weekend_only):
                         continue
-                    if any(r.kind == "no" and r.matches(d, s) for r in rules_for[team.name]):
-                        continue
-                    if any(r.kind == "no" and r.matches(d, s) for h in team.heads for r in rules_for[h]):
-                        continue
+                    team_nos = [r for r in rules_for[team.name] if r.kind == "no" and r.matches(d, s)]
+                    if any(r.manual for r in team_nos):
+                        continue  # removed by hand: never put back
                     if any(h in coach_local[d, s] for h in team.heads):
                         continue
                     y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
+                    # No-dates are kept unless it's the only way to get the
+                    # team its 2 practices; then they're broken (and flagged).
+                    head_out = [h for h in team.heads
+                                if any(r.kind == "no" and r.matches(d, s) for r in rules_for[h])]
+                    if team_nos or head_out:
+                        free_asst = [a for a in team.assistants if a not in team.heads
+                                     and a not in coach_local[d, s]
+                                     and not any(r.kind == "no" and r.matches(d, s) for r in rules_for[a])]
+                        busy_asst = [a for a in team.assistants if a not in team.heads and a not in free_asst]
+                        bcost = 0
+                        if head_out:
+                            bcost += WEIGHTS["break_head_nodate"] if free_asst else WEIGHTS["break_head_and_asst"]
+                        if team_nos:
+                            bcost += WEIGHTS["break_team_nodate"]
+                        broken[t, d, s] = {
+                            "team": team.name, "date": d, "slot": s,
+                            "head_out": head_out, "team_out": bool(team_nos), "free_asst": free_asst,
+                            "busy_asst": busy_asst if head_out and not free_asst else [],
+                            "note": "; ".join(r.note for r in team_nos + [r for h in head_out for r in rules_for[h]
+                                                                          if r.kind == "no" and r.matches(d, s)]
+                                              if r.note),
+                        }
+                        obj.append(bcost * y[t, d, s])
 
                 # fixed costs of this particular practice
                 cost = 0
@@ -471,6 +496,14 @@ def solve(
                 m.Add(miss >= p[t, wd, s] - v)
                 obj.append(WEIGHTS["off_pattern"] * 2 * miss)
 
+        # Only one weekend practice a week when possible.
+        for ws, wdates in weeks.items():
+            wk = [y[t, d, s] for d in wdates if d.weekday() >= 5 for s in slots_on(d) if (t, d, s) in y]
+            if len(wk) > 1:
+                extra = m.NewBoolVar(f"wk2_{t}_{ws}")
+                m.Add(sum(wk) - 1 <= extra)
+                obj.append(WEIGHTS["second_weekend"] * extra)
+
         for d in open_dates:
             nxt = d + timedelta(days=1)
             if nxt in open_dates:  # back-to-back days, including Sat -> Sun
@@ -622,8 +655,33 @@ def solve(
          "short": max(0, targets.get((tm.name, ws), 0) - int(got.get((tm.name, ws), 0)))}
         for tm in teams for ws in sorted(weeks)
     ])
+    broken_rows = [dict(info, slot_label=SLOTS[info["slot"]], who=_broken_who(info))
+                   for k, info in sorted(broken.items(), key=lambda kv: (kv[1]["date"], kv[1]["team"]))
+                   if k in set(booked)]
+    for b in broken_rows:
+        issues = pd.concat([pd.DataFrame([{
+            "severity": "High", "team": b["team"], "week_of": week_start(b["date"]),
+            "issue": f"No-date broken: {b['date']:%a %-m/%-d} {b['slot']}",
+            "detail": f"{b['who']}; it was the only way to get 2 practices that week"
+                      + (f" ({b['note']})" if b["note"] else "")}]), issues], ignore_index=True)
     return ScheduleResult(status_name, assignments, pattern, issues, metrics, data.warnings, start, end,
-                          shown_weekends, data.tournaments, practice_counts)
+                          shown_weekends, data.tournaments, practice_counts, broken_rows)
+
+
+def _broken_who(b: dict) -> str:
+    """Plain-language description of whose no-date a practice breaks."""
+    parts = []
+    if b["head_out"]:
+        heads = " and ".join(b["head_out"])
+        if b["free_asst"]:
+            parts.append(f"head coach {heads} is out, so {' or '.join(b['free_asst'])} runs it")
+        elif b["busy_asst"]:
+            parts.append(f"head coach {heads} and assistant {' and '.join(b['busy_asst'])} are both out")
+        else:
+            parts.append(f"head coach {heads} is out and there's no assistant")
+    if b["team_out"]:
+        parts.append("the team marked this a no-date")
+    return "; ".join(parts)
 
 
 def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fixed_courts=None, fixed_home=None):
