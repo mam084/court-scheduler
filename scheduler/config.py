@@ -20,9 +20,23 @@ def team_court_weight(age: int, level: int | None) -> int:
     level_bonus = {1: 4, 2: 0}.get(level, 2)
     return 2 * max(0, age - 11) + level_bonus
 
-DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]  # index = date.weekday()
 WEEKDAYS = DAYS[:5]
 WEEKEND = DAYS[5:]
+# The club's week runs Sunday through Saturday.
+WEEK_ORDER = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+
+def week_start(d):
+    """Sunday that starts d's week."""
+    from datetime import timedelta
+    return d - timedelta(days=(d.weekday() + 1) % 7)
+
+
+def day_in_week(ws, day: str):
+    """Date of `day` ('Mon'...) in the week starting Sunday ws."""
+    from datetime import timedelta
+    return ws + timedelta(days=WEEK_ORDER.index(day))
 
 # Weekday timeslots: short key -> display label (earliest first).
 WEEKDAY_SLOTS = {
@@ -39,15 +53,33 @@ WEEKEND_SLOTS = {
     "5PM": "5–7 PM",
     "7PM": "7–9 PM",
 }
-SLOTS = {**WEEKDAY_SLOTS, **WEEKEND_SLOTS}
+# JumpStart (junior program) runs only in these early hour-long windows.
+# They're for programs, not team practices, and they overlap the 3:45 slot:
+# a court or coach in JumpStart can't also have a 3:45 practice.
+PROGRAM_SLOTS = {
+    "3:30": "3:30–4:30",
+    "4:30": "4:30–5:30",
+}
+SLOT_OVERLAPS = {"3:30": {"3:45"}, "4:30": {"3:45"}}
+
+
+def slots_overlap(a: str, b: str) -> bool:
+    return a == b or b in SLOT_OVERLAPS.get(a, ()) or a in SLOT_OVERLAPS.get(b, ())
+
+
+SLOTS = {"3:30": PROGRAM_SLOTS["3:30"], "3:45": WEEKDAY_SLOTS["3:45"], "4:30": PROGRAM_SLOTS["4:30"],
+         "5:30": WEEKDAY_SLOTS["5:30"], "7:20": WEEKDAY_SLOTS["7:20"], **WEEKEND_SLOTS}
 SLOT_KEYS = list(SLOTS)  # display order within a day
-WEEKDAY_KEYS = list(WEEKDAY_SLOTS)
+WEEKDAY_KEYS = list(WEEKDAY_SLOTS)        # team practice slots
+PROGRAM_KEYS = list(PROGRAM_SLOTS)
 WEEKEND_KEYS = list(WEEKEND_SLOTS)
 AM_BLOCKS = {"9AM", "11AM"}
 PM_BLOCKS = {"1PM", "3PM", "5PM", "7PM"}
 
 # 24h (start, end) for calendar files.
 SLOT_TIMES = {
+    "3:30": ((15, 30), (16, 30)),
+    "4:30": ((16, 30), (17, 30)),
     "3:45": ((15, 45), (17, 30)),
     "5:30": ((17, 30), (19, 20)),
     "7:20": ((19, 20), (21, 10)),

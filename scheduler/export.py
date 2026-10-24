@@ -13,7 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .config import COURTS, DAYS, SLOT_KEYS, SLOT_TIMES, SLOTS, WEEKDAYS
+from .config import COURTS, DAYS, SLOT_KEYS, SLOT_TIMES, SLOTS, WEEK_ORDER, WEEKDAYS
 from .solver import ScheduleResult, week_start
 
 _thin = Side(style="thin", color="C9CED8")
@@ -84,9 +84,9 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
     weekend_open = set(result.weekend_dates)
     for ws_date, g in a.groupby(a["date"].map(week_start)):
         labels, closed, cols = {}, {}, []
-        for i, wd in enumerate(DAYS):
+        for i, wd in enumerate(WEEK_ORDER):
             d = ws_date + timedelta(days=i)
-            if i >= 5 and d not in weekend_open:
+            if wd in ("Sat", "Sun") and d not in weekend_open:
                 continue
             cols.append(wd)
             labels[wd] = f"{wd}\n{d:%b %-d}"

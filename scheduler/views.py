@@ -13,7 +13,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from .config import COURTS, DAYS, SLOT_KEYS, WEEKDAYS
+from .config import COURTS, DAYS, SLOT_KEYS, WEEK_ORDER, WEEKDAYS, week_start
 
 # Age group -> (background, text).
 AGE_COLORS = {
@@ -27,8 +27,9 @@ AGE_COLORS = {
 }
 DEFAULT_COLOR = ("#E6E9FF", "#2E3A9E")
 LOCAL_COLORS = ("#ECEFF3", "#3B4250")
+SIDE_COLORS = {"Girls": ("#DCE7FF", "#1E3A8A"), "Boys": ("#DDF3E2", "#1E5B2A")}
 # Club -> stripe color (matches the club sheet: red/pink girls, green boys).
-CLUB_STRIPES = ["#D7263D", "#2E7D32", "#1F4E99", "#F29E4C", "#6A4C93"]
+CLUB_STRIPES = ["#2563EB", "#2E7D32", "#D7263D", "#F29E4C", "#6A4C93"]  # girls blue, boys green
 
 CSS = """
 <style>
@@ -67,7 +68,7 @@ CSS = """
 
 
 def club_stripes(clubs) -> dict[str, str]:
-    """Girls side red, boys side green (like the club's sheet); others get the next colors."""
+    """Girls side (SDVBC) blue, boys side (Seaside) green; others get the next colors."""
     names = sorted({c for c in clubs if isinstance(c, str) and c})
     out, rest = {}, iter(CLUB_STRIPES[2:])
     for c in names:
@@ -83,7 +84,7 @@ def club_stripes(clubs) -> dict[str, str]:
 
 def _colors(r) -> tuple[str, str]:
     if r["kind"] == "Local":
-        return LOCAL_COLORS
+        return SIDE_COLORS.get(r.get("side") or "", LOCAL_COLORS)
     try:
         return AGE_COLORS.get(int(r["age"]), DEFAULT_COLOR)
     except (TypeError, ValueError):
@@ -100,7 +101,10 @@ def _hit(r, highlight) -> bool:
 def _chip(r, stripes, highlight=None, compact=False) -> str:
     is_local = r["kind"] == "Local"
     bg, fg = _colors(r)
-    stripe = stripes.get(r.get("club"), "#9AA3B2") if not is_local else "#9AA3B2"
+    if is_local:
+        stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(r.get("side") or "", "#9AA3B2")
+    else:
+        stripe = stripes.get(r.get("club"), "#9AA3B2")
     cls = ["cs-chip"]
     if is_local:
         cls.append("cs-local")
@@ -214,9 +218,13 @@ def legend_html(ages, stripes: dict) -> str:
         for club, col in stripes.items():
             items.append(f'<div class="cs-chip" style="background:#fff;color:#1F2A44;border-left-color:{col}">'
                          f'{html.escape(club)}</div>')
+    items.append('<span class="cs-lbl">Programs</span>')
+    for side, (bg, fg) in SIDE_COLORS.items():
+        col = CLUB_STRIPES[0] if side == "Girls" else CLUB_STRIPES[1]
+        items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};border-left-color:{col}">'
+                     f'{side}</div>')
     bg, fg = LOCAL_COLORS
-    items.append('<span class="cs-lbl"></span>')
-    items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};border-left-color:#9AA3B2">Locals</div>')
+    items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};border-left-color:#9AA3B2">Other</div>')
     items.append('<div class="cs-chip cs-moved" style="background:#fff;color:#C0392B;border-left-color:#fff">'
                  'Moved / makeup</div>')
     return CSS + '<div class="cs-legend">' + "".join(items) + "</div>"
@@ -232,7 +240,7 @@ def month_calendar_html(
     weekend_dates: list[date] | None = None,
     tournaments: list | None = None,
 ) -> str:
-    """Month calendar (Mon–Fri, plus Sat/Sun when any weekend is open);
+    """Calendar (Mon–Fri, or Sun–Sat when any weekend is open);
     each day lists its practices (time, team, court)."""
     closures = closures or {}
     weekend_dates = set(weekend_dates or [])
@@ -244,18 +252,18 @@ def month_calendar_html(
         df = df[df.apply(lambda r: _hit(r, highlight), axis=1)]
     by_date = {d: g for d, g in df.groupby("date")} if len(df) else {}
 
-    show_days = list(WEEKDAYS) + ([d for d in ("Sat", "Sun")] if weekend_dates else [])
+    show_days = list(WEEK_ORDER) if weekend_dates else list(WEEKDAYS)
     out = [CSS, '<div class="cs-wrap"><table class="cs-grid cs-cal"><thead><tr>']
     out += [f'<th{" class=cs-wkend" if wd not in WEEKDAYS else ""}>{wd}</th>' for wd in show_days]
     out.append("</tr></thead><tbody>")
     first = start
     while first.weekday() >= 5 and first not in weekend_dates:
         first += timedelta(days=1)
-    ws = first - timedelta(days=first.weekday())
+    ws = week_start(first)
     while ws <= end:
         out.append("<tr>")
-        for i, wd in enumerate(show_days):
-            d = ws + timedelta(days=i)
+        for wd in show_days:
+            d = ws + timedelta(days=WEEK_ORDER.index(wd))
             if d < start or d > end:
                 out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.4">{d:%-d}</div></td>')
                 continue
@@ -295,13 +303,14 @@ def range_label(start: date, end: date) -> str:
 
 
 def week_dates(ws: date, start: date, end: date, weekend_dates=()) -> dict[str, date]:
-    """Ordered {day: date} for a week: Mon–Fri always (date.min outside the
-    period), Sat/Sun only when that weekend day is open."""
+    """Ordered {day: date} for a Sun–Sat week: Mon–Fri always (date.min
+    outside the period), Sun/Sat only when that weekend day is open."""
     out = {}
-    for i, wd in enumerate(DAYS):
+    wk = set(weekend_dates)
+    for i, wd in enumerate(WEEK_ORDER):
         d = ws + timedelta(days=i)
-        if i >= 5:
-            if d in set(weekend_dates):
+        if wd in ("Sat", "Sun"):
+            if d in wk:
                 out[wd] = d
             continue
         out[wd] = d if start <= d <= end else date.min

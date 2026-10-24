@@ -20,8 +20,10 @@ for _mod in [m for m in list(sys.modules) if m == "scheduler" or m.startswith("s
     del sys.modules[_mod]
 
 from scheduler import ScheduleInput, clean, month_range, simulate, solve
-from scheduler.config import COURTS, DAYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
-from scheduler.data import ATTRS, COLUMNS, empty, parse_names
+from scheduler.config import COURTS, DAYS, PROGRAM_KEYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
+from scheduler.data import (
+    ATTRS, COLUMNS, empty, parse_courts, parse_date_ranges, parse_days, parse_names, parse_times, program_side,
+)
 from scheduler.export import to_excel, to_ics
 from scheduler.solver import week_start
 from scheduler.storage import Store, database_url, make_payload, new_id, read_payload
@@ -92,7 +94,7 @@ def open_project(pid: str) -> bool:
         inp_sig=("project", pid, str(rec["updated_at"])),
         range_start=s_, range_end=e_,
         time_limit=int(settings.get("time_limit", 30)), makeup=bool(settings.get("makeup", True)),
-        last_saved=payload_hash(rec["payload"]),
+        last_saved=payload_hash(make_payload(inp_, s_, e_, settings, result_)),
     )
     st.query_params["project"] = pid
     return True
@@ -116,11 +118,19 @@ with st.sidebar:
     st.title("🏐 Court Scheduler")
     saved = store.list()
     names = {p["id"]: p["name"] for p in saved}
+    _dupes = {n for n in names.values() if list(names.values()).count(n) > 1}
+    for _p in saved:  # the menu needs unique labels; tell same-named schedules apart
+        if _p["name"] in _dupes:
+            names[_p["id"]] = f"{_p['name']} · #{_p['id'][:4]}"
     current = st.session_state.get("project_id")
-    options = ["__new__"] + list(names)
+    # Stable order (by name), and a widget key tied to the options, so saving
+    # (which changes "last updated") can never shift the menu onto another schedule.
+    ordered = sorted(names, key=lambda i: (names[i].lower(), i))
+    options = ["__new__"] + ordered
+    _okey = hashlib.sha1("|".join(options).encode()).hexdigest()[:8]
     choice = st.selectbox("Schedule", options, index=options.index(current) if current in options else 0,
                           format_func=lambda o: "➕ New schedule" if o == "__new__" else names[o],
-                          key=f"picker_{current}")
+                          key=f"picker_{current}_{_okey}")
     if choice != (current or "__new__"):
         if choice == "__new__":
             close_project()
@@ -179,7 +189,14 @@ with st.sidebar:
                    ("." if store.permanent else " on the app server and can be cleared when the app restarts."))
     else:
         # ---------------------------------------------- open schedule --
-        st.caption("✅ Saved automatically. Bookmark or share this page's link to come back to it.")
+        st.caption("✅ Saved automatically, and opens on any device from its link:")
+        try:
+            _host = st.context.headers.get("host") or ""
+        except Exception:  # noqa: BLE001
+            _host = ""
+        if _host:
+            _scheme = "http" if _host.startswith(("localhost", "127.")) else "https"
+            st.code(f"{_scheme}://{_host}/?project={current}", language=None)
         st.date_input("From", key="range_start", format="MM/DD/YYYY")
         st.date_input("To", key="range_end", format="MM/DD/YYYY")
         with st.expander("Replace data with a spreadsheet"):
@@ -232,8 +249,11 @@ if st.session_state.get("project_id") is None:
     st.stop()
 
 inp: ScheduleInput = st.session_state.inp
-if not isinstance(getattr(inp, "tournaments", None), pd.DataFrame):
-    inp.tournaments = empty("Tournaments")
+for _sheet, _attr in (("Tournaments", "tournaments"), ("Coaches", "coaches")):
+    if not isinstance(getattr(inp, _attr, None), pd.DataFrame):  # schedules saved before these sheets existed
+        setattr(inp, _attr, empty(_sheet))
+if "side" not in inp.locals.columns:
+    inp.locals["side"] = ""
 start, end = st.session_state.range_start, st.session_state.range_end
 time_limit, makeup = st.session_state.time_limit, st.session_state.makeup
 if end < start:
@@ -349,7 +369,8 @@ with TAB_COURT:
         if pick == "Weekly template":
             tmpl = result.pattern.rename(columns={"team": "name"}).assign(kind="Practice", on_pattern=True)
             loc = template_locals(a)
-            book = pd.concat([tmpl, loc[[c for c in tmpl.columns if c in loc.columns]]], ignore_index=True)
+            book = pd.concat([tmpl, loc[[c for c in list(tmpl.columns) + ["side"] if c in loc.columns]]],
+                             ignore_index=True)
             st.markdown(court_grid_html(book, None, closures, hl or None, stripes), unsafe_allow_html=True)
             st.caption("Courts are ranked 1 → 7 → 6 → 5 → 3 → 4 → 2; older and 1s teams get the better courts.")
         else:
@@ -378,99 +399,181 @@ with TAB_CAL:
 
 
 # ------------------------------------------------------------ programs --
-SLOT_CHOICES = [f"{k}" for k in WEEKDAY_KEYS + WEEKEND_KEYS]
+SLOT_CHOICES = PROGRAM_KEYS + WEEKDAY_KEYS + WEEKEND_KEYS
 
 
 def slot_label(k: str) -> str:
-    return f"{'Weekday' if k in WEEKDAY_KEYS else 'Weekend'} · {SLOTS[k]}"
+    kind = "JumpStart" if k in PROGRAM_KEYS else "Weekday" if k in WEEKDAY_KEYS else "Weekend"
+    return f"{kind} · {SLOTS[k]}"
+
+
+SIDES = ["Girls", "Boys", "Other"]
+
+
+def program_defaults(row: dict | None) -> dict:
+    """Form values for a new program (row=None) or an existing Locals row."""
+    if row is None:
+        return {"name": "", "side": "Girls", "on_site": True, "days": [], "every_week": False,
+                "p_start": start, "p_end": end, "times": [], "courts": [], "coaches_sel": [], "coaches_new": ""}
+    yr = start.year
+    try:
+        ranges = parse_date_ranges(row.get("dates"), yr)
+    except ValueError:
+        ranges = []
+    try:
+        times = sorted(parse_times(row.get("time")) or [], key=SLOT_KEYS.index)
+    except ValueError:
+        times = []
+    try:
+        courts = parse_courts(row.get("courts"))
+    except ValueError:
+        courts = []
+    names = parse_names(row.get("coaches"))
+    known = set(cleaned.coaches) if cleaned else set()
+    side = program_side(row.get("side"), str(row.get("program", ""))) or "Other"
+    on = str(row.get("on_site", "")).strip().lower()
+    return {
+        "name": str(row.get("program", "")), "side": side,
+        "on_site": on in ("", "yes", "y", "true", "1", "nan", "none"),
+        "days": [d for d in parse_days(row.get("days")) if d in DAYS],
+        "every_week": not ranges,
+        "p_start": ranges[0][0] if ranges else start, "p_end": ranges[0][1] if ranges else end,
+        "times": [t for t in times if t in SLOT_CHOICES], "courts": courts,
+        "coaches_sel": [n for n in names if n in known],
+        "coaches_new": ", ".join(n for n in names if n not in known),
+    }
+
+
+def program_form(key: str, dv: dict, submit_labels: list[str]):
+    """Renders the program form; returns (clicked label or None, values)."""
+    known_coaches = cleaned.coaches if cleaned else []
+    with st.form(key, clear_on_submit=key == "add_program"):
+        c1, c2, c3 = st.columns([2, 1, 1])
+        name = c1.text_input("Program name", value=dv["name"], placeholder="e.g. G 14 League or JumpStart")
+        side = c2.radio("Side", SIDES, index=SIDES.index(dv["side"]), horizontal=True,
+                        help="Girls programs show in blue, boys in green.")
+        on_site = c3.checkbox("Uses our courts", value=dv["on_site"],
+                              help="Uncheck for programs somewhere else (e.g. a high school team). "
+                                   "Those only block the coaches.")
+        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+        days = c1.multiselect("Days", DAYS, default=dv["days"], placeholder="e.g. Tue, Thu")
+        every = c2.checkbox("Every week", value=dv["every_week"], help="No start or end date.")
+        p_start = c3.date_input("Start date", value=dv["p_start"], format="MM/DD/YYYY")
+        p_end = c4.date_input("End date", value=dv["p_end"], format="MM/DD/YYYY")
+        c1, c2 = st.columns(2)
+        times = c1.multiselect("Time", SLOT_CHOICES, default=dv["times"], format_func=slot_label,
+                               help="Pick every timeslot it uses (e.g. 3:45 and 5:30 for a 3:45–7:20 program). "
+                                    "JumpStart times (3:30–4:30, 4:30–5:30) block 3:45 practices on those courts.")
+        courts = c2.multiselect("Courts used", COURTS, default=dv["courts"], format_func=lambda c: f"Court {c}",
+                                help="Remove a court here if sign-ups are low. Leave empty if not known yet "
+                                     "(it then blocks only the coaches).")
+        c1, c2 = st.columns(2)
+        coaches_sel = c1.multiselect("Coaches working it", known_coaches,
+                                     default=[c for c in dv["coaches_sel"] if c in known_coaches])
+        coaches_new = c2.text_input("Other coaches", value=dv["coaches_new"], placeholder="Names separated by commas")
+        cols = st.columns(len(submit_labels) + 3)
+        clicked = None
+        for i, lab in enumerate(submit_labels):
+            if cols[i].form_submit_button(lab, type="primary" if i == 0 else "secondary", use_container_width=True):
+                clicked = lab
+    return clicked, dict(name=name, side=side, on_site=on_site, days=days, every=every, p_start=p_start,
+                         p_end=p_end, times=times, courts=courts, coaches_sel=coaches_sel, coaches_new=coaches_new)
+
+
+def program_row(v: dict) -> tuple[list[str], dict]:
+    problems = []
+    if not v["name"].strip():
+        problems.append("Give the program a name.")
+    if not v["days"]:
+        problems.append("Pick at least one day.")
+    if not v["times"]:
+        problems.append("Pick at least one timeslot.")
+    if not v["every"] and v["p_end"] < v["p_start"]:
+        problems.append("The end date is before the start date.")
+    for d in v["days"]:
+        ok = [t for t in v["times"] if (t in WEEKEND_KEYS) == (d in ("Sat", "Sun"))]
+        if v["times"] and not ok:
+            problems.append(f"{d} needs a {'weekend' if d in ('Sat', 'Sun') else 'weekday'} timeslot.")
+    row = {
+        "program": v["name"].strip(), "side": "" if v["side"] == "Other" else v["side"],
+        "days": ", ".join(d for d in DAYS if d in v["days"]),
+        "time": ", ".join(sorted(v["times"], key=SLOT_KEYS.index)),
+        "courts": ", ".join(str(c) for c in sorted(v["courts"])) or "TBD",
+        "coaches": "; ".join(dict.fromkeys(v["coaches_sel"] + parse_names(v["coaches_new"]))),
+        "on_site": "Yes" if v["on_site"] else "No",
+        "dates": "" if v["every"] else f"{v['p_start']:%m/%d/%Y}-{v['p_end']:%m/%d/%Y}",
+    }
+    return problems, row
+
+
+def try_locals(new_locals: pd.DataFrame, what: str) -> bool:
+    trial = ScheduleInput(inp.teams, inp.availability, inp.wishlist, new_locals, inp.weekends, inp.closures,
+                          tournaments=inp.tournaments, coaches=inp.coaches)
+    try:
+        clean(trial, start, end)
+    except ValueError as e:
+        st.error(f"Couldn't {what}: {e}")
+        return False
+    inp.locals = new_locals.reset_index(drop=True)
+    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+    st.session_state.resolve = True
+    return True
 
 
 with TAB_PROG:
-    st.markdown("Add a locals program and it's blocked off on the courts and calendar right away; "
-                "the practice schedule is rebuilt around it.")
-    known_coaches = cleaned.coaches if cleaned else []
-    with st.form("add_program", clear_on_submit=True):
-        c1, c2 = st.columns([2, 1])
-        name = c1.text_input("Program name", placeholder="e.g. Girls 14 League")
-        on_site = c2.checkbox("Uses our courts", value=True,
-                              help="Uncheck for programs somewhere else (e.g. a high school team). "
-                                   "Those only block the coaches.")
-        c1, c2, c3 = st.columns(3)
-        days = c1.multiselect("Days", DAYS, placeholder="e.g. Tue, Thu")
-        p_start = c2.date_input("Start date", value=start, format="MM/DD/YYYY")
-        p_end = c3.date_input("End date", value=end, format="MM/DD/YYYY")
-        c1, c2 = st.columns(2)
-        times = c1.multiselect("Time", SLOT_CHOICES, format_func=slot_label,
-                               help="Pick every timeslot the program uses (e.g. 3:45 and 5:30 for a 3:45–7:20 program).")
-        courts = c2.multiselect("Courts used", COURTS, format_func=lambda c: f"Court {c}",
-                                help="Leave empty if not known yet (it then blocks only the coaches).")
-        c1, c2 = st.columns(2)
-        coaches_sel = c1.multiselect("Coaches working it", known_coaches)
-        coaches_new = c2.text_input("Other coaches", placeholder="Names separated by commas")
-        submitted = st.form_submit_button("➕ Add program", type="primary")
+    st.markdown("Programs (locals, JumpStart, leagues…) are blocked off on their courts and the calendar right "
+                "away, and the practice schedule is rebuilt around them.")
+    ver = st.session_state.get("locals_ver", 0)
 
-    if submitted:
-        problems = []
-        if not name.strip():
-            problems.append("Give the program a name.")
-        if not days:
-            problems.append("Pick at least one day.")
-        if not times:
-            problems.append("Pick at least one timeslot.")
-        if p_end < p_start:
-            problems.append("The end date is before the start date.")
-        for d in days:
-            ok = [t for t in times if (t in WEEKEND_KEYS) == (d in ("Sat", "Sun"))]
-            if times and not ok:
-                problems.append(f"{d} needs a {'weekend' if d in ('Sat', 'Sun') else 'weekday'} timeslot.")
+    # ---- edit an existing program
+    if not inp.locals.empty:
+        st.subheader("Edit a program")
+        labels = [f"{r['program']} · {r['days']} · {r['time']}" + (f" · {r['dates']}" if str(r["dates"]).strip() else "")
+                  for _, r in inp.locals.fillna("").iterrows()]
+        pick = st.selectbox("Program", range(len(labels)), format_func=lambda i: labels[i], index=None,
+                            placeholder="Choose a program to change (e.g. drop a court)", key=f"edit_pick_{ver}")
+        if pick is not None:
+            row = inp.locals.fillna("").iloc[pick].to_dict()
+            clicked, v = program_form(f"edit_program_{pick}_{ver}", program_defaults(row),
+                                      ["💾 Save changes", "🗑️ Delete program"])
+            if clicked == "🗑️ Delete program":
+                if try_locals(inp.locals.drop(inp.locals.index[pick]), "delete it"):
+                    st.session_state.flash = f"Deleted {row['program']}. Schedule rebuilt."
+                    st.rerun()
+            elif clicked:
+                problems, new_row = program_row(v)
+                if problems:
+                    st.error(" ".join(problems))
+                else:
+                    nl = inp.locals.copy()
+                    for k, val in new_row.items():
+                        nl.at[nl.index[pick], k] = val
+                    if try_locals(nl, "save the changes"):
+                        st.session_state.flash = f"Updated {new_row['program']}. Schedule rebuilt."
+                        st.rerun()
+
+    # ---- add a program
+    st.subheader("Add a program")
+    clicked, v = program_form("add_program", program_defaults(None), ["➕ Add program"])
+    if clicked:
+        problems, row = program_row(v)
         if problems:
             st.error(" ".join(problems))
-        else:
-            row = {
-                "program": name.strip(), "days": ", ".join(days),
-                "time": ", ".join(sorted(times, key=SLOT_KEYS.index)),
-                "courts": ", ".join(str(c) for c in sorted(courts)) or "TBD",
-                "coaches": "; ".join(dict.fromkeys(coaches_sel + parse_names(coaches_new))),
-                "on_site": "Yes" if on_site else "No",
-                "dates": f"{p_start:%m/%d/%Y}-{p_end:%m/%d/%Y}",
-            }
-            new_locals = pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True)
-            trial = ScheduleInput(inp.teams, inp.availability, inp.wishlist, new_locals, inp.weekends, inp.closures,
-                                  tournaments=inp.tournaments)
-            try:
-                clean(trial, start, end)
-            except ValueError as e:
-                st.error(f"Couldn't add {row['program']}: {e}")
-            else:
-                inp.locals = new_locals
-                st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-                st.session_state.resolve = True
-                st.session_state.flash = (f"Added {row['program']} ({row['days']}, "
-                                          f"{p_start:%b %-d}–{p_end:%b %-d}). Schedule rebuilt around it.")
-                st.rerun()
+        elif try_locals(pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True), f"add {row['program']}"):
+            when = "every week" if v["every"] else f"{v['p_start']:%b %-d}–{v['p_end']:%b %-d}"
+            st.session_state.flash = f"Added {row['program']} ({row['days']}, {when}). Schedule rebuilt around it."
+            st.rerun()
 
+    # ---- list
     st.subheader("Current programs")
     if inp.locals.empty:
         st.caption("No programs yet.")
     else:
         view = inp.locals.copy().fillna("")
-        view.index = [f"{r['program']} · {r['days']} · {r['time']}" + (f" · {r['dates']}" if r["dates"] else "")
-                      for _, r in view.iterrows()]
-        st.dataframe(view.rename(columns={"program": "Program", "days": "Days", "time": "Time", "courts": "Courts",
-                                          "coaches": "Coaches", "on_site": "On site", "dates": "Dates"}),
+        st.dataframe(view.rename(columns={"program": "Program", "side": "Side", "days": "Days", "time": "Time",
+                                          "courts": "Courts", "coaches": "Coaches", "on_site": "On site",
+                                          "dates": "Dates"}),
                      hide_index=True, use_container_width=True)
-        c1, c2 = st.columns([3, 1])
-        drop = c1.multiselect("Remove programs", list(view.index), placeholder="Choose programs to remove")
-        if c2.button("🗑️ Remove", disabled=not drop, use_container_width=True):
-            keep = [i for i, lab in enumerate(view.index) if lab not in drop]
-            inp.locals = inp.locals.iloc[keep].reset_index(drop=True)
-            st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-            st.session_state.resolve = True
-            st.session_state.flash = f"Removed {len(drop)} program(s). Schedule rebuilt."
-            st.rerun()
-    st.caption("Programs you add live in this session. Download the inputs spreadsheet to keep them "
-               "(and upload it next time).")
-    st.download_button("⬇️ Download inputs (Excel)", inp.to_excel_bytes(), "club_inputs.xlsx", key="dl_inputs_prog")
 
 # --------------------------------------------------------- tournaments --
 with TAB_TOURN:
@@ -552,11 +655,31 @@ with TAB_TOURN:
             st.session_state.resolve = True
             st.session_state.flash = f"Removed {len(drop_t)} tournament(s). Schedule rebuilt."
             st.rerun()
-    st.caption("Tournaments you add live in this session. Download the inputs spreadsheet to keep them.")
-    st.download_button("⬇️ Download inputs (Excel)", inp.to_excel_bytes(), "club_inputs.xlsx", key="dl_inputs_tourn")
 
 # ------------------------------------------------------------- coaches --
 with TAB_COACH:
+    with st.expander("➕ Add a coach", expanded=False):
+        st.caption("For coaches who aren't on a team yet (e.g. they only work programs). "
+                   "They'll show up in the program and tournament forms.")
+        with st.form("add_coach", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            nc_name = c1.text_input("Name")
+            nc_email = c2.text_input("Email (optional)")
+            nc_phone = c3.text_input("Phone (optional)")
+            nc_note = st.text_input("Note (optional)", placeholder="e.g. JumpStart coach")
+            if st.form_submit_button("Add coach", type="primary"):
+                existing = set(cleaned.coaches) if cleaned else set()
+                if not nc_name.strip():
+                    st.error("Enter a name.")
+                elif nc_name.strip() in existing:
+                    st.warning(f"{nc_name.strip()} is already a coach.")
+                else:
+                    inp.coaches = pd.concat([inp.coaches, pd.DataFrame([{
+                        "coach": nc_name.strip(), "email": nc_email.strip(), "phone": nc_phone.strip(),
+                        "note": nc_note.strip()}])], ignore_index=True)
+                    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+                    st.session_state.flash = f"Added coach {nc_name.strip()}."
+                    st.rerun()
     if cleaned is None:
         st.caption("Fix the input errors first.")
     else:
@@ -637,11 +760,13 @@ with TAB_INPUTS:
                         "days like `Mon` / `Weekdays`, dates like `11/10-11/16`, times like `5:30` or `3:45` "
                         "(blank = any).",
         "Wishlist": "Ranked day/time wishes. choice 1 or 2. Blank days = any day.",
-        "Locals": "Recurring programs. on_site = No for programs elsewhere (blocks the coach only). "
-                  "Courts like `1-4`; leave blank/TBD until known. Weekend times like `5PM` go on their own row.",
+        "Locals": "Programs. side = Girls / Boys (colors). on_site = No for programs elsewhere (blocks the coach "
+                  "only). Times like `5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend `9AM-1PM`. "
+                  "Courts like `1-4`; blank/TBD until known. Easier: use the Programs tab.",
         "Weekends": "Open weekend days. open like `9AM-9PM`. Days sharing a group with required = Yes mean "
                     "'at least one of these must be used'.",
         "Closures": "Club closed all day.",
+        "Coaches": "Coach roster: anyone not on a team yet (e.g. coaches who only work programs), plus contact info.",
         "Tournaments": "type = Local (hosted here: blocks its courts all day; blank courts = all) or Travel "
                        "(away: the teams matching club + ages, or the listed teams, can't practice those days "
                        "and avoid the days right before and after). Ages like `15-16` or `14U`.",

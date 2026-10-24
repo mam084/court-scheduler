@@ -25,7 +25,8 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - Weekends: only open dates and blocks, only a team's allowed weekend options, and never one team alone in a block
 - Local tournaments take their courts (all by default) for the whole day, plus the coaches of their locals program
 - Teams at a travel tournament don't practice on tournament days
-- At most one practice per team per day, and two per week
+- At most one practice per team per day, and two per week (weeks run Sunday–Saturday)
+- JumpStart programs (3:30–4:30, 4:30–5:30) block 3:45 practices on their courts and for their coaches
 - The weekly template obeys the same rules, so it can be read as a real week
 
 **Preferences (traded off by weights in [`scheduler/config.py`](scheduler/config.py))**
@@ -52,7 +53,8 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 - **Court view:** courts as rows and days as columns, with each practice, its time and its coaches in the box. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
 - **Calendar:** a month view, filterable by club, team or coach.
 - **Tournaments:** add a local tournament (dates, courts, locals program) or a travel tournament (dates, club, age groups, then trim the list of teams going). It shows on the court view, calendar and Excel export, and the schedule is rebuilt around it.
-- **Programs:** add a locals program (name, days, start and end dates, timeslots, courts, coaches, on/off-site) and it's blocked off on the courts and calendar right away, with the practice schedule rebuilt around it. Remove programs the same way.
+- **Programs:** add or edit a program (name, Girls/Boys side, days, every week or start/end dates, timeslots including JumpStart 3:30–4:30 and 4:30–5:30, courts, coaches, on/off-site). Editing lets you drop a single court when sign-ups are low. It's blocked off on the courts and calendar right away, with the practice schedule rebuilt around it. Girls programs show in blue, boys programs in green.
+- **Coaches:** add coaches who aren't on a team yet (e.g. ones who only work programs) to the roster.
 - **Coaches:** each coach's head and assistant teams, locals, no-dates and full schedule, plus an `.ics` download for Google Calendar.
 - **Review:** everything that differs from the ideal schedule, with the reason.
 - **Inputs:** edit any table in place and re-run.
@@ -82,7 +84,8 @@ One `.xlsx` with these sheets. Download a filled-in example from the app's sideb
 | Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`), `late_ok` (`Yes` lets a 14s-and-under team practice at 7:20 when needed), `level` (`1` or `2`; blank = from the name, "Black" 1s and "Green" 2s) |
 | Availability | one row per rule: `who` (team or coach), `type` (`No` or `Not preferred`), `days` (`Mon`, `Weekdays`), `dates` (`11/10-11/16`), `times` (`5:30`, `3:45`), `note` |
 | Wishlist | `team`, `choice` (1 or 2), `days` (`Tue, Thu`; blank = any), `times` (`5:30, 7:20`) |
-| Locals | `program`, `days` (`Tue, Thu`), `time` (`5:30`, `3:45-7:20`, weekend `9AM-1PM`), `courts` (`1-4`; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional, e.g. `11/02/2026-12/18/2026`) |
+| Locals | `program`, `side` (`Girls` / `Boys`; blank = guessed from a name like "G HS L"), `days` (`Tue, Thu`), `time` (`5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend `9AM-1PM`), `courts` (`1-4`; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional, e.g. `11/02/2026-12/18/2026`) |
+| Coaches | `coach`, `email`, `phone`, `note`: roster for coaches who aren't on a team yet |
 | Weekends | `date`, `open` (`9AM-9PM`), `courts`, `group` + `required` (days in a required group: at least one gets used) |
 | Closures | `date`, `reason` |
 | Tournaments | `name`, `type` (`Local` or `Travel`), `start_date`, `end_date`, `club`, `ages` (`15-16`, `14U`), `teams` (optional: overrides club + ages), `program` (local: its coaches are busy), `courts` (local; blank = all) |

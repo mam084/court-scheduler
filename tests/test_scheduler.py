@@ -399,8 +399,52 @@ def test_practice_counts_flag_short_weeks():
     avail = [{"who": "15-A", "type": "No", "dates": "11/9-11/13"}]  # 15-A can't make that whole week
     r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
     sf = r.shortfalls
-    assert list(sf["team"]) == ["15-A"] and sf["week_of"].iloc[0] == date(2026, 11, 9) and sf["short"].iloc[0] == 2
+    assert list(sf["team"]) == ["15-A"] and sf["week_of"].iloc[0] == date(2026, 11, 8) and sf["short"].iloc[0] == 2
     pc = r.practice_counts
     b = pc[pc["team"] == "15-B"]
     assert (b[b["target"] > 0]["short"] == 0).all()
     assert int(pc["short"].sum()) == r.metrics["missed_practices"]
+
+
+def test_weeks_run_sunday_to_saturday():
+    assert week_start(date(2026, 11, 8)) == date(2026, 11, 8)      # Sunday starts its own week
+    assert week_start(date(2026, 11, 14)) == date(2026, 11, 8)     # Saturday ends it
+    assert week_start(date(2026, 11, 16)) == date(2026, 11, 15)
+    # A Sunday practice counts toward the week that follows it.
+    teams = [{"team": "15-A", "age": 15}, {"team": "15-B", "age": 15}]
+    avail = [{"who": t, "type": "No", "dates": "11/9-11/11"} for t in ("15-A", "15-B")]
+    inp = _inp(teams, avail, weekends=[{"date": "11/8/2026"}])
+    r = solve(inp, *NOV, time_limit_s=10)
+    _check_hard_rules(inp, r)
+    pc = r.practice_counts
+    assert (pc[pc["week_of"] == date(2026, 11, 8)]["scheduled"] == 2).all()
+
+
+def test_jumpstart_blocks_overlapping_3_45_and_side_colors():
+    teams = [{"team": f"13-J{i}", "age": 13} for i in range(3)]
+    avail = [{"who": t["team"], "type": "No", "times": "5:30"} for t in teams]  # force 3:45
+    prog = [{"program": "JumpStart", "side": "", "days": "Mon, Wed", "time": "3:30-5:30", "courts": "1-7"},
+            {"program": "G Skills", "days": "Fri", "time": "7:20", "courts": "6"}]
+    inp = _inp(teams, avail, locals_=prog)
+    data = clean(inp, *NOV)
+    assert {lp.slot for lp in data.locals if lp.name == "JumpStart"} == {"3:30", "4:30"}
+    assert {lp.side for lp in data.locals if lp.name == "G Skills"} == {"Girls"}   # guessed from "G ..."
+    r = solve(inp, *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert pr[pr["day"].isin(["Mon", "Wed"])].empty   # 3:45 blocked by JumpStart on all courts
+    js = r.assignments[r.assignments["name"] == "JumpStart"]
+    assert set(js["slot"]) == {"3:30", "4:30"}
+    # JumpStart and a 3:45 program on the same court conflict.
+    clash = prog + [{"program": "Clinic", "days": "Mon", "time": "3:45", "courts": "2"}]
+    with pytest.raises(ValueError, match="JumpStart"):
+        clean(_inp(teams, avail, locals_=clash), *NOV)
+
+
+def test_coach_roster_adds_coaches_without_teams():
+    teams = [{"team": "15-A", "age": 15}]
+    inp = _inp(teams)
+    inp.coaches = pd.DataFrame([{"coach": "Dave", "email": "", "phone": "", "note": ""},
+                                {"coach": "Cliff", "email": "c@x.com", "phone": "", "note": "JumpStart"}])
+    data = clean(inp, *NOV)
+    assert {"Dave", "Cliff", "A"} <= set(data.coaches)
+    assert data.roster["Cliff"]["email"] == "c@x.com"

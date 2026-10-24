@@ -68,14 +68,21 @@ class Store:
     def kind(self) -> str:
         return "database" if self.permanent else "local file"
 
+    def _ensure(self):
+        """Recreate the table if it vanished (e.g. the SQLite file was wiped
+        while the app was running)."""
+        _meta.create_all(self.engine)
+
     # ------------------------------------------------------------- CRUD --
     def list(self) -> list[dict]:
+        self._ensure()
         with self.engine.connect() as c:
             rows = c.execute(select(projects.c.id, projects.c.name, projects.c.updated_at)
                              .order_by(projects.c.updated_at.desc())).all()
         return [{"id": r.id, "name": r.name, "updated_at": r.updated_at} for r in rows]
 
     def get(self, pid: str) -> dict | None:
+        self._ensure()
         with self.engine.connect() as c:
             r = c.execute(select(projects).where(projects.c.id == pid)).first()
         if r is None:
@@ -83,6 +90,7 @@ class Store:
         return {"id": r.id, "name": r.name, "updated_at": r.updated_at, "payload": json.loads(r.payload)}
 
     def save(self, pid: str, name: str, payload: dict) -> None:
+        self._ensure()
         body = json.dumps(payload, default=str)
         now = datetime.now(timezone.utc)
         with self.engine.begin() as c:

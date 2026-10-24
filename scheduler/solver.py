@@ -35,6 +35,7 @@ from datetime import date, timedelta
 import pandas as pd
 from ortools.sat.python import cp_model
 
+from .config import week_start as _week_start, day_in_week, slots_overlap
 from .config import (
     COURT_COST, COURT_RANK, COURTS, DAYS, PRACTICES_PER_WEEK, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS,
     WEIGHTS, is_late_exception, slot_cost, team_court_weight,
@@ -70,7 +71,8 @@ class ScheduleResult:
 
 
 def week_start(d: date) -> date:
-    return d - timedelta(days=d.weekday())
+    """Weeks run Sunday-Saturday."""
+    return _week_start(d)
 
 
 def solve(
@@ -96,7 +98,8 @@ def solve(
         return WEEKDAY_KEYS if d.weekday() < 5 else data.weekends[d].blocks
 
     def locals_at(d, s):
-        return [lp for lp in data.locals if lp.active(d, s)]
+        """Programs taking courts/coaches in slot s (incl. overlapping JumpStart times)."""
+        return [lp for lp in data.locals if lp.blocks(d, s)]
 
     local_tourn = [tn for tn in data.tournaments if tn.kind == "local"]
     travel_tourn = [tn for tn in data.tournaments if tn.kind == "travel"]
@@ -130,7 +133,7 @@ def solve(
         schedule's start or end is prorated: 3+ weekdays inside the range
         still count as a full week, 2 weekdays get 1 practice, and a single
         day just follows the usual pattern."""
-        span = [ws + timedelta(days=i) for i in range(5)]
+        span = [day_in_week(ws, wd) for wd in WEEKDAYS]  # Mon-Fri of that Sun-Sat week
         inside = sum(start <= d <= end for d in span)
         if not makeup_closures and any(d in data.closures for d in span):
             return 0
@@ -283,12 +286,12 @@ def solve(
         """A program counts as part of the usual week if it runs on most of
         this weekday's dates in the period (so a program added for 11/2-12/18
         shapes November's template, but a one-week clinic doesn't)."""
-        if lp.day != wd or lp.slot != s:
+        if lp.day != wd or not slots_overlap(lp.slot, s):
             return False
         if not lp.ranges:
             return True
         ds = [d for d in open_dates if DAYS[d.weekday()] == wd]
-        return bool(ds) and sum(lp.active(d, s) for d in ds) * 2 >= len(ds)
+        return bool(ds) and sum(lp.runs_on(d) for d in ds) * 2 >= len(ds)
 
     def recurring_block(t, wd, s):
         team = teams[t]
@@ -399,7 +402,7 @@ def solve(
 
         for d in open_dates:
             nxt = d + timedelta(days=1)
-            if nxt in open_dates and week_start(nxt) == week_start(d):
+            if nxt in open_dates:  # back-to-back days, including Sat -> Sun
                 a, b = y_day(t, d), y_day(t, nxt)
                 if isinstance(a, int) or isinstance(b, int):
                     continue
@@ -487,6 +490,7 @@ def solve(
                     "date": d, "day": DAYS[d.weekday()], "slot": s, "slot_label": SLOTS[s],
                     "court": c, "kind": "Local", "name": lp.name, "club": "", "age": None,
                     "coach": "; ".join(lp.coaches), "head": "; ".join(lp.coaches), "on_pattern": True,
+                    "side": lp.side,
                 })
     assignments = pd.DataFrame(rows)
     if not assignments.empty:
@@ -599,7 +603,7 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
         team = teams[t]
         reasons = []
         for wd, sl in sorted(usual[t], key=lambda k: WEEKDAYS.index(k[0])):
-            d = ws + timedelta(days=WEEKDAYS.index(wd))
+            d = day_in_week(ws, wd)
             if team.start and d < team.start:
                 continue
             if d in data.closures:
@@ -662,7 +666,7 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
         if solver.Value(v):
             on = [teams[t].name for t in heads_of[c] + asst_of[c]
                   if len(a) and ((a["name"] == teams[t].name) & (a["date"] == d) & (a["slot"] == sl)).any()]
-            on += [lp.name for lp in data.locals if lp.active(d, sl) and c in lp.coaches]
+            on += [lp.name for lp in data.locals if lp.blocks(d, sl) and c in lp.coaches]
             out.append({"severity": "Medium", "team": ", ".join(n for n in on if any(t.name == n for t in teams)),
                         "week_of": week_start(d),
                         "issue": f"Assistant {c} double-booked {d:%a %-m/%-d} {sl}",

@@ -11,9 +11,11 @@ Teams         team, club, age, head_coach, assistants, start_date, priority,
               blank = from the name: "Black" 1s, "Green" 2s)
 Availability  who, type, days, dates, times, note
 Wishlist      team, choice, days, times, note
-Locals        program, days, time, courts, coaches, on_site, dates
+Locals        program, side (Girls/Boys), days, time, courts, coaches, on_site, dates
 Weekends      date, open, courts, group, required, note
 Closures      date, reason
+Coaches       coach, email, phone, note (roster: anyone not on a team yet,
+              e.g. coaches who only work programs)
 Tournaments   name, type (Local / Travel), start_date, end_date, club, ages,
               teams, program, courts, note
                 Local  = hosted here: blocks its courts (default all) all day,
@@ -39,6 +41,7 @@ from datetime import date, datetime
 
 import pandas as pd
 
+from .config import PROGRAM_KEYS, slots_overlap
 from .config import (
     AM_BLOCKS, COURTS, DAYS, PM_BLOCKS, SLOT_KEYS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND,
     WEEKEND_KEYS, default_priority, slot_allowed_for_age,
@@ -49,13 +52,15 @@ COLUMNS = {
               "weekend_only", "weekend_pref", "late_ok", "level"],
     "Availability": ["who", "type", "days", "dates", "times", "note"],
     "Wishlist": ["team", "choice", "days", "times", "note"],
-    "Locals": ["program", "days", "time", "courts", "coaches", "on_site", "dates"],
+    "Locals": ["program", "side", "days", "time", "courts", "coaches", "on_site", "dates"],
+    "Coaches": ["coach", "email", "phone", "note"],
     "Weekends": ["date", "open", "courts", "group", "required", "note"],
     "Closures": ["date", "reason"],
     "Tournaments": ["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts", "note"],
 }
 ATTRS = {"Teams": "teams", "Availability": "availability", "Wishlist": "wishlist",
-         "Locals": "locals", "Weekends": "weekends", "Closures": "closures", "Tournaments": "tournaments"}
+         "Locals": "locals", "Weekends": "weekends", "Closures": "closures", "Tournaments": "tournaments",
+         "Coaches": "coaches"}
 
 
 def empty(sheet: str) -> pd.DataFrame:
@@ -73,6 +78,7 @@ class ScheduleInput:
     start: date | None = None
     end: date | None = None
     tournaments: pd.DataFrame = field(default_factory=lambda: empty("Tournaments"))
+    coaches: pd.DataFrame = field(default_factory=lambda: empty("Coaches"))
 
     def sheets(self) -> dict[str, pd.DataFrame]:
         return {sheet: getattr(self, attr) for sheet, attr in ATTRS.items()}
@@ -205,8 +211,8 @@ def parse_times(value) -> set[str] | None:
         if mins and mins != "00":  # weekday slot like 3:45 / 530pm / 17:30
             h12 = h - 12 if h > 12 else h
             key = f"{h12}:{mins}"
-            if key not in WEEKDAY_KEYS:
-                raise ValueError(f"'{tok}' isn't a club timeslot ({', '.join(WEEKDAY_KEYS)})")
+            if key not in WEEKDAY_KEYS and key not in PROGRAM_KEYS:
+                raise ValueError(f"'{tok}' isn't a club timeslot ({', '.join(WEEKDAY_KEYS + PROGRAM_KEYS)})")
             out.add(key)
             continue
         # whole hour -> weekend block start
@@ -237,7 +243,7 @@ def _parse_span(tok: str) -> set[str] | None:
     if not a or len(a) != 1:
         return None
     a = next(iter(a))
-    keys = WEEKDAY_KEYS if a in WEEKDAY_KEYS else WEEKEND_KEYS
+    keys = WEEKDAY_KEYS if a in WEEKDAY_KEYS else PROGRAM_KEYS if a in PROGRAM_KEYS else WEEKEND_KEYS
     try:
         b = parse_times(b_tok)
         b = next(iter(b)) if b and len(b) == 1 else None
@@ -462,11 +468,38 @@ class LocalProgram:
     coaches: list[str]
     on_site: bool
     ranges: list[tuple[date, date]]
+    side: str = ""  # "Girls", "Boys" or ""
 
-    def active(self, d: date, slot: str) -> bool:
-        if DAYS[d.weekday()] != self.day or slot != self.slot:
+    def runs_on(self, d: date) -> bool:
+        if DAYS[d.weekday()] != self.day:
             return False
         return not self.ranges or any(a <= d <= b for a, b in self.ranges)
+
+    def active(self, d: date, slot: str) -> bool:
+        """Running in exactly this slot (for display)."""
+        return slot == self.slot and self.runs_on(d)
+
+    def blocks(self, d: date, slot: str) -> bool:
+        """Takes this slot's courts/coaches, including overlaps (a 3:30 or
+        4:30 JumpStart blocks the 3:45 practice slot)."""
+        return slots_overlap(slot, self.slot) and self.runs_on(d)
+
+
+def program_side(value, name: str = "") -> str:
+    """'Girls'/'G'/'Boys'/'B' -> side; blank -> guessed from the name ('G HS L', 'Boys 14 League')."""
+    v = "" if blank(value) else str(value).strip().lower()
+    if v.startswith("g"):
+        return "Girls"
+    if v.startswith("b"):
+        return "Boys"
+    if v:
+        return ""
+    n = name.strip().lower()
+    if re.match(r"^g\b", n) or "girl" in n:
+        return "Girls"
+    if re.match(r"^b\b", n) or "boy" in n:
+        return "Boys"
+    return ""
 
 
 def ranges_overlap(r1: list[tuple[date, date]], r2: list[tuple[date, date]]) -> bool:
@@ -482,7 +515,8 @@ def local_conflicts(programs: list["LocalProgram"]) -> list[str]:
     on = [lp for lp in programs if lp.on_site and lp.courts]
     for i, a in enumerate(on):
         for b in on[i + 1:]:
-            if a.name == b.name or a.day != b.day or a.slot != b.slot or not ranges_overlap(a.ranges, b.ranges):
+            if a.name == b.name or a.day != b.day or not slots_overlap(a.slot, b.slot) \
+                    or not ranges_overlap(a.ranges, b.ranges):
                 continue
             shared = sorted(set(a.courts) & set(b.courts))
             key = (a.name, b.name, a.day, a.slot)
@@ -569,10 +603,12 @@ class CleanInput:
     closures: dict[date, str]
     warnings: list[str]
     tournaments: list[Tournament] = field(default_factory=list)
+    roster: dict[str, dict] = field(default_factory=dict)  # coach -> {email, phone, note}
 
     @property
     def coaches(self) -> list[str]:
-        out = {c for t in self.teams for c in t.staff} | {c for lp in self.locals for c in lp.coaches}
+        out = ({c for t in self.teams for c in t.staff} | {c for lp in self.locals for c in lp.coaches}
+               | set(self.roster))
         return sorted(out)
 
 
@@ -680,7 +716,8 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 if not day_slots:
                     raise ValueError(f"{day} needs a {'weekend time like 9AM-1PM' if day in WEEKEND else 'weekday time like 5:30'}")
                 for slot in day_slots:
-                    locals_.append(LocalProgram(name, day, slot, courts, staff, on_site, ranges))
+                    locals_.append(LocalProgram(name, day, slot, courts, staff, on_site, ranges,
+                                                program_side(r.get("side"), name)))
             if on_site and not courts:
                 warnings.append(f"Locals '{name}': courts not set yet, so it isn't blocking any courts "
                                 f"(its coaches are still blocked)")
@@ -813,4 +850,12 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
         raise ValueError("Please fix these in the input:\n- " + "\n- ".join(errors))
     if not teams:
         raise ValueError("There are no teams to schedule.")
-    return CleanInput(teams, rules, wishes, locals_, weekends, closures, warnings, tournaments)
+    # ---- coach roster (coaches who aren't on a team yet, plus contact info)
+    roster: dict[str, dict] = {}
+    cdf = getattr(inp, "coaches", None)
+    for _, r in (cdf.iterrows() if isinstance(cdf, pd.DataFrame) else []):
+        if blank(r.get("coach")):
+            continue
+        roster[str(r["coach"]).strip()] = {k: ("" if blank(r.get(k)) else str(r[k]).strip())
+                                           for k in ("email", "phone", "note")}
+    return CleanInput(teams, rules, wishes, locals_, weekends, closures, warnings, tournaments, roster)
