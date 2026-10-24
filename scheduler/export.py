@@ -128,6 +128,40 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
         for c in sh[1]:
             c.font, c.fill = Font(bold=True, color="FFFFFF"), _head
 
+    pc = result.practice_counts
+    if pc is not None and len(pc):
+        sh = wb.create_sheet("Practice Counts", 1)  # right after the template
+        active = pc.groupby("week_of")[["target", "scheduled"]].sum()
+        weeks = sorted(active[(active["target"] > 0) | (active["scheduled"] > 0)].index)
+        sh.append(["Team"] + [f"Week of {w:%b %-d}" for w in weeks] + ["Total short"])
+        red, pink, green, grey = (PatternFill("solid", fgColor=c) for c in ("F8B4B4", "FDE2E1", "EAF6EC", "F4F5F7"))
+        lookup = {(r.team, r.week_of): r for r in pc.itertuples()}
+        totals = pc.groupby("team")["short"].sum()
+        order = list(totals[totals > 0].sort_values(ascending=False).index) + sorted(totals[totals == 0].index)
+        for i, tm in enumerate(order, start=2):
+            sh.cell(i, 1, tm).font = Font(bold=True)
+            for j, w in enumerate(weeks, start=2):
+                r = lookup.get((tm, w))
+                if r is None or r.target == 0:
+                    cell = sh.cell(i, j, r.scheduled if r is not None and r.scheduled else "–")
+                    cell.fill = grey
+                else:
+                    cell = sh.cell(i, j, f"{r.scheduled} of {r.target}")
+                    cell.fill = (red if r.short >= 2 else pink) if r.short else green
+                    if r.short:
+                        cell.font = Font(bold=True, color="9B1C1C")
+                cell.alignment = Alignment(horizontal="center")
+                cell.border = _border
+            tot = sh.cell(i, len(weeks) + 2, int(totals[tm]))
+            if totals[tm]:
+                tot.font = Font(bold=True, color="9B1C1C")
+        sh.column_dimensions["A"].width = 22
+        for j in range(2, len(weeks) + 3):
+            sh.column_dimensions[get_column_letter(j)].width = 14
+        for c in sh[1]:
+            c.font, c.fill = Font(bold=True, color="FFFFFF"), _head
+        sh.freeze_panes = "B2"
+
     if len(result.issues):
         sh = wb.create_sheet("Review")
         cols = ["severity", "team", "week_of", "issue", "detail"]

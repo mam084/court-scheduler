@@ -380,3 +380,27 @@ def test_date_range_partial_weeks_and_new_year():
     _check_hard_rules(inp, r)
     pr = r.assignments[r.assignments["kind"] == "Practice"]
     assert pr["date"].min() >= date(2026, 12, 15) and pr["date"].max() <= date(2027, 1, 15)
+
+
+def test_court_2_used_before_missing_a_practice():
+    # Seven teams that can only practice Tue/Thu 5:30: all seven courts,
+    # including Court 2, get used rather than anyone missing practice.
+    teams = [{"team": f"16-T{i}", "age": 16} for i in range(7)]
+    avail = [{"who": t["team"], "type": "No", "days": "Mon, Wed, Fri"} for t in teams] + \
+            [{"who": t["team"], "type": "No", "times": "7:20"} for t in teams]
+    r = solve(_inp(teams, avail), *NOV, time_limit_s=15)
+    assert r.metrics["missed_practices"] == 0
+    assert 2 in set(r.assignments["court"])
+    assert r.shortfalls.empty
+
+
+def test_practice_counts_flag_short_weeks():
+    teams = [{"team": "15-A", "age": 15}, {"team": "15-B", "age": 15}]
+    avail = [{"who": "15-A", "type": "No", "dates": "11/9-11/13"}]  # 15-A can't make that whole week
+    r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
+    sf = r.shortfalls
+    assert list(sf["team"]) == ["15-A"] and sf["week_of"].iloc[0] == date(2026, 11, 9) and sf["short"].iloc[0] == 2
+    pc = r.practice_counts
+    b = pc[pc["team"] == "15-B"]
+    assert (b[b["target"] > 0]["short"] == 0).all()
+    assert int(pc["short"].sum()) == r.metrics["missed_practices"]

@@ -310,3 +310,50 @@ def week_dates(ws: date, start: date, end: date, weekend_dates=()) -> dict[str, 
 
 def month_name(d: date) -> str:
     return f"{calendar.month_name[d.month]} {d.year}"
+
+
+def practice_counts_html(counts: pd.DataFrame, highlight: set[str] | None = None) -> str:
+    """Teams as rows, weeks as columns: practices scheduled / target.
+    Short weeks are red; weeks with no target (cut off by the date range,
+    or before a team's season starts) show just the count in grey."""
+    if counts is None or counts.empty:
+        return ""
+    active = counts.groupby("week_of")[["target", "scheduled"]].sum()
+    weeks = sorted(active[(active["target"] > 0) | (active["scheduled"] > 0)].index)
+    order = (counts.groupby("team")["short"].sum().sort_values(ascending=False))
+    teams = list(order.index) if order.max() > 0 else sorted(counts["team"].unique())
+    if order.max() > 0:  # short teams first, then the rest alphabetically
+        teams = list(order[order > 0].index) + sorted(order[order == 0].index)
+    lookup = {(r.team, r.week_of): r for r in counts.itertuples()}
+    out = [CSS, """<style>
+.cs-counts td.cs-ok { background:#EAF6EC; color:#1B5E20; text-align:center; font-weight:600; }
+.cs-counts td.cs-short1 { background:#FDE2E1; color:#9B1C1C; text-align:center; font-weight:700; }
+.cs-counts td.cs-short2 { background:#F8B4B4; color:#7F1212; text-align:center; font-weight:700; }
+.cs-counts td.cs-none { background:#F4F5F7; color:#8A93A3; text-align:center; }
+.cs-counts td { height: 28px; vertical-align: middle; }
+.cs-counts td.cs-team { text-align:left; font-weight:600; background:#EEF1F6; color:#1F2A44; }
+.cs-counts tr.cs-hl td.cs-team { outline: 2px solid #1F4E99; outline-offset:-2px; }
+</style>""", '<div class="cs-wrap"><table class="cs-grid cs-counts" style="min-width:0"><thead><tr><th class="cs-day" style="width:150px">Team</th>']
+    out += [f"<th>Week of {w:%b %-d}</th>" for w in weeks]
+    out.append("</tr></thead><tbody>")
+    for tm in teams:
+        cls = ' class="cs-hl"' if highlight and tm in highlight else ""
+        out.append(f'<tr{cls}><td class="cs-team">{html.escape(str(tm))}</td>')
+        for w in weeks:
+            r = lookup.get((tm, w))
+            if r is None or r.target == 0:
+                n = 0 if r is None else r.scheduled
+                out.append(f'<td class="cs-none" title="No weekly target this week">{n if n else "–"}</td>')
+            elif r.short:
+                c = "cs-short2" if r.short >= 2 else "cs-short1"
+                out.append(f'<td class="{c}" title="Short {r.short} practice(s)">{r.scheduled} of {r.target}</td>')
+            else:
+                out.append(f'<td class="cs-ok">{r.scheduled} of {r.target}</td>')
+        out.append("</tr>")
+    out.append("</tbody></table></div>")
+    return "".join(out)
+
+
+def short_list_text(short: pd.DataFrame) -> str:
+    """'12-Madi (1 of 2), 15-Madi (0 of 2)' for one week's shortfalls."""
+    return ", ".join(f"{r.team} ({r.scheduled} of {r.target})" for r in short.itertuples())

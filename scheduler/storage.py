@@ -139,6 +139,7 @@ def result_to_dict(r: ScheduleResult | None) -> dict | None:
         "start": r.start.isoformat() if r.start else None,
         "end": r.end.isoformat() if r.end else None,
         "weekend_dates": [d.isoformat() for d in r.weekend_dates],
+        "practice_counts": _frame_out(r.practice_counts),
     }
 
 
@@ -164,6 +165,7 @@ def result_from_dict(d: dict | None, inp: ScheduleInput) -> ScheduleResult | Non
         start=start, end=end,
         weekend_dates=[date.fromisoformat(x) for x in d.get("weekend_dates", [])],
         tournaments=tournaments,
+        practice_counts=_frame_in(d.get("practice_counts", [])),
     )
 
 

@@ -25,7 +25,10 @@ from scheduler.data import ATTRS, COLUMNS, empty, parse_names
 from scheduler.export import to_excel, to_ics
 from scheduler.solver import week_start
 from scheduler.storage import Store, database_url, make_payload, new_id, read_payload
-from scheduler.views import club_stripes, court_grid_html, legend_html, month_calendar_html, range_label, week_dates
+from scheduler.views import (
+    club_stripes, court_grid_html, legend_html, month_calendar_html, practice_counts_html, range_label,
+    short_list_text, week_dates,
+)
 
 st.set_page_config(page_title="Court Scheduler", page_icon="🏐", layout="wide")
 
@@ -244,6 +247,12 @@ if run or st.session_state.pop("resolve", False):
         try:
             st.session_state.result = solve(inp, start, end, time_limit_s=time_limit, makeup_closures=makeup)
             st.session_state.result_period = (start, end)
+            sf = st.session_state.result.shortfalls if st.session_state.result.ok else None
+            if sf is not None and len(sf):
+                st.toast(f"{sf['team'].nunique()} team(s) short of practices in {sf['week_of'].nunique()} week(s). "
+                         "See the warning at the top.", icon="⚠️")
+            elif sf is not None:
+                st.toast("Every team got all its practices.", icon="✅")
         except ValueError as e:
             st.session_state.result = None
             st.error(str(e))
@@ -279,6 +288,15 @@ else:
                 help="Weekday practices matching the team's 1st-choice wishlist")
     c[4].metric("Coach double-ups", m["double_ups"], help="A coach's teams back-to-back on the same day")
     c[5].metric("On usual schedule", f"{m['on_pattern_pct']}%")
+    short = result.shortfalls
+    if len(short):
+        n_teams, n_missed = short["team"].nunique(), int(short["short"].sum())
+        lines = []
+        for ws, g in short.groupby("week_of"):
+            lines.append(f"- **Week of {ws:%b %-d}:** {short_list_text(g)}")
+        st.error(f"**{n_teams} team(s) are short {n_missed} practice(s):**\n" + "\n".join(lines) +
+                 "\n\nWhy each one happened is in the **Review** tab, and the full week-by-week counts are there too.",
+                 icon="⚠️")
     if result.warnings:
         with st.expander(f"⚠️ {len(result.warnings)} note(s) about the input"):
             for w in result.warnings:
@@ -337,6 +355,9 @@ with TAB_COURT:
         else:
             ws = weeks[options.index(pick) - 1]
             dd = week_dates(ws, start, end, result.weekend_dates)
+            wk_short = result.shortfalls[result.shortfalls["week_of"] == ws] if len(result.shortfalls) else []
+            if len(wk_short):
+                st.error(f"Short of practices this week: {short_list_text(wk_short)}", icon="⚠️")
             book = a[a["date"].map(week_start) == ws]
             st.markdown(court_grid_html(book, dd, closures, hl or None, stripes, result.tournaments),
                         unsafe_allow_html=True)
@@ -582,15 +603,26 @@ with TAB_COACH:
 with TAB_REVIEW:
     if result is None:
         st.caption("No schedule yet.")
-    elif result.issues.empty:
-        st.success("Nothing to review: every team has its practices on its usual schedule.")
     else:
-        st.markdown("Everything that differs from the ideal schedule, most important first.")
-        sev = st.multiselect("Severity", ["High", "Medium", "Low"], default=["High", "Medium", "Low"])
-        iss = result.issues[result.issues["severity"].isin(sev)]
-        st.dataframe(iss.rename(columns={"severity": "Severity", "team": "Team", "week_of": "Week of",
-                                         "issue": "Issue", "detail": "Why"}),
-                     hide_index=True, use_container_width=True)
+        st.subheader("Practices per team, per week")
+        st.caption("Red = short of the team's weekly target. Grey = no target that week (cut off by the date "
+                   "range, or before the team's season starts).")
+        if len(result.practice_counts):
+            hl_r = set(st.multiselect("Highlight teams", sorted(result.practice_counts["team"].unique()),
+                                      key="counts_hl"))
+            st.markdown(practice_counts_html(result.practice_counts, hl_r or None), unsafe_allow_html=True)
+        else:
+            st.caption("Rebuild the schedule to see practice counts.")
+        st.subheader("Everything to review")
+        if result.issues.empty:
+            st.success("Nothing to review: every team has its practices on its usual schedule.")
+        else:
+            st.markdown("Everything that differs from the ideal schedule, most important first.")
+            sev = st.multiselect("Severity", ["High", "Medium", "Low"], default=["High", "Medium", "Low"])
+            iss = result.issues[result.issues["severity"].isin(sev)]
+            st.dataframe(iss.rename(columns={"severity": "Severity", "team": "Team", "week_of": "Week of",
+                                             "issue": "Issue", "detail": "Why"}),
+                         hide_index=True, use_container_width=True)
 
 # -------------------------------------------------------------- inputs --
 with TAB_INPUTS:

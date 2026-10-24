@@ -54,6 +54,15 @@ class ScheduleResult:
     end: date | None = None
     weekend_dates: list[date] = field(default_factory=list)
     tournaments: list = field(default_factory=list)   # data.Tournament objects, for display
+    # One row per team per week: team, week_of, target, scheduled, short
+    practice_counts: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+    @property
+    def shortfalls(self) -> pd.DataFrame:
+        pc = self.practice_counts
+        if pc is None or pc.empty:
+            return pd.DataFrame(columns=["team", "week_of", "target", "scheduled", "short"])
+        return pc[pc["short"] > 0].sort_values(["week_of", "team"]).reset_index(drop=True)
 
     @property
     def ok(self) -> bool:
@@ -522,8 +531,20 @@ def solve(
     }
     shown_weekends = sorted(set(weekend_dates) | ({d for d in assignments["date"] if d.weekday() >= 5}
                                                   if len(assignments) else set()))
+
+    # Practices each team got vs. its target, week by week (for the count
+    # grid and the "short of practices" alerts).
+    targets = {(teams[t].name, ws): tg for (t, ws), (_, tg) in short_vars.items()}
+    targets.update({(teams[t].name, ws): g for t, ws, g in no_slot_weeks})
+    got = practices.groupby(["name", practices["date"].map(week_start)]).size().to_dict() if len(practices) else {}
+    practice_counts = pd.DataFrame([
+        {"team": tm.name, "week_of": ws, "target": targets.get((tm.name, ws), 0),
+         "scheduled": int(got.get((tm.name, ws), 0)),
+         "short": max(0, targets.get((tm.name, ws), 0) - int(got.get((tm.name, ws), 0)))}
+        for tm in teams for ws in sorted(weeks)
+    ])
     return ScheduleResult(status_name, assignments, pattern, issues, metrics, data.warnings, start, end,
-                          shown_weekends, data.tournaments)
+                          shown_weekends, data.tournaments, practice_counts)
 
 
 def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0):
