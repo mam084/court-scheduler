@@ -161,6 +161,7 @@ def result_to_dict(r: ScheduleResult | None) -> dict | None:
         "end": r.end.isoformat() if r.end else None,
         "weekend_dates": [d.isoformat() for d in r.weekend_dates],
         "practice_counts": _frame_out(r.practice_counts),
+        "broken": [{k: (v.isoformat() if isinstance(v, date) else v) for k, v in b.items()} for b in r.broken],
     }
 
 
@@ -187,11 +188,12 @@ def result_from_dict(d: dict | None, inp: ScheduleInput) -> ScheduleResult | Non
         weekend_dates=[date.fromisoformat(x) for x in d.get("weekend_dates", [])],
         tournaments=tournaments,
         practice_counts=_frame_in(d.get("practice_counts", [])),
+        broken=[dict(b, date=date.fromisoformat(b["date"])) for b in d.get("broken", [])],
     )
 
 
 def make_payload(inp: ScheduleInput, start: date, end: date, settings: dict,
-                 result: ScheduleResult | None) -> dict:
+                 result: ScheduleResult | None, published: list | None = None) -> dict:
     return {
         "version": PAYLOAD_VERSION,
         "start": start.isoformat(),
@@ -199,7 +201,13 @@ def make_payload(inp: ScheduleInput, start: date, end: date, settings: dict,
         "settings": settings,
         "inputs": inp.to_records(),
         "result": result_to_dict(result),
+        "published": list(published or []),
     }
+
+
+def read_published(payload: dict) -> list[dict]:
+    """Published versions saved with a schedule (oldest first)."""
+    return list(payload.get("published") or [])
 
 
 def read_payload(payload: dict) -> tuple[ScheduleInput, date, date, dict, ScheduleResult | None]:

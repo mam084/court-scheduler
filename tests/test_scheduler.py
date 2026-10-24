@@ -37,9 +37,13 @@ def _check_hard_rules(inp, r):
             assert d in data.weekends and s in data.weekends[d].blocks
             if t.weekend_only:
                 assert any(w.matches(d, s) for w in t.weekend_only), (t.name, d, s)
+        broken = {(b["team"], b["date"], b["slot"]) for b in r.broken}
         for rule in data.rules:
             if rule.kind == "no" and rule.matches(d, s):
-                assert rule.who != t.name and rule.who not in t.heads, (t.name, rule)
+                if rule.who == t.name or rule.who in t.heads:
+                    # Only allowed as a flagged last resort, never over a hand removal.
+                    assert not rule.manual, (t.name, rule)
+                    assert (t.name, d, s) in broken, (t.name, rule)
         for lp in data.locals:
             if lp.active(d, s):
                 assert not set(lp.coaches) & set(t.heads), (t.name, lp.name, d, s)
@@ -108,12 +112,16 @@ def test_late_ok_exception_allows_7_20_but_avoids_it():
     # With 5:30 free, the exception isn't used...
     r = solve(_inp(teams), *NOV, time_limit_s=10)
     assert not (r.assignments["slot"] == "7:20").any()
-    # ...but when 3:45 and 5:30 are blocked, 14 Black can go late and 14 Gold can't.
+    # ...but when 3:45 and 5:30 are blocked, 14 Black goes late. 14 Gold can't
+    # go late, so its no-dates are broken (and flagged) to keep 2 a week.
     avail = [{"who": t, "type": "No", "times": "3:45, 5:30"} for t in ("14 Black", "14 Gold")]
     r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
     pr = r.assignments
     assert (pr[pr["name"] == "14 Black"]["slot"] == "7:20").all() and len(pr[pr["name"] == "14 Black"])
-    assert pr[pr["name"] == "14 Gold"].empty
+    gold = pr[pr["name"] == "14 Gold"]
+    assert len(gold) and not (gold["slot"] == "7:20").any()
+    assert {b["team"] for b in r.broken} == {"14 Gold"}
+    assert r.shortfalls.empty
 
 
 def test_assistant_can_overlap_but_head_cannot():
@@ -148,9 +156,16 @@ def test_recurring_and_ranged_no_dates():
              {"who": "14-Ari", "type": "No", "days": "Wed", "times": "5:30"}]
     r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
     pr = r.assignments
-    assert not (pr["day"] == "Mon").any()
-    assert not pr["date"].between(date(2026, 11, 10), date(2026, 11, 13)).any()
-    assert pr[(pr["day"] == "Wed") & (pr["slot"] == "5:30")].empty
+    # The week of 11/8 is blocked Mon-Fri, so two no-dates there are broken
+    # (and flagged) to keep 2 practices. Everywhere else they hold.
+    broken = {(b["date"], b["slot"]) for b in r.broken}
+    assert len(broken) == 2 and all(date(2026, 11, 9) <= d <= date(2026, 11, 13) for d, _ in broken)
+    rest = pr[~pr.apply(lambda x: (x["date"], x["slot"]) in broken, axis=1)]
+    assert not (rest["day"] == "Mon").any()
+    assert not rest["date"].between(date(2026, 11, 10), date(2026, 11, 13)).any()
+    assert rest[(rest["day"] == "Wed") & (rest["slot"] == "5:30")].empty
+    assert r.shortfalls.empty
+    assert r.issues["issue"].str.startswith("No-date broken").sum() == 2
 
 
 def test_start_dates_and_required_weekend():
@@ -396,8 +411,10 @@ def test_court_2_used_before_missing_a_practice():
 
 def test_practice_counts_flag_short_weeks():
     teams = [{"team": "15-A", "age": 15}, {"team": "15-B", "age": 15}]
-    avail = [{"who": "15-A", "type": "No", "dates": "11/9-11/13"}]  # 15-A can't make that whole week
-    r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
+    # 15-A is away at a travel tournament that whole week, so it can't practice.
+    inp = _with_tournaments(_inp(teams), [{"name": "Away", "type": "Travel", "start_date": "11/9/2026",
+                                           "end_date": "11/13/2026", "teams": "15-A"}])
+    r = solve(inp, *NOV, time_limit_s=10)
     sf = r.shortfalls
     assert list(sf["team"]) == ["15-A"] and sf["week_of"].iloc[0] == date(2026, 11, 8) and sf["short"].iloc[0] == 2
     pc = r.practice_counts
@@ -529,3 +546,105 @@ def test_views_always_show_weekends():
     assert ">Sun<" in grid and ">Sat<" in grid and "weekend not open" in grid
     cal = month_calendar_html(empty, date(2026, 11, 1), date(2026, 11, 30))
     assert ">Sun<" in cal and ">Sat<" in cal
+
+
+def test_no_dates_broken_only_as_last_resort_head_coach_first():
+    """When no-dates leave fewer than 2 days, the head coach's no-date is
+    broken first on a day an assistant is free; hand removals never are."""
+    teams = [{"team": "15-Kit", "age": 15, "head_coach": "Kit", "assistants": "Ash"}]
+    avail = [{"who": "Kit", "type": "No", "dates": "11/9-11/12"},    # head out Mon-Thu
+             {"who": "Ash", "type": "No", "dates": "11/9-11/10"},    # assistant out Mon-Tue
+             {"who": "15-Kit", "type": "No", "dates": "11/13"}]      # team out Fri
+    r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
+    wk = r.assignments[r.assignments["date"].between(date(2026, 11, 9), date(2026, 11, 13))]
+    assert len(wk) == 2 and r.shortfalls.empty
+    # Wed/Thu: only Kit's no-date is broken, and Ash is free to run it.
+    assert set(wk["day"]) <= {"Wed", "Thu"}
+    assert all(b["head_out"] == ["Kit"] and b["free_asst"] == ["Ash"] and not b["team_out"] for b in r.broken)
+    assert len(r.broken) == 2
+
+
+def test_second_weekend_practice_avoided():
+    """Weekdays full: a team gets 1 weekend practice a week, not 2."""
+    teams = [{"team": f"16-W{i}", "age": 16} for i in range(4)]
+    avail = [{"who": t["team"], "type": "No", "days": "Mon, Tue, Wed, Thu"} for t in teams]
+    weekends = [{"date": d, "open": "9AM-9PM"} for d in ("11/7", "11/8", "11/14", "11/15", "11/21", "11/22")]
+    r = solve(_inp(teams, avail, weekends=weekends), *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    we = pr[pr["date"].map(lambda d: d.weekday() >= 5)]
+    per = we.groupby(["name", we["date"].map(week_start)]).size()
+    assert (per <= 1).all(), per[per > 1]
+
+
+def test_rebuild_keeps_previous_schedule():
+    """A small change (one new no-date) moves only what it has to."""
+    inp = simulate(8, 4, 4, 2026, 11, 1)
+    r1 = solve(inp, *NOV, time_limit_s=20)
+    pr1 = r1.assignments[r1.assignments["kind"] == "Practice"]
+    victim = pr1.iloc[len(pr1) // 2]
+    inp.availability = pd.concat([inp.availability, pd.DataFrame([{
+        "who": victim["name"], "type": "No", "dates": f"{victim['date']:%m/%d}", "times": victim["slot"]}])],
+        ignore_index=True)
+    r2 = solve(inp, *NOV, time_limit_s=20, previous=r1.assignments, previous_pattern=r1.pattern, seed=5)
+    key = lambda df: set(zip(df["name"], df["date"], df["slot"]))  # noqa: E731
+    pr2 = r2.assignments[r2.assignments["kind"] == "Practice"]
+    moved = key(pr1) - key(pr2)
+    assert (victim["name"], victim["date"], victim["slot"]) in moved
+    assert len(moved) <= 3, moved
+    assert r2.metrics["moved_from_previous"] == len(moved)
+    same = pr1.merge(pr2, on=["name", "date", "slot"], suffixes=("1", "2"))
+    assert (same["court1"] == same["court2"]).mean() > 0.9
+
+
+def test_publish_and_what_changed(tmp_path):
+    from scheduler.changes import add_version, burden, diff, practices_of, snapshot
+    from scheduler.storage import Store, make_payload, new_id, read_published
+    inp = simulate(6, 4, 4, 2026, 11, 7)
+    r1 = solve(inp, *NOV, time_limit_s=20)
+    v = add_version([], snapshot(r1, "Nov v1", "first send"))
+    store = Store(f"sqlite:///{tmp_path / 'p.db'}")
+    pid = new_id()
+    store.save(pid, "Nov", make_payload(inp, *NOV, {}, r1, v))
+    pub = read_published(store.get(pid)["payload"])
+    assert len(pub) == 1 and pub[0]["label"] == "Nov v1"
+    old = practices_of(pub[0])
+    assert len(old) == (r1.assignments["kind"] == "Practice").sum()
+    # Unchanged schedule: nothing to report.
+    assert diff(old, r1.assignments, clean(inp, *NOV), *NOV).empty
+    # A team's head coach becomes unavailable on one of its practices.
+    pr = r1.assignments[r1.assignments["kind"] == "Practice"]
+    victim = pr.iloc[5]
+    head = victim["head"].split("; ")[0]
+    inp.availability = pd.concat([inp.availability, pd.DataFrame([{
+        "who": head, "type": "No", "dates": f"{victim['date']:%m/%d}", "note": "dentist"}])], ignore_index=True)
+    r2 = solve(inp, *NOV, time_limit_s=20, previous=old)
+    ch = diff(old, r2.assignments, clean(inp, *NOV), *NOV)
+    row = ch[ch["team"] == victim["name"]]
+    assert len(row) and row["change"].iloc[0] in ("Moved", "Removed")
+    assert "dentist" in row["why"].iloc[0] and head in row["why"].iloc[0]
+    b = burden(r2.assignments)
+    assert set(b["team"]) == set(pr["name"]) and (b["practices"] > 0).all()
+
+
+def test_open_boxes_mark_free_court_times():
+    from scheduler.config import COURTS, SLOTS, WEEKDAY_KEYS, slots_overlap
+    from scheduler.views import court_grid_html, open_slot_map, week_dates
+    inp = simulate(6, 4, 4, 2026, 11, 7)
+    r = solve(inp, *NOV, time_limit_s=15)
+    data = clean(inp, *NOV)
+    ws = date(2026, 11, 8)
+    dd = week_dates(ws, *NOV)
+    book = r.assignments[r.assignments["date"].map(week_start) == ws]
+    html_ = court_grid_html(book, dd, data.closures, weekend_dates=r.weekend_dates,
+                            open_slots=open_slot_map(dd, data))
+    # Every free weekday court/time gets exactly one "Open" box.
+    expected = 0
+    for wd, d in dd.items():
+        if d == date.min or d.weekday() >= 5 or d in data.closures:
+            continue
+        for c in COURTS:
+            taken = list(book[(book["date"] == d) & (book["court"] == c)]["slot"])
+            expected += sum(1 for s_ in WEEKDAY_KEYS if not any(slots_overlap(s_, x) for x in taken))
+    shown = sum(html_.count(f'is free {SLOTS[s_]}"') for s_ in WEEKDAY_KEYS)
+    assert shown == expected > 0
+    assert 'class="cs-open"' not in court_grid_html(book, dd, data.closures)  # off unless asked

@@ -432,6 +432,7 @@ class Rule:
     ranges: list[tuple[date, date]]
     times: set[str] | None
     note: str = ""
+    manual: bool = False  # a practice removed by hand: never overridden
 
     def matches(self, d: date, slot: str) -> bool:
         if self.days and DAYS[d.weekday()] not in self.days:
@@ -918,7 +919,7 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 pins.append(Pin(tname, d, slot, court, note))
             elif action.startswith("rem") or action.startswith("can") or action.startswith("del"):
                 d = to_date(r["date"], year)
-                rules.append(Rule(tname, "no", [], [(d, d)], times, note or "removed by hand"))
+                rules.append(Rule(tname, "no", [], [(d, d)], times, note or "removed by hand", manual=True))
                 if action.startswith("can"):
                     cancels[(tname, d)] = cancels.get((tname, d), 0) + 1
             elif action.startswith("usual") or action.startswith("fix"):

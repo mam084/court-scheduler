@@ -13,7 +13,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from .config import COURTS, DAYS, SLOT_KEYS, WEEK_ORDER, WEEKDAYS, week_start
+from .config import COURTS, DAYS, SLOT_KEYS, SLOTS, WEEK_ORDER, WEEKDAY_KEYS, WEEKDAYS, slots_overlap, week_start
 
 # Age group -> (background, text).
 AGE_COLORS = {
@@ -63,6 +63,9 @@ CSS = """
 .cs-travel { background: #E8F0FF; color: #1F3F7A; border-left-color: #4A7BD0 !important; font-weight: 600; }
 .cs-notes { font-family: system-ui, sans-serif; font-size: 12.5px; margin: 2px 0 8px; display:flex; flex-wrap:wrap; gap:6px; }
 .cs-notes .cs-chip { margin: 0; }
+.cs-open { border: 1px dashed #B7BECB; border-radius: 6px; padding: 2px 6px; margin: 0 0 4px 0; color: #8A93A5;
+           font-size: 11.5px; line-height: 1.25; background: transparent; }
+.cs-open .cs-time { font-weight: 600; }
 </style>
 """
 
@@ -149,12 +152,14 @@ def court_grid_html(
     stripes: dict | None = None,
     tournaments: list | None = None,
     weekend_dates=None,
+    open_slots: dict | None = None,
 ) -> str:
     """Club layout: courts as rows, days as columns (always Sun–Sat),
     practices listed with their times in each box. `day_dates` is an ordered
     {day: date} for a specific week (date.min = outside the period); None
     shows the recurring weekly template. Weekend days not in `weekend_dates`
-    are shown as not open."""
+    are shown as not open. `open_slots` ({day: {slot: courts}}, from
+    open_slot_map) adds an "Open" box for every free practice time."""
     closures = closures or {}
     stripes = stripes or club_stripes(bookings["club"] if "club" in bookings else [])
     cols = list(day_dates) if day_dates else list(WEEK_ORDER)
@@ -206,15 +211,74 @@ def court_grid_html(
                     out.append(f'<td class="cs-closed" rowspan="{len(COURTS)}">{blocked[wd]}</td>')
                 continue
             cell = court_rows[court_rows["day"] == wd].copy() if len(court_rows) else court_rows
-            chips = "".join(_tourn_chip(tn, compact=True) for tn in partial.get(wd, []) if c in tn.courts)
+            tn_here = [tn for tn in partial.get(wd, []) if c in tn.courts]
+            chips = "".join(_tourn_chip(tn, compact=True) for tn in tn_here)
+            items = []
             if len(cell):
-                cell["o"] = cell["slot"].map(SLOT_KEYS.index)
-                chips += "".join(_chip(r, stripes, highlight) for _, r in cell.sort_values("o").iterrows())
+                items += [(SLOT_KEYS.index(r["slot"]), _chip(r, stripes, highlight)) for _, r in cell.iterrows()]
+            if open_slots and not tn_here:
+                taken = list(cell["slot"]) if len(cell) else []
+                free = [sl for sl, cs in (open_slots.get(wd) or {}).items()
+                        if c in cs and not any(slots_overlap(sl, x) for x in taken)]
+                for run in _runs(free):
+                    a_, b_ = run[0], run[-1]
+                    if len(run) == 1:
+                        txt, tip = a_, SLOTS[a_]
+                    else:  # back-to-back weekend blocks read as one span: "9AM–1PM Open"
+                        tip = f"{SLOTS[a_].split('–')[0]}–{SLOTS[b_].split('–')[-1]}"
+                        txt = f"{a_}–{WEEKEND_ENDS.get(b_, b_)}"
+                    items.append((SLOT_KEYS.index(a_) + 0.5,
+                                  f'<div class="cs-open" title="Court {c} is free {html.escape(tip)}">'
+                                  f'<span class="cs-time">{txt}</span> Open</div>'))
+            chips += "".join(h for _, h in sorted(items, key=lambda x: x[0]))
             cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
             out.append(f"<td{cls}>{chips}</td>")
         out.append("</tr>")
     out.append("</tbody></table></div>")
     return "".join(out)
+
+
+WEEKEND_ENDS = {"9AM": "11AM", "11AM": "1PM", "1PM": "3PM", "3PM": "5PM", "5PM": "7PM", "7PM": "9PM"}
+
+
+def _runs(slots: list[str]) -> list[list[str]]:
+    """Group back-to-back weekend blocks; weekday times stay separate."""
+    out = []
+    for sl in sorted(slots, key=SLOT_KEYS.index):
+        if (out and sl in WEEKEND_ENDS and out[-1][-1] in WEEKEND_ENDS
+                and WEEKEND_ENDS[out[-1][-1]] == sl):
+            out[-1].append(sl)
+        else:
+            out.append([sl])
+    return out
+
+
+def open_slot_map(day_dates: dict | None, data, closures: dict | None = None) -> dict:
+    """{day: {slot: courts}} of practice times a court could be used for.
+    Template (day_dates None): every weekday timeslot on every court.
+    A week: weekday timeslots on open dates, plus an open weekend's blocks
+    and courts. Courts taken by a local tournament are left out; programs
+    are taken care of by their own bookings in the grid."""
+    closures = closures or (data.closures if data else {})
+    out = {}
+    if not day_dates:
+        return {wd: {s: set(COURTS) for s in WEEKDAY_KEYS} for wd in WEEKDAYS}
+    for wd, d in day_dates.items():
+        if d is None or d == date.min or d in closures:
+            continue
+        if d.weekday() < 5:
+            slots, courts = WEEKDAY_KEYS, set(COURTS)
+        elif data is not None and d in data.weekends:
+            slots, courts = data.weekends[d].blocks, set(data.weekends[d].courts)
+        else:
+            continue
+        if data is not None:
+            for tn in data.tournaments:
+                if tn.kind == "local" and tn.covers(d):
+                    courts -= set(tn.courts)
+        if courts:
+            out[wd] = {s: set(courts) for s in slots}
+    return out
 
 
 def legend_html(ages, stripes: dict) -> str:
