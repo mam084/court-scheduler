@@ -434,7 +434,7 @@ if VIEW == TAB_COURT:
         weeks = sorted({week_start(d) for d in a["date"]})
         options = ["Weekly template"] + [f"Week of {w:%b %-d}" for w in weeks]
         c1, c2 = st.columns([1, 2])
-        pick = c1.selectbox("Show", options,
+        pick = c1.selectbox("Show", options, index=1 if weeks else 0,  # open on the first week
                             help="The template is each team's usual weekday slot; weeks show the actual dates, "
                                  "including weekends, makeups and closures.")
         hl = set(c2.multiselect("Highlight a club, team or coach", people_options(a)))
