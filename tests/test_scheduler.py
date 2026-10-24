@@ -594,3 +594,33 @@ def test_rebuild_keeps_previous_schedule():
     assert r2.metrics["moved_from_previous"] == len(moved)
     same = pr1.merge(pr2, on=["name", "date", "slot"], suffixes=("1", "2"))
     assert (same["court1"] == same["court2"]).mean() > 0.9
+
+
+def test_publish_and_what_changed(tmp_path):
+    from scheduler.changes import add_version, burden, diff, practices_of, snapshot
+    from scheduler.storage import Store, make_payload, new_id, read_published
+    inp = simulate(6, 4, 4, 2026, 11, 7)
+    r1 = solve(inp, *NOV, time_limit_s=20)
+    v = add_version([], snapshot(r1, "Nov v1", "first send"))
+    store = Store(f"sqlite:///{tmp_path / 'p.db'}")
+    pid = new_id()
+    store.save(pid, "Nov", make_payload(inp, *NOV, {}, r1, v))
+    pub = read_published(store.get(pid)["payload"])
+    assert len(pub) == 1 and pub[0]["label"] == "Nov v1"
+    old = practices_of(pub[0])
+    assert len(old) == (r1.assignments["kind"] == "Practice").sum()
+    # Unchanged schedule: nothing to report.
+    assert diff(old, r1.assignments, clean(inp, *NOV), *NOV).empty
+    # A team's head coach becomes unavailable on one of its practices.
+    pr = r1.assignments[r1.assignments["kind"] == "Practice"]
+    victim = pr.iloc[5]
+    head = victim["head"].split("; ")[0]
+    inp.availability = pd.concat([inp.availability, pd.DataFrame([{
+        "who": head, "type": "No", "dates": f"{victim['date']:%m/%d}", "note": "dentist"}])], ignore_index=True)
+    r2 = solve(inp, *NOV, time_limit_s=20, previous=old)
+    ch = diff(old, r2.assignments, clean(inp, *NOV), *NOV)
+    row = ch[ch["team"] == victim["name"]]
+    assert len(row) and row["change"].iloc[0] in ("Moved", "Removed")
+    assert "dentist" in row["why"].iloc[0] and head in row["why"].iloc[0]
+    b = burden(r2.assignments)
+    assert set(b["team"]) == set(pr["name"]) and (b["practices"] > 0).all()

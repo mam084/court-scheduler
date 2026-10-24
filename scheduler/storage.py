@@ -193,7 +193,7 @@ def result_from_dict(d: dict | None, inp: ScheduleInput) -> ScheduleResult | Non
 
 
 def make_payload(inp: ScheduleInput, start: date, end: date, settings: dict,
-                 result: ScheduleResult | None) -> dict:
+                 result: ScheduleResult | None, published: list | None = None) -> dict:
     return {
         "version": PAYLOAD_VERSION,
         "start": start.isoformat(),
@@ -201,7 +201,13 @@ def make_payload(inp: ScheduleInput, start: date, end: date, settings: dict,
         "settings": settings,
         "inputs": inp.to_records(),
         "result": result_to_dict(result),
+        "published": list(published or []),
     }
+
+
+def read_published(payload: dict) -> list[dict]:
+    """Published versions saved with a schedule (oldest first)."""
+    return list(payload.get("published") or [])
 
 
 def read_payload(payload: dict) -> tuple[ScheduleInput, date, date, dict, ScheduleResult | None]:
