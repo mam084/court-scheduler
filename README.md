@@ -35,14 +35,16 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 |---|---|
 | 2 practices per week | Heaviest weight. Older teams win if courts run out, and shortfalls are spread so teams keep at least 1 practice. |
 | Required weekends | e.g. "the 14th or 15th must be used" |
-| Same weekly schedule, weekdays over weekends | Makeups are flagged in the Review tab |
+| Weekdays over weekends | Weekends are used only when weekdays can't fit 2 practices |
+| Same weekly schedule | Makeups are flagged in the Review tab |
 | Ranked wishlists | 1st choice, then 2nd choice day/time combos |
 | Coach double-ups | A coach's two teams back-to-back on the same day (girls at 5:30, boys at 7:20) |
 | Travel tournament rest | No practice the day before or after (especially no late practice the night before); the week leading in gets priority for 2 practices |
 | Court quality | Courts ranked 1 → 7 → 6 → 5 → 3 → 4 → 2. Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot older and 1s (Black) teams get the better courts |
 | Assistant coaches free | Assistants can be double-booked, at a cost |
 | Not-preferred days, weekend AM/PM preferences | |
-| Non-consecutive days, same slot both days, home court | |
+| A day apart | Back-to-back days are avoided, including Sat → Sun |
+| Same slot both days, home court | |
 
 Closures default to the major family holidays: New Year's Day, July 4, Thanksgiving and the day after, Christmas Eve and Day, and New Year's Eve. The club practices on minor holidays like Labor Day.
 
@@ -51,6 +53,7 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 - **Saved schedules:** create a schedule (name, dates, then upload the club spreadsheet or try the simulated club). Everything saves automatically: inputs, programs and tournaments you add, edits, dates, and the latest solved schedule. Refreshing or reopening the page's link (`?project=…`) picks up where you left off, and the **Schedule** menu lists every saved schedule.
 
 - **Court view:** courts as rows and days as columns, with each practice, its time and its coaches in the box. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
+- **Edit practices:** move, remove or add a single practice, or set a team's usual days. Removing one can find a makeup or cancel it outright. Hand-set practices show a 📌 and are kept on every rebuild, with everything else fitted around them. If changes can't all happen (court taken, coach double-booked), the app says why and undoes the change. The full list is in the **Overrides** sheet and can be undone there.
 - **Calendar:** a month view, filterable by club, team or coach.
 - **Tournaments:** add a local tournament (dates, courts, locals program) or a travel tournament (dates, club, age groups, then trim the list of teams going). It shows on the court view, calendar and Excel export, and the schedule is rebuilt around it.
 - **Programs:** add or edit a program (name, Girls/Boys side, days, every week or start/end dates, timeslots including JumpStart 3:30–4:30 and 4:30–5:30, courts, coaches, on/off-site). Editing lets you drop a single court when sign-ups are low. It's blocked off on the courts and calendar right away, with the practice schedule rebuilt around it. Girls programs show in blue, boys programs in green.
@@ -73,7 +76,7 @@ Saved schedules go to a database when `DATABASE_URL` is set, and to a local SQLi
    APP_PASSWORD = "something-the-coaches-know"   # optional: asks for a password before showing anything
    ```
 
-The table is created automatically on first run. Since saved schedules contain real coach data, also set `APP_PASSWORD` or make the Streamlit app private.
+The table (`court_scheduler_projects`) is created automatically on first run, with row-level security turned on so Supabase's public API can't read it; only the app, connecting with the database password, can. Since saved schedules contain real coach data, also set `APP_PASSWORD` or make the Streamlit app private.
 
 ## Input spreadsheet
 
@@ -88,6 +91,7 @@ One `.xlsx` with these sheets. Download a filled-in example from the app's sideb
 | Coaches | `coach`, `email`, `phone`, `note`: roster for coaches who aren't on a team yet |
 | Weekends | `date`, `open` (`9AM-9PM`), `courts`, `group` + `required` (days in a required group: at least one gets used) |
 | Closures | `date`, `reason` |
+| Overrides | hand edits: `team`, `action` (`Add`, `Remove`, `Cancel`, `Usual`), `date`, `days` (Usual: `Tue, Thu`), `time`, `court` (optional) |
 | Tournaments | `name`, `type` (`Local` or `Travel`), `start_date`, `end_date`, `club`, `ages` (`15-16`, `14U`), `teams` (optional: overrides club + ages), `program` (local: its coaches are busy), `courts` (local; blank = all) |
 
 Every field is forgiving: `Tuesdays and Thursdays`, `Tue/Thu`, `530pm` and `Nov 15-16` all work.

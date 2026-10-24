@@ -16,6 +16,13 @@ Weekends      date, open, courts, group, required, note
 Closures      date, reason
 Coaches       coach, email, phone, note (roster: anyone not on a team yet,
               e.g. coaches who only work programs)
+Overrides     team, action, date, days, time, court, note: manual edits the
+              scheduler always keeps:
+                Add     pin a practice on date + time (+ court)
+                Remove  team can't practice on date (+ time); a makeup is
+                        found that week if possible
+                Cancel  same, but no makeup (the week's target drops by 1)
+                Usual   fix the team's usual weekly days + time (+ court)
 Tournaments   name, type (Local / Travel), start_date, end_date, club, ages,
               teams, program, courts, note
                 Local  = hosted here: blocks its courts (default all) all day,
@@ -54,13 +61,14 @@ COLUMNS = {
     "Wishlist": ["team", "choice", "days", "times", "note"],
     "Locals": ["program", "side", "days", "time", "courts", "coaches", "on_site", "dates"],
     "Coaches": ["coach", "email", "phone", "note"],
+    "Overrides": ["team", "action", "date", "days", "time", "court", "note"],
     "Weekends": ["date", "open", "courts", "group", "required", "note"],
     "Closures": ["date", "reason"],
     "Tournaments": ["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts", "note"],
 }
 ATTRS = {"Teams": "teams", "Availability": "availability", "Wishlist": "wishlist",
          "Locals": "locals", "Weekends": "weekends", "Closures": "closures", "Tournaments": "tournaments",
-         "Coaches": "coaches"}
+         "Coaches": "coaches", "Overrides": "overrides"}
 
 
 def empty(sheet: str) -> pd.DataFrame:
@@ -79,6 +87,7 @@ class ScheduleInput:
     end: date | None = None
     tournaments: pd.DataFrame = field(default_factory=lambda: empty("Tournaments"))
     coaches: pd.DataFrame = field(default_factory=lambda: empty("Coaches"))
+    overrides: pd.DataFrame = field(default_factory=lambda: empty("Overrides"))
 
     def sheets(self) -> dict[str, pd.DataFrame]:
         return {sheet: getattr(self, attr) for sheet, attr in ATTRS.items()}
@@ -594,6 +603,16 @@ def _team_level(name: str, value) -> int | None:
 
 
 @dataclass
+class Pin:
+    """A practice placed by hand: always scheduled, on this court if given."""
+    team: str
+    day: date
+    slot: str
+    court: int | None = None
+    note: str = ""
+
+
+@dataclass
 class CleanInput:
     teams: list[Team]
     rules: list[Rule]
@@ -604,6 +623,10 @@ class CleanInput:
     warnings: list[str]
     tournaments: list[Tournament] = field(default_factory=list)
     roster: dict[str, dict] = field(default_factory=dict)  # coach -> {email, phone, note}
+    pins: list["Pin"] = field(default_factory=list)          # manual practices
+    cancels: dict = field(default_factory=dict)              # (team, date) -> practices cancelled (no makeup)
+    usual: dict = field(default_factory=dict)                # team -> [(weekday, slot)]
+    usual_court: dict = field(default_factory=dict)          # team -> court
 
     @property
     def coaches(self) -> list[str]:
@@ -858,4 +881,62 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             continue
         roster[str(r["coach"]).strip()] = {k: ("" if blank(r.get(k)) else str(r[k]).strip())
                                            for k in ("email", "phone", "note")}
-    return CleanInput(teams, rules, wishes, locals_, weekends, closures, warnings, tournaments, roster)
+    # ---- manual overrides ------------------------------------------------------
+    pins: list[Pin] = []
+    cancels: dict = {}
+    usual: dict = {}
+    usual_court: dict = {}
+    odf = getattr(inp, "overrides", None)
+    for i, r in (odf.iterrows() if isinstance(odf, pd.DataFrame) else []):
+        if blank(r.get("team")):
+            continue
+        tname = str(r["team"]).strip()
+        row = f"Manual change row {i + 2} ({tname})"
+        if tname not in team_names:
+            warnings.append(f"{row}: team isn't on the Teams sheet, so it's ignored")
+            continue
+        team = next(t for t in teams if t.name == tname)
+        action = "" if blank(r.get("action")) else str(r["action"]).strip().lower()
+        note = "" if blank(r.get("note")) else str(r["note"])
+        try:
+            times = parse_times(r.get("time"))
+            court = None if blank(r.get("court")) or str(r.get("court")).strip().lower() == "any" \
+                else int(float(r["court"]))
+            if court is not None and court not in COURTS:
+                raise ValueError(f"court {court} doesn't exist")
+            if action.startswith("add") or action.startswith("pin") or action.startswith("move"):
+                d = to_date(r["date"], year)
+                if not times or len(times) != 1:
+                    raise ValueError("needs exactly one time")
+                slot = next(iter(times))
+                if (d.weekday() >= 5) != (slot in WEEKEND_KEYS):
+                    raise ValueError(f"{d:%a %-m/%-d} needs a {'weekend' if d.weekday() >= 5 else 'weekday'} time")
+                if slot in PROGRAM_KEYS:
+                    raise ValueError("JumpStart times are for programs, not team practices")
+                if not team.allowed(slot):
+                    warnings.append(f"{row}: {team.age}s don't normally practice at {slot}; kept because it was set by hand")
+                pins.append(Pin(tname, d, slot, court, note))
+            elif action.startswith("rem") or action.startswith("can") or action.startswith("del"):
+                d = to_date(r["date"], year)
+                rules.append(Rule(tname, "no", [], [(d, d)], times, note or "removed by hand"))
+                if action.startswith("can"):
+                    cancels[(tname, d)] = cancels.get((tname, d), 0) + 1
+            elif action.startswith("usual") or action.startswith("fix"):
+                days = [x for x in parse_days(r.get("days")) if x in WEEKDAYS]
+                if not days or not times:
+                    raise ValueError("needs weekdays and a time, e.g. Tue, Thu at 5:30")
+                slot = sorted(times, key=SLOT_KEYS.index)[0]
+                if slot not in WEEKDAY_KEYS:
+                    raise ValueError("usual days need a weekday practice time (3:45, 5:30 or 7:20)")
+                usual[tname] = [(x, slot) for x in days][:2]
+                if court is not None:
+                    usual_court[tname] = court
+            else:
+                raise ValueError("action should be Add, Remove, Cancel or Usual")
+        except (ValueError, TypeError, KeyError) as e:
+            errors.append(f"{row}: {e}")
+    if errors:
+        raise ValueError("Please fix these in the input:\n- " + "\n- ".join(errors))
+
+    return CleanInput(teams, rules, wishes, locals_, weekends, closures, warnings, tournaments, roster,
+                      pins, cancels, usual, usual_court)

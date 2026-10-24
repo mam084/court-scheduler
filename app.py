@@ -249,7 +249,7 @@ if st.session_state.get("project_id") is None:
     st.stop()
 
 inp: ScheduleInput = st.session_state.inp
-for _sheet, _attr in (("Tournaments", "tournaments"), ("Coaches", "coaches")):
+for _sheet, _attr in (("Tournaments", "tournaments"), ("Coaches", "coaches"), ("Overrides", "overrides")):
     if not isinstance(getattr(inp, _attr, None), pd.DataFrame):  # schedules saved before these sheets existed
         setattr(inp, _attr, empty(_sheet))
 if "side" not in inp.locals.columns:
@@ -274,8 +274,15 @@ if run or st.session_state.pop("resolve", False):
             elif sf is not None:
                 st.toast("Every team got all its practices.", icon="✅")
         except ValueError as e:
-            st.session_state.result = None
-            st.error(str(e))
+            backup = st.session_state.pop("overrides_backup", None)
+            if backup is not None:  # a manual change that can't work: undo it, keep the schedule
+                inp.overrides = backup
+                st.error(f"That change wasn't applied. {e}")
+            else:
+                st.session_state.result = None
+                st.error(str(e))
+        else:
+            st.session_state.pop("overrides_backup", None)
 
 result = st.session_state.get("result")
 if result is not None and st.session_state.get("result_period") != (start, end):
@@ -325,9 +332,9 @@ else:
 if "flash" in st.session_state:
     st.success(st.session_state.pop("flash"))
 
-tabs = st.tabs(["🏟️ Court view", "📅 Calendar", "🗓️ Programs", "🏆 Tournaments", "🧑‍🏫 Coaches", "🔎 Review",
-                "📝 Inputs"])
-TAB_COURT, TAB_CAL, TAB_PROG, TAB_TOURN, TAB_COACH, TAB_REVIEW, TAB_INPUTS = tabs
+tabs = st.tabs(["🏟️ Court view", "📅 Calendar", "✏️ Edit practices", "🗓️ Programs", "🏆 Tournaments",
+                "🧑‍🏫 Coaches", "🔎 Review", "📝 Inputs"])
+TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_COACH, TAB_REVIEW, TAB_INPUTS = tabs
 
 
 def template_locals(a: pd.DataFrame) -> pd.DataFrame:
@@ -397,6 +404,137 @@ with TAB_CAL:
         st.markdown(month_calendar_html(a, start, end, closures, hl or None, show_locals, result.weekend_dates,
                                         result.tournaments), unsafe_allow_html=True)
 
+
+# ------------------------------------------------------ edit practices --
+TEAM_SLOT_CHOICES = WEEKDAY_KEYS + WEEKEND_KEYS
+
+
+def team_slot_label(k: str) -> str:
+    return SLOTS[k] + (" (weekend)" if k in WEEKEND_KEYS else "")
+
+
+def apply_overrides(rows: list[dict], message: str, backup: pd.DataFrame | None = None):
+    """Add manual-change rows and rebuild; rolled back if the rebuild can't honor them."""
+    st.session_state.overrides_backup = inp.overrides.copy() if backup is None else backup
+    inp.overrides = pd.concat([inp.overrides, pd.DataFrame(rows)], ignore_index=True)
+    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+    st.session_state.resolve = True
+    st.session_state.flash = message
+    st.rerun()
+
+
+with TAB_EDIT:
+    if result is None or cleaned is None:
+        st.caption("Build the schedule first.")
+    else:
+        st.markdown("Change practices by hand. The scheduler **keeps these changes every time it rebuilds**, "
+                    "and fits everything else around them. Practices you place show a 📌.")
+        team_names = [t.name for t in cleaned.teams]
+        e_team = st.selectbox("Team", team_names, key="ed_team")
+        a = result.assignments
+        tp = a[(a["kind"] == "Practice") & (a["name"] == e_team)].copy()
+        if len(tp):
+            tp["o"] = tp["slot"].map(SLOT_KEYS.index)
+            tp = tp.sort_values(["date", "o"])
+        usual_rows = result.pattern[result.pattern["team"] == e_team] if len(result.pattern) else result.pattern
+        usual_txt = ", ".join(f"{r.day} {r.slot}" for r in usual_rows.itertuples()) or "none"
+        home = f" · home Court {usual_rows['court'].iloc[0]}" if len(usual_rows) else ""
+        st.caption(f"Usual days: **{usual_txt}**{home}")
+
+        c_left, c_right = st.columns([3, 2])
+        with c_left:
+            st.markdown("**Practices**")
+            if len(tp):
+                st.dataframe(pd.DataFrame({
+                    "Date": tp["date"].map(lambda d: f"{d:%a %b %-d}"), "Time": tp["slot_label"],
+                    "Court": tp["court"], "Set by hand": tp.get("pinned", False).map(lambda v: "📌" if v == True else ""),  # noqa: E712
+                }), hide_index=True, use_container_width=True, height=min(420, 38 + 35 * len(tp)))
+            else:
+                st.caption("No practices in this schedule.")
+
+        with c_right:
+            mode = st.radio("What do you want to do?", ["Move a practice", "Remove a practice", "Add a practice",
+                                                        "Set usual days"], key="ed_mode")
+            labels = [f"{r.date:%a %b %-d} · {r.slot_label} · Court {r.court}" for r in tp.itertuples()]
+            if mode in ("Move a practice", "Remove a practice"):
+                if not labels:
+                    st.caption("No practices to change.")
+                else:
+                    lab_i = st.selectbox("Practice", labels, key=f"ed_pick_{e_team}")
+                    old = tp.iloc[labels.index(lab_i) if lab_i in labels else 0]
+                    if mode == "Move a practice":
+                        pk = f"{e_team}_{old['date']}_{old['slot']}"  # fields reset to the chosen practice
+                        nd = st.date_input("New date", value=old["date"], min_value=start, max_value=end,
+                                           format="MM/DD/YYYY", key=f"ed_nd_{pk}")
+                        ns = st.selectbox("New time", TEAM_SLOT_CHOICES, format_func=team_slot_label,
+                                          index=TEAM_SLOT_CHOICES.index(old["slot"]) if old["slot"] in TEAM_SLOT_CHOICES else 0,
+                                          key=f"ed_ns_{pk}")
+                        nc = st.selectbox("Court", ["Any"] + COURTS, key=f"ed_nc_{pk}",
+                                          format_func=lambda c: "Any open court" if c == "Any" else f"Court {c}")
+                        if st.button("Move it", type="primary", use_container_width=True):
+                            apply_overrides([
+                                {"team": e_team, "action": "Remove", "date": f"{old['date']:%m/%d/%Y}", "days": "",
+                                 "time": old["slot"], "court": "", "note": f"moved to {nd:%a %-m/%-d} {ns}"},
+                                {"team": e_team, "action": "Add", "date": f"{nd:%m/%d/%Y}", "days": "", "time": ns,
+                                 "court": "" if nc == "Any" else str(nc), "note": f"moved from {old['date']:%a %-m/%-d}"},
+                            ], f"Moved {e_team} from {old['date']:%a %b %-d} to {nd:%a %b %-d} at {ns}.")
+                    else:
+                        how = st.radio("Then", ["Find a makeup that week if possible", "Cancel it (no makeup)"],
+                                       key="ed_how")
+                        if st.button("Remove it", type="primary", use_container_width=True):
+                            act = "Remove" if how.startswith("Find") else "Cancel"
+                            apply_overrides([{"team": e_team, "action": act, "date": f"{old['date']:%m/%d/%Y}",
+                                              "days": "", "time": old["slot"], "court": "", "note": "removed by hand"}],
+                                            f"{'Removed' if act == 'Remove' else 'Cancelled'} {e_team}'s "
+                                            f"{old['date']:%a %b %-d} practice.")
+            elif mode == "Add a practice":
+                ad = st.date_input("Date", value=start, min_value=start, max_value=end, format="MM/DD/YYYY", key="ed_ad")
+                as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1, key="ed_as")
+                ac = st.selectbox("Court", ["Any"] + COURTS, key="ed_ac",
+                                  format_func=lambda c: "Any open court" if c == "Any" else f"Court {c}")
+                st.caption("A team gets at most 2 practices a week, so the scheduler may drop another one that week.")
+                if st.button("Add it", type="primary", use_container_width=True):
+                    apply_overrides([{"team": e_team, "action": "Add", "date": f"{ad:%m/%d/%Y}", "days": "",
+                                      "time": as_, "court": "" if ac == "Any" else str(ac), "note": "added by hand"}],
+                                    f"Added a practice for {e_team} on {ad:%a %b %-d} at {as_}.")
+            else:
+                ud = st.multiselect("Days (pick 2)", WEEKDAYS, max_selections=2, key=f"ed_ud_{e_team}",
+                                    default=[r.day for r in usual_rows.itertuples()][:2])
+                us = st.selectbox("Time", WEEKDAY_KEYS, format_func=lambda k: SLOTS[k], key=f"ed_us_{e_team}",
+                                  index=WEEKDAY_KEYS.index(usual_rows["slot"].iloc[0])
+                                  if len(usual_rows) and usual_rows["slot"].iloc[0] in WEEKDAY_KEYS else 1)
+                uc = st.selectbox("Home court", ["Any"] + COURTS, key=f"ed_uc_{e_team}",
+                                  format_func=lambda c: "Scheduler picks" if c == "Any" else f"Court {c}")
+                if st.button("Set usual days", type="primary", use_container_width=True, disabled=not ud):
+                    keep = inp.overrides[~((inp.overrides["team"] == e_team) &
+                                           inp.overrides["action"].astype(str).str.lower().str.startswith("usual"))]
+                    original = inp.overrides.copy()
+                    inp.overrides = keep.reset_index(drop=True)
+                    apply_overrides([{"team": e_team, "action": "Usual", "date": "", "days": ", ".join(ud),
+                                      "time": us, "court": "" if uc == "Any" else str(uc), "note": "set by hand"}],
+                                    f"{e_team} now practices {' & '.join(ud)} at {us}.", backup=original)
+
+        st.subheader("Manual changes")
+        ov = inp.overrides.fillna("")
+        if ov.empty:
+            st.caption("None yet.")
+        else:
+            show_all = st.toggle("Show all teams", value=False, key="ed_all")
+            view = ov if show_all else ov[ov["team"] == e_team]
+            if view.empty:
+                st.caption(f"No manual changes for {e_team}.")
+            else:
+                lab = {i: f"{r['team']} · {r['action']} · " + " ".join(x for x in (r["date"], r["days"], r["time"],
+                       f"Court {r['court']}" if str(r["court"]).strip() else "") if str(x).strip())
+                       for i, r in view.iterrows()}
+                st.dataframe(view.rename(columns=str.title), hide_index=True, use_container_width=True)
+                undo = st.multiselect("Undo changes", list(lab), format_func=lambda i: lab[i], key="ed_undo")
+                if st.button("↩️ Undo selected", disabled=not undo):
+                    inp.overrides = inp.overrides.drop(index=undo).reset_index(drop=True)
+                    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+                    st.session_state.resolve = True
+                    st.session_state.flash = f"Undid {len(undo)} change(s). Schedule rebuilt."
+                    st.rerun()
 
 # ------------------------------------------------------------ programs --
 SLOT_CHOICES = PROGRAM_KEYS + WEEKDAY_KEYS + WEEKEND_KEYS
@@ -508,7 +646,7 @@ def program_row(v: dict) -> tuple[list[str], dict]:
 
 def try_locals(new_locals: pd.DataFrame, what: str) -> bool:
     trial = ScheduleInput(inp.teams, inp.availability, inp.wishlist, new_locals, inp.weekends, inp.closures,
-                          tournaments=inp.tournaments, coaches=inp.coaches)
+                          tournaments=inp.tournaments, coaches=inp.coaches, overrides=inp.overrides)
     try:
         clean(trial, start, end)
     except ValueError as e:
@@ -530,8 +668,10 @@ with TAB_PROG:
         st.subheader("Edit a program")
         labels = [f"{r['program']} · {r['days']} · {r['time']}" + (f" · {r['dates']}" if str(r["dates"]).strip() else "")
                   for _, r in inp.locals.fillna("").iterrows()]
-        pick = st.selectbox("Program", range(len(labels)), format_func=lambda i: labels[i], index=None,
-                            placeholder="Choose a program to change (e.g. drop a court)", key=f"edit_pick_{ver}")
+        labels = [lab if labels.count(lab) == 1 else f"{lab} (#{i + 1})" for i, lab in enumerate(labels)]
+        pick_lab = st.selectbox("Program", labels, index=None,
+                                placeholder="Choose a program to change (e.g. drop a court)", key=f"edit_pick_{ver}")
+        pick = labels.index(pick_lab) if pick_lab in labels else None
         if pick is not None:
             row = inp.locals.fillna("").iloc[pick].to_dict()
             clicked, v = program_form(f"edit_program_{pick}_{ver}", program_defaults(row),
@@ -767,6 +907,9 @@ with TAB_INPUTS:
                     "'at least one of these must be used'.",
         "Closures": "Club closed all day.",
         "Coaches": "Coach roster: anyone not on a team yet (e.g. coaches who only work programs), plus contact info.",
+        "Overrides": "Manual changes the scheduler always keeps (easier from the Edit practices tab). action = Add "
+                     "(date + time, optional court), Remove (date, optional time; a makeup is found), Cancel "
+                     "(no makeup) or Usual (weekdays + time, optional court).",
         "Tournaments": "type = Local (hosted here: blocks its courts all day; blank courts = all) or Travel "
                        "(away: the teams matching club + ages, or the listed teams, can't practice those days "
                        "and avoid the days right before and after). Ages like `15-16` or `14U`.",

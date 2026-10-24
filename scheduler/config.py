@@ -129,8 +129,9 @@ WEIGHTS = {
     "assistant_conflict": 60,
     # A weekday practice that doesn't sit on the team's recurring pattern.
     "off_pattern": 25,
-    # Practicing on a weekend instead of a weekday.
-    "weekend": 30,
+    # Practicing on a weekend instead of a weekday. High on purpose: a
+    # weekday practice wins unless it's genuinely unavailable.
+    "weekend": 150,
     # Each weekend 2-hour block opened (encourages teams to share blocks).
     "weekend_block": 20,
     # Weekend practice that doesn't match the team's weekend preference.
@@ -144,8 +145,9 @@ WEIGHTS = {
     "home_court": 8,
     # A late_ok young team (e.g. 14 Black) practicing at 7:20 / 7 PM.
     "late_exception": 25,
-    # A team's practices on back-to-back days.
-    "consecutive_days": 15,
+    # A team's practices on back-to-back days, including Sat -> Sun
+    # (practices should have a day in between when possible).
+    "consecutive_days": 40,
     # Wishlist: practice matching only the 2nd choice / matching neither.
     "wish_second": 6,
     "wish_miss": 16,

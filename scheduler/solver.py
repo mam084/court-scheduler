@@ -155,29 +155,74 @@ def solve(
     m = cp_model.CpModel()
     obj = []
 
+    # ------------------------------------------ manual practices (pins) --
+    # Practices placed by hand are always scheduled. They override a team's
+    # own rules (availability, age slots, season start...), but they still
+    # need a free court and can't double-book a head coach.
+    idx = {teams[t].name: t for t in T}
+    pinned: dict[tuple, int | None] = {}
+    problems = []
+    for pn in data.pins:
+        t, d, s = idx[pn.team], pn.day, pn.slot
+        label = f"{pn.team} on {d:%a %-m/%-d} at {s}"
+        if not (start <= d <= end):
+            problems.append(f"{label}: outside this schedule's dates")
+        elif d in data.closures:
+            problems.append(f"{label}: the club is closed ({data.closures[d] or 'closure'})")
+        elif d.weekday() >= 5 and (d not in data.weekends or s not in data.weekends[d].blocks):
+            problems.append(f"{label}: that weekend time isn't open (add it on the Weekends sheet)")
+        elif not courts_on(d, s):
+            problems.append(f"{label}: every court is taken by programs or a tournament")
+        elif pn.court is not None and pn.court not in courts_on(d, s):
+            problems.append(f"{label}: Court {pn.court} is taken by a program or tournament")
+        elif any(tt == t and dd == d for (tt, dd, _) in pinned):
+            problems.append(f"{label}: that team already has a practice placed that day")
+        else:
+            pinned[(t, d, s)] = pn.court
+    by_slot = defaultdict(list)
+    for (t, d, s), c in pinned.items():
+        by_slot[d, s].append((t, c))
+    for (d, s), lst in by_slot.items():
+        if len(lst) > len(courts_on(d, s)):
+            problems.append(f"{d:%a %-m/%-d} at {s}: more practices placed by hand than open courts")
+        cs = [c for _, c in lst if c is not None]
+        if len(cs) != len(set(cs)):
+            problems.append(f"{d:%a %-m/%-d} at {s}: two practices placed on the same court")
+        heads = [h for t, _ in lst for h in teams[t].heads]
+        for h in {h for h in heads if heads.count(h) > 1}:
+            problems.append(f"{d:%a %-m/%-d} at {s}: {h} would be coaching two teams at once")
+    per_week = defaultdict(int)
+    for (t, d, s) in pinned:
+        per_week[t, week_start(d)] += 1
+    for (t, ws), n in per_week.items():
+        if n > PRACTICES_PER_WEEK:
+            problems.append(f"{teams[t].name}: {n} practices placed by hand in the week of {ws:%b %-d} (max 2)")
+    if problems:
+        raise ValueError("These manual changes can't all happen:\n- " + "\n- ".join(problems))
+
     # ---------------------------------------------- decision variables --
     y = {}
     for t in T:
         team = teams[t]
         for d in open_dates:
-            if team.start and d < team.start:
-                continue
-            if d in away[team.name]:
-                continue  # at a travel tournament
+            # not started yet, or away at a travel tournament
+            off_day = bool(team.start and d < team.start) or d in away[team.name]
             for s in slots_on(d):
-                if not team.allowed(s):
-                    continue
-                if not courts_on(d, s):
-                    continue
-                if d.weekday() >= 5 and team.weekend_only and not any(w.matches(d, s) for w in team.weekend_only):
-                    continue
-                if any(r.kind == "no" and r.matches(d, s) for r in rules_for[team.name]):
-                    continue
-                if any(r.kind == "no" and r.matches(d, s) for h in team.heads for r in rules_for[h]):
-                    continue
-                if any(h in coach_local[d, s] for h in team.heads):
-                    continue
-                y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
+                if (t, d, s) in pinned:
+                    y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
+                    m.Add(y[t, d, s] == 1)
+                else:
+                    if off_day or not team.allowed(s) or not courts_on(d, s):
+                        continue
+                    if d.weekday() >= 5 and team.weekend_only and not any(w.matches(d, s) for w in team.weekend_only):
+                        continue
+                    if any(r.kind == "no" and r.matches(d, s) for r in rules_for[team.name]):
+                        continue
+                    if any(r.kind == "no" and r.matches(d, s) for h in team.heads for r in rules_for[h]):
+                        continue
+                    if any(h in coach_local[d, s] for h in team.heads):
+                        continue
+                    y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
 
                 # fixed costs of this particular practice
                 cost = 0
@@ -304,23 +349,41 @@ def solve(
                 return True
         return False
 
+    # Usual days set by hand are fixed in the template; the template's other
+    # rules then apply to everyone else around them.
+    forced = set()
+    for name, entries in data.usual.items():
+        t = idx[name]
+        for wd, s in entries:
+            if (t, wd, s) in p:
+                forced.add((t, wd, s))
+                m.Add(p[t, wd, s] == 1)
+            else:
+                data.warnings.append(f"Usual days for {name}: {s} isn't a time {teams[t].age}s can practice, "
+                                     "so it was ignored")
+
     for (t, wd, s), v in p.items():
-        if recurring_block(t, wd, s):
+        if (t, wd, s) not in forced and recurring_block(t, wd, s):
             m.Add(v == 0)
     for wd in WEEKDAYS:
         for s in WEEKDAY_KEYS:
             cap = len([c for c in COURTS if not any(
                 lp.on_site and recurring_local(lp, wd, s) and c in lp.courts
                 for lp in data.locals)])
-            vs = [p[t, wd, s] for t in T if (t, wd, s) in p]
-            if len(vs) > cap:
-                m.Add(sum(vs) <= cap)
+            n_forced = sum(1 for t in T if (t, wd, s) in forced)
+            vs = [p[t, wd, s] for t in T if (t, wd, s) in p and (t, wd, s) not in forced]
+            if len(vs) > max(0, cap - n_forced):
+                m.Add(sum(vs) <= max(0, cap - n_forced))
     for t_list in [[t for t in T if h in teams[t].heads] for h in {h for tm in teams for h in tm.heads}]:
         if len(t_list) > 1:
             for wd in WEEKDAYS:
                 for s in WEEKDAY_KEYS:
-                    vs = [p[t, wd, s] for t in t_list if (t, wd, s) in p]
-                    if len(vs) > 1:
+                    n_forced = sum(1 for t in t_list if (t, wd, s) in forced)
+                    vs = [p[t, wd, s] for t in t_list if (t, wd, s) in p and (t, wd, s) not in forced]
+                    if vs and n_forced >= 1:
+                        for v in vs:
+                            m.Add(v == 0)
+                    elif len(vs) > 1:
                         m.AddAtMostOne(vs)
 
     # Weekend blocks: never one team alone; reward sharing blocks.
@@ -369,6 +432,10 @@ def solve(
                                                  else PRACTICES_PER_WEEK)))
                 continue
             target = min(week_goal, 1 if (team.start and team.start > ws) else PRACTICES_PER_WEEK)
+            cancelled = sum(data.cancels.get((team.name, ws + timedelta(days=i)), 0) for i in range(7))
+            target = max(0, target - cancelled)
+            if target == 0:
+                continue
             w = WEIGHTS["missed_practice"] * team.priority
             if ws in lead_in_weeks[team.name]:  # get both practices in before a tournament
                 w = int(w * 1.5)
@@ -460,7 +527,10 @@ def solve(
 
     # ---------------------------------------------- stage 2: courts --
     weights = {t: team_court_weight(teams[t].age, teams[t].level) for t in T}
-    home_court, court_of = _assign_courts(booked, T, courts_on, weights, seed)
+    fixed_home = {idx[n]: c for n, c in data.usual_court.items()}
+    home_court, court_of = _assign_courts(booked, T, courts_on, weights, seed,
+                                          fixed_courts={k: c for k, c in pinned.items() if c is not None},
+                                          fixed_home=fixed_home)
     elapsed = time.time() - t0
 
     rows = []
@@ -475,6 +545,7 @@ def solve(
             "court": court_of[t, d, s], "kind": "Practice", "name": team.name, "club": team.club,
             "age": team.age, "coach": "; ".join(team.staff), "head": "; ".join(team.heads),
             "on_pattern": on_pattern,
+            "pinned": (t, d, s) in pinned,
         })
     # Locals show on every date they run (even weekend days not open for
     # practices), so the calendar fills in as soon as a program is added.
@@ -551,7 +622,7 @@ def solve(
                           shown_weekends, data.tournaments, practice_counts)
 
 
-def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0):
+def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fixed_courts=None, fixed_home=None):
     """Stage 2: put each booked practice on an open court. Better courts go
     to older and 1s teams (court quality x team weight), and teams stay on a
     home court where they can. Returns (home_court, court_of)."""
@@ -561,6 +632,8 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0):
         for c in COURTS:
             home[t, c] = m.NewBoolVar(f"h_{t}_{c}")
         m.AddExactlyOne([home[t, c] for c in COURTS])
+        if fixed_home and t in fixed_home:
+            m.Add(home[t, fixed_home[t]] == 1)
     by_slot = defaultdict(list)
     changes = []
     for (t, d, s) in booked:
@@ -574,6 +647,8 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0):
             if COURT_COST[c]:
                 changes.append(COURT_COST[c] * weights[t] * x[t, d, s, c])
         m.AddExactlyOne([x[t, d, s, c] for c in opts])
+        if fixed_courts and (t, d, s) in fixed_courts and (t, d, s, fixed_courts[t, d, s]) in x:
+            m.Add(x[t, d, s, fixed_courts[t, d, s]] == 1)
     for vs in by_slot.values():
         if len(vs) > 1:
             m.AddAtMostOne(vs)

@@ -448,3 +448,60 @@ def test_coach_roster_adds_coaches_without_teams():
     data = clean(inp, *NOV)
     assert {"Dave", "Cliff", "A"} <= set(data.coaches)
     assert data.roster["Cliff"]["email"] == "c@x.com"
+
+
+# ------------------------------------------------------- manual edits --
+
+def _with_overrides(inp, rows):
+    df = pd.DataFrame(rows)
+    for c in COLUMNS["Overrides"]:
+        if c not in df:
+            df[c] = ""
+    inp.overrides = df[COLUMNS["Overrides"]]
+    return inp
+
+
+def test_manual_add_remove_cancel_and_usual_days():
+    teams = [{"team": "15-A", "age": 15}, {"team": "15-B", "age": 15}, {"team": "16-C", "age": 16}]
+    inp = _inp(teams, [{"who": "15-A", "type": "No", "days": "Mon"}])
+    inp = _with_overrides(inp, [
+        # Add: on a Monday, which 15-A normally can't do, on Court 3.
+        {"team": "15-A", "action": "Add", "date": "11/9/2026", "time": "5:30", "court": "3"},
+        # Usual days: 16-C always Tue/Thu 7:20, home Court 1.
+        {"team": "16-C", "action": "Usual", "days": "Tue, Thu", "time": "7:20", "court": "1"},
+        # Remove 16-C's Tue 11/17 practice (find a makeup) and cancel Thu 11/19 (no makeup).
+        {"team": "16-C", "action": "Remove", "date": "11/17/2026"},
+        {"team": "16-C", "action": "Cancel", "date": "11/19/2026"},
+    ])
+    r = solve(inp, *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    a = pr[(pr["name"] == "15-A") & (pr["date"] == date(2026, 11, 9))]
+    assert list(a["slot"]) == ["5:30"] and list(a["court"]) == [3] and a["pinned"].all()
+    pat = r.pattern[r.pattern["team"] == "16-C"]
+    assert set(zip(pat["day"], pat["slot"])) == {("Tue", "7:20"), ("Thu", "7:20")} and set(pat["court"]) == {1}
+    c = pr[pr["name"] == "16-C"]
+    wk = c[c["date"].between(date(2026, 11, 15), date(2026, 11, 21))]
+    assert date(2026, 11, 17) not in set(wk["date"]) and date(2026, 11, 19) not in set(wk["date"])
+    assert len(wk) == 1                                  # one makeup; the cancelled one isn't made up
+    assert r.shortfalls[r.shortfalls["team"] == "16-C"].empty  # cancelled practice isn't flagged as missing
+
+
+def test_conflicting_manual_changes_explained():
+    teams = [{"team": "16 Black", "age": 16, "head_coach": "Ben"}, {"team": "17-Ben", "age": 17}]
+    inp = _with_overrides(_inp(teams), [
+        {"team": "16 Black", "action": "Add", "date": "11/10/2026", "time": "5:30"},
+        {"team": "17-Ben", "action": "Add", "date": "11/10/2026", "time": "5:30"}])
+    with pytest.raises(ValueError, match="Ben would be coaching two teams at once"):
+        solve(inp, *NOV, time_limit_s=10)
+
+
+def test_weekdays_beat_weekends_and_days_apart():
+    teams = [{"team": f"16-W{i}", "age": 16} for i in range(4)]
+    weekends = [{"date": d} for d in ("11/7/2026", "11/8/2026", "11/14/2026", "11/15/2026")]
+    r = solve(_inp(teams, weekends=weekends), *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert not pr["date"].map(lambda d: d.weekday() >= 5).any()      # weekdays were free: no weekends
+    assert r.metrics["back_to_back"] == 0 if "back_to_back" in r.metrics else True
+    for name, g in pr.groupby("name"):
+        ds = sorted(g["date"])
+        assert all((b - a).days >= 2 for a, b in zip(ds, ds[1:])), name   # a day in between

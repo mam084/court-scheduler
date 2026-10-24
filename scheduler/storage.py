@@ -22,7 +22,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import Column, DateTime, MetaData, String, Table, Text, create_engine, delete, insert, select, update
+from sqlalchemy import Column, DateTime, MetaData, String, Table, Text, create_engine, delete, insert, select, text, update
 
 from .data import ScheduleInput, clean
 from .solver import ScheduleResult
@@ -59,6 +59,19 @@ class Store:
             self.url = f"sqlite:///{DEFAULT_DB}"
         self.engine = create_engine(self.url, pool_pre_ping=True)
         _meta.create_all(self.engine)
+        self._lock_down()
+
+    def _lock_down(self):
+        """On Postgres (e.g. Supabase), turn on row-level security for our
+        table with no policies. Supabase's public REST API then can't read
+        it, while this app (connecting as the table's owner) still can."""
+        if not self.permanent:
+            return
+        try:
+            with self.engine.begin() as c:
+                c.execute(text(f"ALTER TABLE {projects.name} ENABLE ROW LEVEL SECURITY"))
+        except Exception:  # noqa: BLE001  (not owner / not supported: carry on)
+            pass
 
     @property
     def permanent(self) -> bool:

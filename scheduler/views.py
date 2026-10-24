@@ -114,9 +114,12 @@ def _chip(r, stripes, highlight=None, compact=False) -> str:
     if not _hit(r, highlight):
         cls.append("cs-dim")
     name = html.escape(str(r["name"]))
+    if r.get("pinned") == True:  # noqa: E712  (NaN-safe)
+        name = "📌 " + name
     coaches = " · ".join(c.strip() for c in str(r.get("coach") or "").split(";") if c.strip())
     style = f"background:{bg};color:{fg};border-left-color:{stripe}"
-    title = f"{r['slot_label']} · {coaches}" + ("" if "cs-moved" not in cls else " · moved from usual time")
+    title = f"{r['slot_label']} · {coaches}" + ("" if "cs-moved" not in cls else " · moved from usual time") \
+        + (" · placed by hand" if r.get("pinned") == True else "")  # noqa: E712
     if compact:
         court = f" · Ct {r['court']}" if not is_local else ""
         return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
@@ -227,6 +230,7 @@ def legend_html(ages, stripes: dict) -> str:
     items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};border-left-color:#9AA3B2">Other</div>')
     items.append('<div class="cs-chip cs-moved" style="background:#fff;color:#C0392B;border-left-color:#fff">'
                  'Moved / makeup</div>')
+    items.append('<div class="cs-chip" style="background:#fff;color:#1F2A44;border-left-color:#fff">📌 Set by hand</div>')
     return CSS + '<div class="cs-legend">' + "".join(items) + "</div>"
 
 
