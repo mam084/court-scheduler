@@ -218,17 +218,39 @@ def court_grid_html(
                 items += [(SLOT_KEYS.index(r["slot"]), _chip(r, stripes, highlight)) for _, r in cell.iterrows()]
             if open_slots and not tn_here:
                 taken = list(cell["slot"]) if len(cell) else []
-                for sl, cs in (open_slots.get(wd) or {}).items():
-                    if c in cs and not any(slots_overlap(sl, x) for x in taken):
-                        items.append((SLOT_KEYS.index(sl) + 0.5,
-                                      f'<div class="cs-open" title="Court {c} is free {SLOTS[sl]}">'
-                                      f'<span class="cs-time">{sl}</span> Open</div>'))
+                free = [sl for sl, cs in (open_slots.get(wd) or {}).items()
+                        if c in cs and not any(slots_overlap(sl, x) for x in taken)]
+                for run in _runs(free):
+                    a_, b_ = run[0], run[-1]
+                    if len(run) == 1:
+                        txt, tip = a_, SLOTS[a_]
+                    else:  # back-to-back weekend blocks read as one span: "9AM–1PM Open"
+                        tip = f"{SLOTS[a_].split('–')[0]}–{SLOTS[b_].split('–')[-1]}"
+                        txt = f"{a_}–{WEEKEND_ENDS.get(b_, b_)}"
+                    items.append((SLOT_KEYS.index(a_) + 0.5,
+                                  f'<div class="cs-open" title="Court {c} is free {html.escape(tip)}">'
+                                  f'<span class="cs-time">{txt}</span> Open</div>'))
             chips += "".join(h for _, h in sorted(items, key=lambda x: x[0]))
             cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
             out.append(f"<td{cls}>{chips}</td>")
         out.append("</tr>")
     out.append("</tbody></table></div>")
     return "".join(out)
+
+
+WEEKEND_ENDS = {"9AM": "11AM", "11AM": "1PM", "1PM": "3PM", "3PM": "5PM", "5PM": "7PM", "7PM": "9PM"}
+
+
+def _runs(slots: list[str]) -> list[list[str]]:
+    """Group back-to-back weekend blocks; weekday times stay separate."""
+    out = []
+    for sl in sorted(slots, key=SLOT_KEYS.index):
+        if (out and sl in WEEKEND_ENDS and out[-1][-1] in WEEKEND_ENDS
+                and WEEKEND_ENDS[out[-1][-1]] == sl):
+            out[-1].append(sl)
+        else:
+            out.append([sl])
+    return out
 
 
 def open_slot_map(day_dates: dict | None, data, closures: dict | None = None) -> dict:

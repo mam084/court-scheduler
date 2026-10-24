@@ -624,3 +624,27 @@ def test_publish_and_what_changed(tmp_path):
     assert "dentist" in row["why"].iloc[0] and head in row["why"].iloc[0]
     b = burden(r2.assignments)
     assert set(b["team"]) == set(pr["name"]) and (b["practices"] > 0).all()
+
+
+def test_open_boxes_mark_free_court_times():
+    from scheduler.config import COURTS, SLOTS, WEEKDAY_KEYS, slots_overlap
+    from scheduler.views import court_grid_html, open_slot_map, week_dates
+    inp = simulate(6, 4, 4, 2026, 11, 7)
+    r = solve(inp, *NOV, time_limit_s=15)
+    data = clean(inp, *NOV)
+    ws = date(2026, 11, 8)
+    dd = week_dates(ws, *NOV)
+    book = r.assignments[r.assignments["date"].map(week_start) == ws]
+    html_ = court_grid_html(book, dd, data.closures, weekend_dates=r.weekend_dates,
+                            open_slots=open_slot_map(dd, data))
+    # Every free weekday court/time gets exactly one "Open" box.
+    expected = 0
+    for wd, d in dd.items():
+        if d == date.min or d.weekday() >= 5 or d in data.closures:
+            continue
+        for c in COURTS:
+            taken = list(book[(book["date"] == d) & (book["court"] == c)]["slot"])
+            expected += sum(1 for s_ in WEEKDAY_KEYS if not any(slots_overlap(s_, x) for x in taken))
+    shown = sum(html_.count(f'is free {SLOTS[s_]}"') for s_ in WEEKDAY_KEYS)
+    assert shown == expected > 0
+    assert 'class="cs-open"' not in court_grid_html(book, dd, data.closures)  # off unless asked

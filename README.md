@@ -20,7 +20,8 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - On-site locals block their courts; off-site programs block only their coaches
 - One team per court per timeslot
 - A head coach is never in two places at once (two teams, or a team plus a local they work)
-- Nothing on a team's or head coach's no-dates, on closure days, or before a team's season start
+- Nothing on closure days, before a team's season start, or where a practice was removed by hand
+- Every team gets 2 practices a week. No-dates are kept unless that's the only way to get there; then the head coach's no-date is broken first on a day an assistant is free, then both coaches', then the team's own. Each one is flagged at the top of the page and in the Review tab
 - Only 14s and under practice at 3:45, and 14s and under never practice at 7:20 (unless the team is marked `late_ok`, and then only when needed)
 - Weekends: only open dates and blocks, only a team's allowed weekend options, and never one team alone in a block
 - Local tournaments take their courts (all by default) for the whole day, plus the coaches of their locals program
@@ -35,7 +36,8 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 |---|---|
 | 2 practices per week | Heaviest weight. Older teams win if courts run out, and shortfalls are spread so teams keep at least 1 practice. |
 | Required weekends | e.g. "the 14th or 15th must be used" |
-| Weekdays over weekends | Weekends are used only when weekdays can't fit 2 practices |
+| Weekdays over weekends | Weekends are used only when weekdays can't fit 2 practices, and then just 1 weekend practice per team that week. Back-to-back weekdays (Tue/Wed) beat a weekend plus a weekday (Sun/Tue) |
+| Keep the published schedule | Rebuilds leave practices (and courts) where the last published version had them, unless something needs them to move |
 | Same weekly schedule | Makeups are flagged in the Review tab |
 | Ranked wishlists | 1st choice, then 2nd choice day/time combos |
 | Coach double-ups | A coach's two teams back-to-back on the same day (girls at 5:30, boys at 7:20) |
@@ -52,14 +54,15 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 
 - **Saved schedules:** create a schedule (name, dates, then upload the club spreadsheet or try the simulated club). Everything saves automatically: inputs, programs and tournaments you add, edits, dates, and the latest solved schedule. Refreshing or reopening the page's link (`?project=…`) picks up where you left off, and the **Schedule** menu lists every saved schedule.
 
-- **Court view:** courts as rows and days as columns, with each practice, its time and its coaches in the box. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
+- **Court view:** courts as rows and days as columns (Sunday–Saturday), with each practice, its time and its coaches in the box, and a dashed **Open** box for every free court time. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
 - **Edit practices:** move, remove or add a single practice, or set a team's usual days. Removing one can find a makeup or cancel it outright. Hand-set practices show a 📌 and are kept on every rebuild, with everything else fitted around them. If changes can't all happen (court taken, coach double-booked), the app says why and undoes the change. The full list is in the **Overrides** sheet and can be undone there.
 - **Calendar:** a month view, filterable by club, team or coach.
 - **Tournaments:** add a local tournament (dates, courts, locals program) or a travel tournament (dates, club, age groups, then trim the list of teams going). It shows on the court view, calendar and Excel export, and the schedule is rebuilt around it.
 - **Programs:** add or edit a program (name, Girls/Boys side, days, every week or start/end dates, timeslots including JumpStart 3:30–4:30 and 4:30–5:30, courts, coaches, on/off-site). Editing lets you drop a single court when sign-ups are low. It's blocked off on the courts and calendar right away, with the practice schedule rebuilt around it. Girls programs show in blue, boys programs in green.
 - **Coaches:** add coaches who aren't on a team yet (e.g. ones who only work programs) to the roster.
 - **Coaches:** each coach's head and assistant teams, locals, no-dates and full schedule, plus an `.ics` download for Google Calendar.
-- **Review:** everything that differs from the ideal schedule, with the reason.
+- **Publish:** mark the schedule as sent to coaches. Rebuilds then keep practices where they were, and this page lists every practice that moved, appeared, disappeared or changed court since a published version, with the reason (a new no-date, a program on the court, a tournament…). Downloadable as CSV.
+- **Review:** everything that differs from the ideal schedule, with the reason, plus a per-team count of the less-wanted spots (Court 2, 3:45, weekends, makeups, back-to-back days) for this schedule or every published version.
 - **Inputs:** edit any table in place and re-run.
 - **Exports:** an Excel workbook in the club's grid layout (template, one sheet per week, all bookings, review).
 
@@ -119,6 +122,7 @@ scheduler/
   views.py              court grid + month calendar (HTML)
   export.py             Excel workbook + per-coach .ics
   storage.py            saved schedules (SQLite or Postgres via DATABASE_URL)
+  changes.py            published versions, what changed, per-team burden counts
 tests/                  hard-rule and parsing tests
 ```
 
@@ -134,3 +138,4 @@ tests/                  hard-rule and parsing tests
 - [ ] Live Google Calendar sync
 - [ ] Monthly prompt for coaches to submit next month's no-dates
 - [x] Local and travel tournaments, court quality ranking
+- [x] Published versions, stable rebuilds and a "what changed" list
