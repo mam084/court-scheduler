@@ -62,8 +62,13 @@ def pattern_of(version: dict) -> pd.DataFrame:
     return pd.DataFrame(version.get("pattern", []), columns=PATTERN_COLS)
 
 
+CLUB_TZ = "America/Los_Angeles"
+
+
 def published_at(version: dict) -> datetime:
-    return datetime.fromisoformat(version["at"])
+    """When a version was published, in the club's time zone."""
+    from zoneinfo import ZoneInfo
+    return datetime.fromisoformat(version["at"]).astimezone(ZoneInfo(CLUB_TZ))
 
 
 # --------------------------------------------------------------- reasons --

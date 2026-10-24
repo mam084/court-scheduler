@@ -970,7 +970,7 @@ if VIEW == TAB_PUB:
         if not published:
             st.info("Nothing published yet.")
         else:
-            labels = {i: f"{v['label']} · {published_at(v).astimezone():%b %-d, %-I:%M %p}"
+            labels = {i: f"{v['label']} · {published_at(v):%b %-d, %-I:%M %p}"
                       + (f" · {v['note']}" if v.get("note") else "") for i, v in enumerate(published)}
             order = list(reversed(range(len(published))))
             vi = st.selectbox("Compare the current schedule with", order, format_func=lambda i: labels[i],
@@ -995,7 +995,7 @@ if VIEW == TAB_PUB:
                 st.download_button("⬇️ Download changes (CSV)", view.to_csv(index=False).encode(),
                                    f"changes_since_{ver_['id'][:8]}.csv", mime="text/csv")
             with st.expander(f"All published versions ({len(published)})"):
-                st.dataframe(pd.DataFrame([{"Version": v["label"], "Published": f"{published_at(v).astimezone():%b %-d, %Y %-I:%M %p}",
+                st.dataframe(pd.DataFrame([{"Version": v["label"], "Published": f"{published_at(v):%b %-d, %Y %-I:%M %p}",
                                             "Note": v.get("note", ""), "Practices": len(v.get("practices", []))}
                                            for v in reversed(published)]), hide_index=True, width="stretch")
                 drop = st.multiselect("Remove versions", order, format_func=lambda i: labels[i], key="pub_drop")
