@@ -41,7 +41,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 | Same weekly schedule | Makeups are flagged in the Review tab |
 | Ranked wishlists | 1st choice, then 2nd choice day/time combos |
 | Coach double-ups | A coach's two teams back-to-back on the same day (girls at 5:30, boys at 7:20) |
-| Travel tournament rest | No practice the day before or after (especially no late practice the night before); the week leading in gets priority for 2 practices |
+| Travel tournament rest | No practice the day before or after (especially no late practice the night before). This outranks no-dates: a no-date is broken before a team practices next to a tournament. The week leading in gets priority for 2 practices |
 | Court quality | Courts ranked 1 → 7 → 6 → 5 → 3 → 4 → 2. Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot older and 1s (Black) teams get the better courts |
 | Assistant coaches free | Assistants can be double-booked, at a cost |
 | Not-preferred days, weekend AM/PM preferences | |

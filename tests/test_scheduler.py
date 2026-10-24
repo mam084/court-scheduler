@@ -690,3 +690,21 @@ def test_calendar_shows_local_tournament_on_closed_weekend():
     r = solve(inp, *NOV, time_limit_s=10)
     cal = month_calendar_html(r.assignments, *NOV, weekend_dates=r.weekend_dates, tournaments=r.tournaments)
     assert cal.count("🏆 Boys 14 Local<") == 2   # Sat and Sun, though neither weekend day is open for practices
+
+
+def test_breaking_a_no_date_beats_practicing_next_to_a_tournament():
+    """Only Tue and Fri (the day before a Sat-Sun tournament) are free that
+    week. A no-date on Wed is broken instead of practicing Friday."""
+    teams = [{"team": "16-Ana", "age": 16, "head_coach": "Ana"}]
+    avail = [{"who": "16-Ana", "type": "No", "dates": "11/9"},
+             {"who": "16-Ana", "type": "No", "dates": "11/12"},
+             {"who": "Ana", "type": "No", "dates": "11/11", "note": "work"}]
+    inp = _with_tournaments(_inp(teams, avail), [{"name": "Far West", "type": "Travel", "start_date": "11/14/2026",
+                                                  "end_date": "11/15/2026", "teams": "16-Ana"}])
+    r = solve(inp, *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    wk = pr[pr["date"].between(date(2026, 11, 8), date(2026, 11, 14))]
+    assert len(wk) == 2 and r.shortfalls.empty
+    assert date(2026, 11, 13) not in set(wk["date"])            # not the day before
+    assert date(2026, 11, 16) not in set(pr["date"])            # nor the day after
+    assert [(b["date"], b["head_out"]) for b in r.broken] == [(date(2026, 11, 11), ["Ana"])]

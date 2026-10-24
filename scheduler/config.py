@@ -160,7 +160,10 @@ WEIGHTS = {
     # Travel tournaments: a practice the day before / after the tournament,
     # extra for a late practice the night before. The week leading into a
     # tournament also weighs missed practices 1.5x.
-    "tournament_rest": 100,
+    # Above every no-date break below: breaking a no-date is better than
+    # practicing the day before or after a tournament. Still below
+    # "missed_practice", so a team keeps its 2 practices.
+    "tournament_rest": 800,
     "tournament_late_eve": 60,
     # Keeping a team on its home court (stage 2).
     "home_court": 8,
@@ -186,7 +189,7 @@ WEIGHTS = {
     # the head coach is out but an assistant is free to run practice.
     "break_head_nodate": 250,        # head coach out, an assistant is free
     "break_head_and_asst": 400,      # head coach out, no assistant free either
-    "break_team_nodate": 500,        # the team's own no-date (last resort)
+    "break_team_nodate": 600,        # the team's own no-date (last resort)
     # Stability: reward for keeping a practice where the last published (or
     # last built) schedule had it, so a small change doesn't reshuffle
     # everyone. Same idea for keeping its court.
