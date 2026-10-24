@@ -148,14 +148,17 @@ def court_grid_html(
     highlight: set[str] | None = None,
     stripes: dict | None = None,
     tournaments: list | None = None,
+    weekend_dates=None,
 ) -> str:
-    """Club layout: courts as rows, days as columns, practices listed with
-    their times in each box. `day_dates` is an ordered {day: date} for a
-    specific week (weekend days only when open; date.min = outside the
-    period); None shows the recurring Mon–Fri template."""
+    """Club layout: courts as rows, days as columns (always Sun–Sat),
+    practices listed with their times in each box. `day_dates` is an ordered
+    {day: date} for a specific week (date.min = outside the period); None
+    shows the recurring weekly template. Weekend days not in `weekend_dates`
+    are shown as not open."""
     closures = closures or {}
     stripes = stripes or club_stripes(bookings["club"] if "club" in bookings else [])
-    cols = list(day_dates) if day_dates else list(WEEKDAYS)
+    cols = list(day_dates) if day_dates else list(WEEK_ORDER)
+    open_wk = None if weekend_dates is None else set(weekend_dates)
 
     tournaments = tournaments or []
     blocked, partial, notes = {}, {}, []
@@ -165,6 +168,9 @@ def court_grid_html(
             blocked[wd] = f"Closed: {html.escape(closures[d])}"
         elif d is not None and d == date.min:
             blocked[wd] = "Outside this schedule period"
+        elif (d is not None and open_wk is not None and d.weekday() >= 5 and d not in open_wk
+              and not (len(bookings) and (bookings["day"] == wd).any())):
+            blocked[wd] = "No practices (weekend not open)"
         elif d is not None:
             for tn in tournaments:
                 if not tn.covers(d):
@@ -244,8 +250,8 @@ def month_calendar_html(
     weekend_dates: list[date] | None = None,
     tournaments: list | None = None,
 ) -> str:
-    """Calendar (Mon–Fri, or Sun–Sat when any weekend is open);
-    each day lists its practices (time, team, court)."""
+    """Sun–Sat calendar; each day lists its practices (time, team, court).
+    Weekend days that aren't open are greyed out."""
     closures = closures or {}
     weekend_dates = set(weekend_dates or [])
     stripes = club_stripes(assignments["club"]) if "club" in assignments else {}
@@ -256,14 +262,11 @@ def month_calendar_html(
         df = df[df.apply(lambda r: _hit(r, highlight), axis=1)]
     by_date = {d: g for d, g in df.groupby("date")} if len(df) else {}
 
-    show_days = list(WEEK_ORDER) if weekend_dates else list(WEEKDAYS)
+    show_days = list(WEEK_ORDER)
     out = [CSS, '<div class="cs-wrap"><table class="cs-grid cs-cal"><thead><tr>']
     out += [f'<th{" class=cs-wkend" if wd not in WEEKDAYS else ""}>{wd}</th>' for wd in show_days]
     out.append("</tr></thead><tbody>")
-    first = start
-    while first.weekday() >= 5 and first not in weekend_dates:
-        first += timedelta(days=1)
-    ws = week_start(first)
+    ws = week_start(start)
     while ws <= end:
         out.append("<tr>")
         for wd in show_days:
@@ -274,7 +277,7 @@ def month_calendar_html(
             if d in closures:
                 out.append(f'<td class="cs-closed"><div class="cs-datenum">{_daynum(d, start)}</div>{html.escape(closures[d])}</td>')
                 continue
-            if d.weekday() >= 5 and d not in weekend_dates:
+            if d.weekday() >= 5 and d not in weekend_dates and d not in by_date:
                 out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.5">{d:%-d}</div></td>')
                 continue
             g = by_date.get(d)
@@ -307,16 +310,12 @@ def range_label(start: date, end: date) -> str:
 
 
 def week_dates(ws: date, start: date, end: date, weekend_dates=()) -> dict[str, date]:
-    """Ordered {day: date} for a Sun–Sat week: Mon–Fri always (date.min
-    outside the period), Sun/Sat only when that weekend day is open."""
+    """Ordered {day: date} for every day of a Sun–Sat week (date.min when
+    outside the period). `weekend_dates` is kept for compatibility; whether
+    a weekend is open is shown by court_grid_html."""
     out = {}
-    wk = set(weekend_dates)
     for i, wd in enumerate(WEEK_ORDER):
         d = ws + timedelta(days=i)
-        if wd in ("Sat", "Sun"):
-            if d in wk:
-                out[wd] = d
-            continue
         out[wd] = d if start <= d <= end else date.min
     return out
 

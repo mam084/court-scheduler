@@ -403,7 +403,8 @@ with TAB_COURT:
             if len(wk_short):
                 st.error(f"Short of practices this week: {short_list_text(wk_short)}", icon="⚠️")
             book = a[a["date"].map(week_start) == ws]
-            st.markdown(court_grid_html(book, dd, closures, hl or None, stripes, result.tournaments),
+            st.markdown(court_grid_html(book, dd, closures, hl or None, stripes, result.tournaments,
+                                        result.weekend_dates),
                         unsafe_allow_html=True)
 
         st.download_button("⬇️ Download schedule (Excel)", to_excel(result, closures), f"schedule_{start:%Y%m%d}-{end:%Y%m%d}.xlsx")

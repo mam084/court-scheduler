@@ -505,3 +505,27 @@ def test_weekdays_beat_weekends_and_days_apart():
     for name, g in pr.groupby("name"):
         ds = sorted(g["date"])
         assert all((b - a).days >= 2 for a, b in zip(ds, ds[1:])), name   # a day in between
+
+
+def test_midweek_start_still_gets_two_practices():
+    """A team starting on a Monday still gets its full two practices that week."""
+    inp = ScheduleInput.from_excel("data/sample_input.xlsx")
+    row = inp.teams.iloc[[7]].copy()
+    row["team"], row["club"], row["head_coach"], row["assistants"] = "15-Madi", "Girls", "Madi", ""
+    row["start_date"] = "11/9/2026"
+    inp.teams = pd.concat([inp.teams, row], ignore_index=True)
+    r = solve(inp, date(2026, 11, 1), date(2026, 12, 4), time_limit_s=15)
+    pc = r.practice_counts.set_index(["team", "week_of"])
+    assert pc.loc[("15-Madi", date(2026, 11, 8)), "target"] == 2
+    assert pc.loc[("15-Madi", date(2026, 11, 1)), "target"] == 0
+
+
+def test_views_always_show_weekends():
+    from scheduler.views import court_grid_html, month_calendar_html, week_dates
+    dd = week_dates(date(2026, 11, 8), date(2026, 11, 1), date(2026, 11, 30), [])
+    assert list(dd) == ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    empty = pd.DataFrame(columns=["court", "day", "slot", "club", "kind", "date", "name"])
+    grid = court_grid_html(empty, dd, weekend_dates=[])
+    assert ">Sun<" in grid and ">Sat<" in grid and "weekend not open" in grid
+    cal = month_calendar_html(empty, date(2026, 11, 1), date(2026, 11, 30))
+    assert ">Sun<" in cal and ">Sat<" in cal

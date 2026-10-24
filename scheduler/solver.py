@@ -427,11 +427,15 @@ def solve(
                 continue
             if team.start and team.start > ws + timedelta(days=6):
                 continue
+            # A team whose season starts mid-week still gets the full two
+            # practices, as long as at least two open days are left that week.
+            days_left = sum(1 for d in wdates if not team.start or d >= team.start)
+            start_cap = min(PRACTICES_PER_WEEK, days_left)
             if not any((t, d, s) in y for d in wdates for s in slots_on(d)):
-                no_slot_weeks.append((t, ws, min(week_goal, 1 if (team.start and team.start > ws)
-                                                 else PRACTICES_PER_WEEK)))
+                if start_cap:
+                    no_slot_weeks.append((t, ws, min(week_goal, start_cap)))
                 continue
-            target = min(week_goal, 1 if (team.start and team.start > ws) else PRACTICES_PER_WEEK)
+            target = min(week_goal, start_cap)
             cancelled = sum(data.cancels.get((team.name, ws + timedelta(days=i)), 0) for i in range(7))
             target = max(0, target - cancelled)
             if target == 0:
