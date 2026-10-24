@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from datetime import date
 
@@ -74,7 +75,22 @@ def get_store(url: str | None) -> Store:
     return Store(url)
 
 
-store = get_store(database_url())
+try:
+    store = get_store(database_url())
+except Exception as e:  # noqa: BLE001  (bad DATABASE_URL: explain instead of crashing)
+    url = database_url() or ""
+    st.error("**Couldn't connect to the database in `DATABASE_URL`.**")
+    if re.search(r"@db\.[a-z0-9]+\.supabase\.co", url):
+        st.markdown(
+            "This is Supabase's **Direct connection** string, which Streamlit Cloud can't reach. "
+            "In Supabase, click **Connect** → **Connection string** → change *Method* to "
+            "**Session pooler**, and copy that one instead. It looks like "
+            "`postgresql://postgres.<project>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres`.")
+    else:
+        st.markdown("Check the address and password in the app's **Settings → Secrets**. "
+                    "For Supabase, use the **Session pooler** connection string.")
+    st.caption(f"Details: {type(e).__name__}: {str(e).splitlines()[0][:300] if str(e) else ''}")
+    st.stop()
 PROJECT_KEYS = ["project_id", "project_name", "inp", "result", "result_period", "inp_sig", "last_saved",
                 "range_start", "range_end", "time_limit", "makeup"]
 
