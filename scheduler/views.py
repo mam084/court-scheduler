@@ -13,7 +13,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from .config import COURTS, DAYS, SLOT_KEYS, SLOTS, WEEK_ORDER, WEEKDAY_KEYS, WEEKDAYS, slots_overlap, week_start
+from .config import ALL_COURTS, COURTS, DAYS, court_name, court_short, SLOT_KEYS, SLOTS, WEEK_ORDER, WEEKDAY_KEYS, WEEKDAYS, slots_overlap, week_start
 
 # Age group -> (background, text).
 AGE_COLORS = {
@@ -66,6 +66,9 @@ CSS = """
 .cs-open { border: 1px dashed #B7BECB; border-radius: 6px; padding: 2px 6px; margin: 0 0 4px 0; color: #8A93A5;
            font-size: 11.5px; line-height: 1.25; background: transparent; }
 .cs-open .cs-time { font-weight: 600; }
+.cs-grid tr.cs-pc td { background: #F6F3EC; }
+.cs-grid tr.cs-pc td.cs-daycell { background: #EDE6D6; color: #5A4A2A; border-top: 3px solid #1F2A44; }
+.cs-grid tr.cs-pc td:not(.cs-daycell) { border-top: 3px solid #1F2A44; }
 </style>
 """
 
@@ -140,7 +143,7 @@ def _tourn_chip(tn, compact=False) -> str:
     if tn.kind == "travel" and not compact:
         extra = f"<span style='font-weight:400'> · {html.escape(', '.join(tn.teams))}</span>"
     span = f"{tn.start:%a %-m/%-d}" + ("" if not tn.multi_day else f"–{tn.end:%a %-m/%-d}")
-    title = f"{tn.name} ({'local, courts ' + ', '.join(map(str, tn.courts)) if tn.kind == 'local' else 'travel'}) {span}"
+    title = f"{tn.name} ({'local, ' + ', '.join(court_name(c) for c in tn.courts) if tn.kind == 'local' else 'travel'}) {span}"
     return f'<div class="cs-chip {cls}" title="{html.escape(title)}">{html.escape(tn.label())}{extra}</div>'
 
 
@@ -202,13 +205,15 @@ def court_grid_html(
         cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
         out.append(f"<th{cls}>{wd}{sub}</th>")
     out.append("</tr></thead><tbody>")
-    for i, c in enumerate(COURTS):
-        out.append(f'<tr><td class="cs-daycell">Court {c}</td>')
+    for i, c in enumerate(ALL_COURTS):
+        pc = c not in COURTS
+        out.append(f'<tr{" class=cs-pc" if pc else ""}><td class="cs-daycell">{court_name(c)}'
+                   + ('<br><small style="font-weight:400">programs only</small>' if pc else "") + "</td>")
         court_rows = bookings[bookings["court"] == c] if len(bookings) else bookings
         for wd in cols:
             if wd in blocked:
                 if i == 0:
-                    out.append(f'<td class="cs-closed" rowspan="{len(COURTS)}">{blocked[wd]}</td>')
+                    out.append(f'<td class="cs-closed" rowspan="{len(ALL_COURTS)}">{blocked[wd]}</td>')
                 continue
             cell = court_rows[court_rows["day"] == wd].copy() if len(court_rows) else court_rows
             tn_here = [tn for tn in partial.get(wd, []) if c in tn.courts]
@@ -269,7 +274,7 @@ def open_slot_map(day_dates: dict | None, data, closures: dict | None = None) ->
         if d.weekday() < 5:
             slots, courts = WEEKDAY_KEYS, set(COURTS)
         elif data is not None and d in data.weekends:
-            slots, courts = data.weekends[d].blocks, set(data.weekends[d].courts)
+            slots, courts = data.weekends[d].blocks, set(data.weekends[d].courts) & set(COURTS)
         else:
             continue
         if data is not None:
@@ -341,7 +346,8 @@ def month_calendar_html(
             if d in closures:
                 out.append(f'<td class="cs-closed"><div class="cs-datenum">{_daynum(d, start)}</div>{html.escape(closures[d])}</td>')
                 continue
-            if d.weekday() >= 5 and d not in weekend_dates and d not in by_date:
+            has_tourn = any(tn.covers(d) for tn in (tournaments or []))
+            if d.weekday() >= 5 and d not in weekend_dates and d not in by_date and not has_tourn:
                 out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.5">{d:%-d}</div></td>')
                 continue
             g = by_date.get(d)

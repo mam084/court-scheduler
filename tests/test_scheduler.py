@@ -648,3 +648,63 @@ def test_open_boxes_mark_free_court_times():
     shown = sum(html_.count(f'is free {SLOTS[s_]}"') for s_ in WEEKDAY_KEYS)
     assert shown == expected > 0
     assert 'class="cs-open"' not in court_grid_html(book, dd, data.closures)  # off unless asked
+
+
+def test_practice_court_is_programs_only():
+    from scheduler.config import PRACTICE_COURT
+    from scheduler.views import court_grid_html, week_dates
+    teams = [{"team": f"16-T{i}", "age": 16} for i in range(8)]
+    locals_ = [{"program": "Girls Local", "days": "Tue", "time": "5:30", "courts": "P, 1", "coaches": "",
+                "on_site": "Yes"},
+               {"program": "Clinic", "days": "Thu", "time": "5:30", "courts": "Practice court", "coaches": "",
+                "on_site": "Yes"}]
+    assert parse_courts("1-2, P") == [1, 2, PRACTICE_COURT]
+    inp = _inp(teams, locals_=locals_)
+    r = solve(inp, *NOV, time_limit_s=15)
+    a = r.assignments
+    assert not ((a["kind"] == "Practice") & (a["court"] == PRACTICE_COURT)).any()
+    loc = a[(a["kind"] == "Local") & (a["court"] == PRACTICE_COURT)]
+    assert set(loc["name"]) == {"Girls Local", "Clinic"}
+    # The Clinic sits only on the practice court, so it costs teams no court at all.
+    thu = a[(a["kind"] == "Practice") & (a["day"] == "Thu") & (a["slot"] == "5:30")]
+    assert (thu.groupby("date").size() <= 7).all() and len(thu)
+    dd = week_dates(date(2026, 11, 8), *NOV)
+    assert "Practice court" in court_grid_html(a[a["date"].map(week_start) == date(2026, 11, 8)], dd)
+    # Two programs can't share the practice court at the same time.
+    clash = locals_ + [{"program": "Privates", "days": "Tue", "time": "5:30", "courts": "P", "coaches": "",
+                        "on_site": "Yes"}]
+    with pytest.raises(ValueError):
+        clean(_inp(teams, locals_=clash), *NOV)
+    # Team practices can't be placed there by hand.
+    inp.overrides = pd.DataFrame([{"team": "16-T0", "action": "Add", "date": "11/10", "days": "", "time": "5:30",
+                                   "court": "P", "note": ""}])
+    with pytest.raises(ValueError):
+        clean(inp, *NOV)
+
+
+def test_calendar_shows_local_tournament_on_closed_weekend():
+    from scheduler.views import month_calendar_html
+    teams = [{"team": "16-A", "age": 16}, {"team": "16-B", "age": 16}]
+    inp = _with_tournaments(_inp(teams), [{"name": "Boys 14 Local", "type": "Local", "start_date": "11/14/2026",
+                                           "end_date": "11/15/2026"}])
+    r = solve(inp, *NOV, time_limit_s=10)
+    cal = month_calendar_html(r.assignments, *NOV, weekend_dates=r.weekend_dates, tournaments=r.tournaments)
+    assert cal.count("🏆 Boys 14 Local<") == 2   # Sat and Sun, though neither weekend day is open for practices
+
+
+def test_breaking_a_no_date_beats_practicing_next_to_a_tournament():
+    """Only Tue and Fri (the day before a Sat-Sun tournament) are free that
+    week. A no-date on Wed is broken instead of practicing Friday."""
+    teams = [{"team": "16-Ana", "age": 16, "head_coach": "Ana"}]
+    avail = [{"who": "16-Ana", "type": "No", "dates": "11/9"},
+             {"who": "16-Ana", "type": "No", "dates": "11/12"},
+             {"who": "Ana", "type": "No", "dates": "11/11", "note": "work"}]
+    inp = _with_tournaments(_inp(teams, avail), [{"name": "Far West", "type": "Travel", "start_date": "11/14/2026",
+                                                  "end_date": "11/15/2026", "teams": "16-Ana"}])
+    r = solve(inp, *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    wk = pr[pr["date"].between(date(2026, 11, 8), date(2026, 11, 14))]
+    assert len(wk) == 2 and r.shortfalls.empty
+    assert date(2026, 11, 13) not in set(wk["date"])            # not the day before
+    assert date(2026, 11, 16) not in set(pr["date"])            # nor the day after
+    assert [(b["date"], b["head_out"]) for b in r.broken] == [(date(2026, 11, 11), ["Ana"])]

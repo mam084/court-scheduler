@@ -101,3 +101,14 @@ def test_program_edits_stay_on_programs_and_can_wait_for_rebuild(db):
     next(b for b in at.button if "Auto-schedule" in b.label).click().run()
     assert at.session_state["result"] is not before
     assert "pending_rebuild" not in at.session_state
+
+
+def test_court_view_opens_on_first_week(db):
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "First week", 8)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    show = next(s for s in at.selectbox if s.label == "Show")
+    assert show.value == "Week of Nov 1"
+    assert "Weekly template" in show.options

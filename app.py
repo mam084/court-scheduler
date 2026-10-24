@@ -21,7 +21,7 @@ for _mod in [m for m in list(sys.modules) if m == "scheduler" or m.startswith("s
     del sys.modules[_mod]
 
 from scheduler import ScheduleInput, clean, month_range, simulate, solve
-from scheduler.config import COURTS, DAYS, PROGRAM_KEYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
+from scheduler.config import ALL_COURTS, COURTS, DAYS, court_name, PROGRAM_KEYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
 from scheduler.data import (
     ATTRS, COLUMNS, empty, parse_courts, parse_date_ranges, parse_days, parse_names, parse_times, program_side,
 )
@@ -434,7 +434,7 @@ if VIEW == TAB_COURT:
         weeks = sorted({week_start(d) for d in a["date"]})
         options = ["Weekly template"] + [f"Week of {w:%b %-d}" for w in weeks]
         c1, c2 = st.columns([1, 2])
-        pick = c1.selectbox("Show", options,
+        pick = c1.selectbox("Show", options, index=1 if weeks else 0,  # open on the first week
                             help="The template is each team's usual weekday slot; weeks show the actual dates, "
                                  "including weekends, makeups and closures.")
         hl = set(c2.multiselect("Highlight a club, team or coach", people_options(a)))
@@ -680,9 +680,11 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         times = c1.multiselect("Time", SLOT_CHOICES, default=dv["times"], format_func=slot_label,
                                help="Pick every timeslot it uses (e.g. 3:45 and 5:30 for a 3:45–7:20 program). "
                                     "JumpStart times (3:30–4:30, 4:30–5:30) block 3:45 practices on those courts.")
-        courts = c2.multiselect("Courts used", COURTS, default=dv["courts"], format_func=lambda c: f"Court {c}",
+        courts = c2.multiselect("Courts used", ALL_COURTS, default=[c for c in dv["courts"] if c in ALL_COURTS],
+                                format_func=court_name,
                                 help="Remove a court here if sign-ups are low. Leave empty if not known yet "
-                                     "(it then blocks only the coaches).")
+                                     "(it then blocks only the coaches). The practice court is for programs "
+                                     "only; team practices never use it.")
         c1, c2 = st.columns(2)
         coaches_sel = c1.multiselect("Coaches working it", known_coaches,
                                      default=[c for c in dv["coaches_sel"] if c in known_coaches])
@@ -714,7 +716,7 @@ def program_row(v: dict) -> tuple[list[str], dict]:
         "program": v["name"].strip(), "side": "" if v["side"] == "Other" else v["side"],
         "days": ", ".join(d for d in DAYS if d in v["days"]),
         "time": ", ".join(sorted(v["times"], key=SLOT_KEYS.index)),
-        "courts": ", ".join(str(c) for c in sorted(v["courts"])) or "TBD",
+        "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(v["courts"])) or "TBD",
         "coaches": "; ".join(dict.fromkeys(v["coaches_sel"] + parse_names(v["coaches_new"]))),
         "on_site": "Yes" if v["on_site"] else "No",
         "dates": "" if v["every"] else f"{v['p_start']:%m/%d/%Y}-{v['p_end']:%m/%d/%Y}",
@@ -824,8 +826,8 @@ if VIEW == TAB_TOURN:
             c1, c2 = st.columns(2)
             t_prog = c1.selectbox("Locals program", ["(none)"] + program_names, key="t_prog",
                                   help="Its coaches are blocked for the day.")
-            t_courts = c2.multiselect("Courts used", COURTS, default=COURTS, key="t_courts",
-                                      format_func=lambda c: f"Court {c}")
+            t_courts = c2.multiselect("Courts used", ALL_COURTS, default=COURTS, key="t_courts",
+                                      format_func=court_name)
             t_club, t_ages, t_teams = "", [], []
         else:
             c1, c2 = st.columns(2)
@@ -857,7 +859,8 @@ if VIEW == TAB_TOURN:
                    "club": "" if t_club in ("", "Any") else t_club,
                    "ages": ", ".join(map(str, t_ages)), "teams": ", ".join(t_teams),
                    "program": "" if t_prog == "(none)" else t_prog,
-                   "courts": ", ".join(map(str, sorted(t_courts))) if t_kind == "Local" else "", "note": ""}
+                   "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(t_courts))
+                   if t_kind == "Local" else "", "note": ""}
             inp.tournaments = pd.concat([inp.tournaments, pd.DataFrame([row])], ignore_index=True)
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
             st.session_state.resolve = True
@@ -1066,7 +1069,7 @@ if VIEW == TAB_INPUTS:
         "Wishlist": "Ranked day/time wishes. choice 1 or 2. Blank days = any day.",
         "Locals": "Programs. side = Girls / Boys (colors). on_site = No for programs elsewhere (blocks the coach "
                   "only). Times like `5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend `9AM-1PM`. "
-                  "Courts like `1-4`; blank/TBD until known. Easier: use the Programs tab.",
+                  "Courts like `1-4`, `P` for the practice court; blank/TBD until known. Easier: use the Programs tab.",
         "Weekends": "Open weekend days. open like `9AM-9PM`. Days sharing a group with required = Yes mean "
                     "'at least one of these must be used'.",
         "Closures": "Club closed all day.",

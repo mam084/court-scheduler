@@ -13,7 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .config import COURTS, DAYS, SLOT_KEYS, SLOT_TIMES, SLOTS, WEEK_ORDER, WEEKDAYS
+from .config import ALL_COURTS, COURTS, DAYS, court_name, SLOT_KEYS, SLOT_TIMES, SLOTS, WEEK_ORDER, WEEKDAYS
 from .solver import ScheduleResult, week_start
 
 _thin = Side(style="thin", color="C9CED8")
@@ -45,8 +45,8 @@ def _grid_sheet(wb, title, bookings, day_labels, closed=None, cols=None):
         cell.font, cell.fill = Font(bold=True, color="FFFFFF"), _head
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     ws.row_dimensions[1].height = 32 if day_labels else 18
-    for i, c in enumerate(COURTS, start=2):
-        rc = ws.cell(i, 1, f"Court {c}")
+    for i, c in enumerate(ALL_COURTS, start=2):
+        rc = ws.cell(i, 1, court_name(c))
         rc.font, rc.fill, rc.border = Font(bold=True), _day, _border
         rc.alignment = Alignment(horizontal="center", vertical="center")
         court_rows = bookings[bookings["court"] == c] if len(bookings) else bookings
@@ -63,7 +63,7 @@ def _grid_sheet(wb, title, bookings, day_labels, closed=None, cols=None):
             cell.alignment = Alignment(vertical="top", wrap_text=True)
             cell.border = _border
         ws.row_dimensions[i].height = max(30, 15 * n_lines + 4)
-    ws.column_dimensions["A"].width = 10
+    ws.column_dimensions["A"].width = 14
     for j in range(2, len(cols) + 2):
         ws.column_dimensions[get_column_letter(j)].width = 30
     ws.freeze_panes = "B2"
@@ -106,6 +106,7 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
 
     flat = a.copy()
     flat["date"] = pd.to_datetime(flat["date"]).dt.strftime("%Y-%m-%d")
+    flat["court"] = flat["court"].map(court_name)
     flat = flat[["date", "day", "slot_label", "court", "kind", "name", "club", "coach", "on_pattern"]]
     flat.columns = ["Date", "Day", "Time", "Court", "Type", "Team / Program", "Club", "Coach(es)", "On usual schedule"]
     sh = wb.create_sheet("All Bookings")
@@ -122,7 +123,7 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
         sh.append(["Tournament", "Type", "Start", "End", "Teams / courts"])
         for tn in result.tournaments:
             sh.append([tn.name, tn.kind.title(), f"{tn.start:%Y-%m-%d}", f"{tn.end:%Y-%m-%d}",
-                       ", ".join(tn.teams) if tn.kind == "travel" else "Courts " + ", ".join(map(str, tn.courts))])
+                       ", ".join(tn.teams) if tn.kind == "travel" else ", ".join(court_name(c) for c in tn.courts)])
         for j, w in enumerate([28, 9, 12, 12, 50], start=1):
             sh.column_dimensions[get_column_letter(j)].width = w
         for c in sh[1]:

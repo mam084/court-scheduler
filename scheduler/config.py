@@ -4,7 +4,28 @@ Everything the club might want to tune lives here so the solver code
 stays readable.
 """
 
-COURTS = [1, 2, 3, 4, 5, 6, 7]
+COURTS = [1, 2, 3, 4, 5, 6, 7]          # courts team practices can use
+# The practice court: programs (locals, privates) can use it, team
+# practices never do. Stored as court 8 so everything else stays numeric.
+PRACTICE_COURT = 8
+ALL_COURTS = COURTS + [PRACTICE_COURT]  # every court a program can book
+
+
+def court_name(c) -> str:
+    """'Court 3', or 'Practice court' for the practice court."""
+    try:
+        c = int(c)
+    except (TypeError, ValueError):
+        return str(c)
+    return "Practice court" if c == PRACTICE_COURT else f"Court {c}"
+
+
+def court_short(c) -> str:
+    """Compact label: '3' or 'P'."""
+    try:
+        return "P" if int(c) == PRACTICE_COURT else str(int(c))
+    except (TypeError, ValueError):
+        return str(c)
 
 # Court quality, best first. Court 2 is clearly the worst.
 COURT_RANK = [1, 7, 6, 5, 3, 4, 2]
@@ -139,7 +160,10 @@ WEIGHTS = {
     # Travel tournaments: a practice the day before / after the tournament,
     # extra for a late practice the night before. The week leading into a
     # tournament also weighs missed practices 1.5x.
-    "tournament_rest": 100,
+    # Above every no-date break below: breaking a no-date is better than
+    # practicing the day before or after a tournament. Still below
+    # "missed_practice", so a team keeps its 2 practices.
+    "tournament_rest": 800,
     "tournament_late_eve": 60,
     # Keeping a team on its home court (stage 2).
     "home_court": 8,
@@ -165,7 +189,7 @@ WEIGHTS = {
     # the head coach is out but an assistant is free to run practice.
     "break_head_nodate": 250,        # head coach out, an assistant is free
     "break_head_and_asst": 400,      # head coach out, no assistant free either
-    "break_team_nodate": 500,        # the team's own no-date (last resort)
+    "break_team_nodate": 600,        # the team's own no-date (last resort)
     # Stability: reward for keeping a practice where the last published (or
     # last built) schedule had it, so a small change doesn't reshuffle
     # everyone. Same idea for keeping its court.

@@ -50,7 +50,7 @@ import pandas as pd
 
 from .config import PROGRAM_KEYS, slots_overlap
 from .config import (
-    AM_BLOCKS, COURTS, DAYS, PM_BLOCKS, SLOT_KEYS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND,
+    ALL_COURTS, AM_BLOCKS, COURTS, DAYS, PRACTICE_COURT, PM_BLOCKS, SLOT_KEYS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND,
     WEEKEND_KEYS, default_priority, slot_allowed_for_age,
 )
 
@@ -272,21 +272,25 @@ def parse_slot(value) -> str | None:
 
 
 def parse_courts(value) -> list[int]:
-    """'1-3' -> [1,2,3]; '1, 4,5' -> [1,4,5]; 'All' -> every court; blank/'TBD' -> []."""
+    """'1-3' -> [1,2,3]; '1, 4,5' -> [1,4,5]; 'All' -> courts 1-7; 'P' or
+    'Practice' -> the practice court (programs only); blank/'TBD' -> []."""
     if blank(value) or str(value).strip().lower() in ("tbd", "?"):
         return []
     if str(value).strip().lower() == "all":
         return list(COURTS)
     out: list[int] = []
     for part in parse_list(value):
-        if "-" in part:
+        if part.strip().lower().replace(" court", "").replace(" ct", "") in ("p", "pc", "practice", "prac"):
+            out.append(PRACTICE_COURT)
+        elif "-" in part:
             a, b = (int(x) for x in part.split("-"))
             out.extend(range(a, b + 1))
         else:
             out.append(int(float(part)))
-    bad = [c for c in out if c not in COURTS]
+    bad = [c for c in out if c not in ALL_COURTS]
     if bad:
-        raise ValueError(f"Court(s) {bad} don't exist (courts are {COURTS[0]}-{COURTS[-1]})")
+        raise ValueError(f"Court(s) {bad} don't exist (courts are {COURTS[0]}-{COURTS[-1]}, "
+                         "plus P for the practice court)")
     return sorted(set(out))
 
 
@@ -902,7 +906,9 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
         try:
             times = parse_times(r.get("time"))
             court = None if blank(r.get("court")) or str(r.get("court")).strip().lower() == "any" \
-                else int(float(r["court"]))
+                else (parse_courts(r["court"]) or [None])[0]
+            if court == PRACTICE_COURT:
+                raise ValueError("team practices can't use the practice court")
             if court is not None and court not in COURTS:
                 raise ValueError(f"court {court} doesn't exist")
             if action.startswith("add") or action.startswith("pin") or action.startswith("move"):
