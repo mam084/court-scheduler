@@ -166,6 +166,11 @@ WEIGHTS = {
     "break_head_nodate": 250,        # head coach out, an assistant is free
     "break_head_and_asst": 400,      # head coach out, no assistant free either
     "break_team_nodate": 500,        # the team's own no-date (last resort)
+    # Stability: reward for keeping a practice where the last published (or
+    # last built) schedule had it, so a small change doesn't reshuffle
+    # everyone. Same idea for keeping its court.
+    "keep_previous": 40,
+    "keep_court": 6,
     # A second weekend practice for a team in the same week.
     "second_weekend": 200,
     # Reward: a coach's two teams in back-to-back slots the same day

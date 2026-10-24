@@ -574,3 +574,23 @@ def test_second_weekend_practice_avoided():
     we = pr[pr["date"].map(lambda d: d.weekday() >= 5)]
     per = we.groupby(["name", we["date"].map(week_start)]).size()
     assert (per <= 1).all(), per[per > 1]
+
+
+def test_rebuild_keeps_previous_schedule():
+    """A small change (one new no-date) moves only what it has to."""
+    inp = simulate(8, 4, 4, 2026, 11, 1)
+    r1 = solve(inp, *NOV, time_limit_s=20)
+    pr1 = r1.assignments[r1.assignments["kind"] == "Practice"]
+    victim = pr1.iloc[len(pr1) // 2]
+    inp.availability = pd.concat([inp.availability, pd.DataFrame([{
+        "who": victim["name"], "type": "No", "dates": f"{victim['date']:%m/%d}", "times": victim["slot"]}])],
+        ignore_index=True)
+    r2 = solve(inp, *NOV, time_limit_s=20, previous=r1.assignments, previous_pattern=r1.pattern, seed=5)
+    key = lambda df: set(zip(df["name"], df["date"], df["slot"]))  # noqa: E731
+    pr2 = r2.assignments[r2.assignments["kind"] == "Practice"]
+    moved = key(pr1) - key(pr2)
+    assert (victim["name"], victim["date"], victim["slot"]) in moved
+    assert len(moved) <= 3, moved
+    assert r2.metrics["moved_from_previous"] == len(moved)
+    same = pr1.merge(pr2, on=["name", "date", "slot"], suffixes=("1", "2"))
+    assert (same["court1"] == same["court2"]).mean() > 0.9

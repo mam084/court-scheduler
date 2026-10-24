@@ -84,7 +84,11 @@ def solve(
     time_limit_s: float = 30.0,
     makeup_closures: bool = True,
     seed: int = 0,
+    previous: pd.DataFrame | None = None,
+    previous_pattern: pd.DataFrame | None = None,
 ) -> ScheduleResult:
+    """previous: an earlier schedule's assignments (e.g. the published one).
+    Practices stay where they were unless something needs them to move."""
     data: CleanInput = clean(inp, start, end)
     t0 = time.time()
     teams = data.teams
@@ -547,6 +551,25 @@ def solve(
                         doubles.append(bv)
                         obj.append(-WEIGHTS["double_up"] * bv)
 
+    # ------------------------------------------- stability (previous) --
+    prev_keys, prev_court = set(), {}
+    if previous is not None and len(previous):
+        pv = previous[previous["kind"] == "Practice"] if "kind" in previous else previous
+        for r in pv.itertuples():
+            if r.name in idx and start <= r.date <= end:
+                k = (idx[r.name], r.date, r.slot)
+                prev_keys.add(k)
+                if pd.notna(getattr(r, "court", None)):
+                    prev_court[k] = int(r.court)
+        for k, v in y.items():
+            if k in prev_keys:
+                obj.append(-WEIGHTS["keep_previous"] * v)
+            m.AddHint(v, 1 if k in prev_keys else 0)
+    if previous_pattern is not None and len(previous_pattern):
+        pp = {(idx[r.team], r.day, r.slot) for r in previous_pattern.itertuples() if r.team in idx}
+        for k, v in p.items():
+            m.AddHint(v, 1 if k in pp else 0)
+
     m.Minimize(sum(obj))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_s
@@ -567,7 +590,7 @@ def solve(
     fixed_home = {idx[n]: c for n, c in data.usual_court.items()}
     home_court, court_of = _assign_courts(booked, T, courts_on, weights, seed,
                                           fixed_courts={k: c for k, c in pinned.items() if c is not None},
-                                          fixed_home=fixed_home)
+                                          fixed_home=fixed_home, prev_court=prev_court)
     elapsed = time.time() - t0
 
     rows = []
@@ -640,6 +663,7 @@ def solve(
         "double_ups": int(sum(solver.Value(v) for v in doubles)),
         "assistant_conflicts": int(sum(solver.Value(v) for v in asst_conflicts.values())),
         "objective": solver.ObjectiveValue(),
+        "moved_from_previous": (len(prev_keys - set(booked)) if prev_keys else None),
     }
     shown_weekends = sorted(set(weekend_dates) | ({d for d in assignments["date"] if d.weekday() >= 5}
                                                   if len(assignments) else set()))
@@ -684,7 +708,8 @@ def _broken_who(b: dict) -> str:
     return "; ".join(parts)
 
 
-def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fixed_courts=None, fixed_home=None):
+def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fixed_courts=None, fixed_home=None,
+                   prev_court=None):
     """Stage 2: put each booked practice on an open court. Better courts go
     to older and 1s teams (court quality x team weight), and teams stay on a
     home court where they can. Returns (home_court, court_of)."""
@@ -709,6 +734,11 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fix
             if COURT_COST[c]:
                 changes.append(COURT_COST[c] * weights[t] * x[t, d, s, c])
         m.AddExactlyOne([x[t, d, s, c] for c in opts])
+        pc = (prev_court or {}).get((t, d, s))
+        if pc is not None and (t, d, s, pc) in x:
+            changes.append(-WEIGHTS["keep_court"] * x[t, d, s, pc])
+            for c in opts:
+                m.AddHint(x[t, d, s, c], 1 if c == pc else 0)
         if fixed_courts and (t, d, s) in fixed_courts and (t, d, s, fixed_courts[t, d, s]) in x:
             m.Add(x[t, d, s, fixed_courts[t, d, s]] == 1)
     for vs in by_slot.values():
