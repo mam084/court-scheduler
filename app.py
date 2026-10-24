@@ -181,7 +181,7 @@ with st.sidebar:
         up = None
         if source == "Upload spreadsheet":
             up = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"])
-            st.download_button("Download blank template", blank_template(new_start, new_end),
+            st.download_button("Download blank template", lambda: blank_template(new_start, new_end),
                                "court_scheduler_template.xlsx",
                                help="Sheets: Teams, Availability, Wishlist, Locals, Weekends, Closures, Tournaments. "
                                     "Example rows show the format.")
@@ -191,7 +191,7 @@ with st.sidebar:
                 n_boys = st.slider("Boys teams", 0, 12, 4)
                 n_locals = st.slider("Locals programs", 0, 6, 4)
                 seed = st.number_input("Random seed", 0, 9999, 7, help="Change for a different simulated club")
-        if st.button("Create schedule", type="primary", use_container_width=True):
+        if st.button("Create schedule", type="primary", width="stretch"):
             problems = []
             if new_end < new_start:
                 problems.append("The end date is before the start date.")
@@ -234,7 +234,7 @@ with st.sidebar:
         st.date_input("To", key="range_end", format="MM/DD/YYYY")
         with st.expander("Replace data with a spreadsheet"):
             rep = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"], key=f"replace_{current}")
-            if rep is not None and st.button("Replace all input tables", use_container_width=True):
+            if rep is not None and st.button("Replace all input tables", width="stretch"):
                 try:
                     st.session_state.inp = ScheduleInput.from_excel(rep)
                     st.session_state.inp_sig = ("project", current, rep.name, rep.size)
@@ -253,16 +253,16 @@ with st.sidebar:
                         help="Rebuilding moves only the practices that have to move, starting from the last "
                              "published schedule (or the current one if nothing's published). Turn off to "
                              "start fresh.")
-        run = st.button("⚡ Auto-schedule", type="primary", use_container_width=True)
+        run = st.button("⚡ Auto-schedule", type="primary", width="stretch")
         with st.expander("Rename or delete"):
             nn = st.text_input("Name", value=st.session_state.get("project_name", ""), key=f"rename_{current}")
-            if st.button("Rename", use_container_width=True) and nn.strip():
+            if st.button("Rename", width="stretch") and nn.strip():
                 store.rename(current, nn.strip())
                 saved_changed()
                 st.session_state.project_name = nn.strip()
                 st.rerun()
             sure = st.checkbox("Yes, delete this schedule for everyone", key=f"del_{current}")
-            if st.button("🗑️ Delete schedule", disabled=not sure, use_container_width=True):
+            if st.button("🗑️ Delete schedule", disabled=not sure, width="stretch"):
                 store.delete(current)
                 saved_changed()
                 close_project()
@@ -468,7 +468,7 @@ if VIEW == TAB_COURT:
                                         open_slots=open_slot_map(dd, cleaned) if show_open else None),
                         unsafe_allow_html=True)
 
-        st.download_button("⬇️ Download schedule (Excel)", to_excel(result, closures), f"schedule_{start:%Y%m%d}-{end:%Y%m%d}.xlsx")
+        st.download_button("⬇️ Download schedule (Excel)", lambda: to_excel(result, closures), f"schedule_{start:%Y%m%d}-{end:%Y%m%d}.xlsx")
 
 # ------------------------------------------------------------ calendar --
 if VIEW == TAB_CAL:
@@ -526,7 +526,7 @@ if VIEW == TAB_EDIT:
                 st.dataframe(pd.DataFrame({
                     "Date": tp["date"].map(lambda d: f"{d:%a %b %-d}"), "Time": tp["slot_label"],
                     "Court": tp["court"], "Set by hand": tp.get("pinned", False).map(lambda v: "📌" if v == True else ""),  # noqa: E712
-                }), hide_index=True, use_container_width=True, height=min(420, 38 + 35 * len(tp)))
+                }), hide_index=True, width="stretch", height=min(420, 38 + 35 * len(tp)))
             else:
                 st.caption("No practices in this schedule.")
 
@@ -549,7 +549,7 @@ if VIEW == TAB_EDIT:
                                           key=f"ed_ns_{pk}")
                         nc = st.selectbox("Court", ["Any"] + COURTS, key=f"ed_nc_{pk}",
                                           format_func=lambda c: "Any open court" if c == "Any" else f"Court {c}")
-                        if st.button("Move it", type="primary", use_container_width=True):
+                        if st.button("Move it", type="primary", width="stretch"):
                             apply_overrides([
                                 {"team": e_team, "action": "Remove", "date": f"{old['date']:%m/%d/%Y}", "days": "",
                                  "time": old["slot"], "court": "", "note": f"moved to {nd:%a %-m/%-d} {ns}"},
@@ -559,7 +559,7 @@ if VIEW == TAB_EDIT:
                     else:
                         how = st.radio("Then", ["Find a makeup that week if possible", "Cancel it (no makeup)"],
                                        key="ed_how")
-                        if st.button("Remove it", type="primary", use_container_width=True):
+                        if st.button("Remove it", type="primary", width="stretch"):
                             act = "Remove" if how.startswith("Find") else "Cancel"
                             apply_overrides([{"team": e_team, "action": act, "date": f"{old['date']:%m/%d/%Y}",
                                               "days": "", "time": old["slot"], "court": "", "note": "removed by hand"}],
@@ -571,7 +571,7 @@ if VIEW == TAB_EDIT:
                 ac = st.selectbox("Court", ["Any"] + COURTS, key="ed_ac",
                                   format_func=lambda c: "Any open court" if c == "Any" else f"Court {c}")
                 st.caption("A team gets at most 2 practices a week, so the scheduler may drop another one that week.")
-                if st.button("Add it", type="primary", use_container_width=True):
+                if st.button("Add it", type="primary", width="stretch"):
                     apply_overrides([{"team": e_team, "action": "Add", "date": f"{ad:%m/%d/%Y}", "days": "",
                                       "time": as_, "court": "" if ac == "Any" else str(ac), "note": "added by hand"}],
                                     f"Added a practice for {e_team} on {ad:%a %b %-d} at {as_}.")
@@ -583,7 +583,7 @@ if VIEW == TAB_EDIT:
                                   if len(usual_rows) and usual_rows["slot"].iloc[0] in WEEKDAY_KEYS else 1)
                 uc = st.selectbox("Home court", ["Any"] + COURTS, key=f"ed_uc_{e_team}",
                                   format_func=lambda c: "Scheduler picks" if c == "Any" else f"Court {c}")
-                if st.button("Set usual days", type="primary", use_container_width=True, disabled=not ud):
+                if st.button("Set usual days", type="primary", width="stretch", disabled=not ud):
                     keep = inp.overrides[~((inp.overrides["team"] == e_team) &
                                            inp.overrides["action"].astype(str).str.lower().str.startswith("usual"))]
                     original = inp.overrides.copy()
@@ -605,7 +605,7 @@ if VIEW == TAB_EDIT:
                 lab = {i: f"{r['team']} · {r['action']} · " + " ".join(x for x in (r["date"], r["days"], r["time"],
                        f"Court {r['court']}" if str(r["court"]).strip() else "") if str(x).strip())
                        for i, r in view.iterrows()}
-                st.dataframe(view.rename(columns=str.title), hide_index=True, use_container_width=True)
+                st.dataframe(view.rename(columns=str.title), hide_index=True, width="stretch")
                 undo = st.multiselect("Undo changes", list(lab), format_func=lambda i: lab[i], key="ed_undo")
                 if st.button("↩️ Undo selected", disabled=not undo):
                     inp.overrides = inp.overrides.drop(index=undo).reset_index(drop=True)
@@ -690,7 +690,7 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         cols = st.columns(len(submit_labels) + 3)
         clicked = None
         for i, lab in enumerate(submit_labels):
-            if cols[i].form_submit_button(lab, type="primary" if i == 0 else "secondary", use_container_width=True):
+            if cols[i].form_submit_button(lab, type="primary" if i == 0 else "secondary", width="stretch"):
                 clicked = lab
     return clicked, dict(name=name, side=side, on_site=on_site, days=days, every=every, p_start=p_start,
                          p_end=p_end, times=times, courts=courts, coaches_sel=coaches_sel, coaches_new=coaches_new)
@@ -801,7 +801,7 @@ if VIEW == TAB_PROG:
         st.dataframe(view.rename(columns={"program": "Program", "side": "Side", "days": "Days", "time": "Time",
                                           "courts": "Courts", "coaches": "Coaches", "on_site": "On site",
                                           "dates": "Dates"}),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
 
 # --------------------------------------------------------- tournaments --
 if VIEW == TAB_TOURN:
@@ -873,10 +873,10 @@ if VIEW == TAB_TOURN:
         tv = inp.tournaments.copy().fillna("")
         tv.index = [f"{r['name']} · {r['type']} · {r['start_date']}" for _, r in tv.iterrows()]
         st.dataframe(tv[["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts"]]
-                     .rename(columns=lambda c: c.replace("_", " ").title()), hide_index=True, use_container_width=True)
+                     .rename(columns=lambda c: c.replace("_", " ").title()), hide_index=True, width="stretch")
         c1, c2 = st.columns([3, 1])
         drop_t = c1.multiselect("Remove tournaments", list(tv.index), placeholder="Choose tournaments to remove")
-        if c2.button("🗑️ Remove", disabled=not drop_t, use_container_width=True, key="rm_tourn"):
+        if c2.button("🗑️ Remove", disabled=not drop_t, width="stretch", key="rm_tourn"):
             keep = [i for i, lab in enumerate(tv.index) if lab not in drop_t]
             inp.tournaments = inp.tournaments.iloc[keep].reset_index(drop=True)
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
@@ -944,9 +944,9 @@ if VIEW == TAB_COACH:
                     mine[["date", "day", "slot_label", "court", "kind", "name", "role"]].rename(columns={
                         "date": "Date", "day": "Day", "slot_label": "Time", "court": "Court(s)", "kind": "Type",
                         "name": "Team / Program", "role": "Role"}),
-                    hide_index=True, use_container_width=True)
+                    hide_index=True, width="stretch")
                 st.download_button(f"📆 Add {coach}'s schedule to Google Calendar (.ics)",
-                                   to_ics(result, coach), f"{coach.replace(' ', '_')}_{start:%Y%m%d}-{end:%Y%m%d}.ics",
+                                   lambda: to_ics(result, coach), f"{coach.replace(' ', '_')}_{start:%Y%m%d}-{end:%Y%m%d}.ics",
                                    mime="text/calendar",
                                    help="In Google Calendar: Settings → Import & export → Import this file.")
 
@@ -991,13 +991,13 @@ if VIEW == TAB_PUB:
                 view = ch[ch["team"].isin(who)] if who else ch
                 st.dataframe(view.assign(week_of=view["week_of"].map(lambda d: f"{d:%b %-d}")).rename(columns={
                     "team": "Team", "week_of": "Week of", "change": "Change", "was": "Was", "now": "Now",
-                    "why": "Why"}), hide_index=True, use_container_width=True)
+                    "why": "Why"}), hide_index=True, width="stretch")
                 st.download_button("⬇️ Download changes (CSV)", view.to_csv(index=False).encode(),
                                    f"changes_since_{ver_['id'][:8]}.csv", mime="text/csv")
             with st.expander(f"All published versions ({len(published)})"):
                 st.dataframe(pd.DataFrame([{"Version": v["label"], "Published": f"{published_at(v).astimezone():%b %-d, %Y %-I:%M %p}",
                                             "Note": v.get("note", ""), "Practices": len(v.get("practices", []))}
-                                           for v in reversed(published)]), hide_index=True, use_container_width=True)
+                                           for v in reversed(published)]), hide_index=True, width="stretch")
                 drop = st.multiselect("Remove versions", order, format_func=lambda i: labels[i], key="pub_drop")
                 if st.button("🗑️ Remove selected", disabled=not drop):
                     st.session_state.published = [v for i, v in enumerate(published) if i not in drop]
@@ -1036,7 +1036,7 @@ if VIEW == TAB_REVIEW:
             bt = bt.assign(age=bt["team"].map(ages)).sort_values(["age", "team"]).drop(columns="age")
             top = {c: max(1, int(bt[c].max())) for c in ["court_2", "at_3_45", "weekend", "off_usual", "back_to_back"]}
             bar = lambda lab, c: st.column_config.ProgressColumn(lab, format="%d", min_value=0, max_value=top[c])  # noqa: E731
-            st.dataframe(bt, hide_index=True, use_container_width=True, column_config={
+            st.dataframe(bt, hide_index=True, width="stretch", column_config={
                 "team": "Team", "practices": "Practices", "court_2": bar("Court 2", "court_2"),
                 "at_3_45": bar("3:45", "at_3_45"), "weekend": bar("Weekend", "weekend"),
                 "off_usual": bar("Off usual", "off_usual"), "back_to_back": bar("Back-to-back", "back_to_back")})
@@ -1049,7 +1049,7 @@ if VIEW == TAB_REVIEW:
             iss = result.issues[result.issues["severity"].isin(sev)]
             st.dataframe(iss.rename(columns={"severity": "Severity", "team": "Team", "week_of": "Week of",
                                              "issue": "Issue", "detail": "Why"}),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
 
 # -------------------------------------------------------------- inputs --
 if VIEW == TAB_INPUTS:
@@ -1089,10 +1089,10 @@ if VIEW == TAB_INPUTS:
         df = df[COLUMNS[sheet]].astype(object)
         df = df.map(lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) or str(v) in ("None", "nan", "NaT")
                     else str(v)).astype(object)
-        edited = st.data_editor(df, num_rows="dynamic", use_container_width=True,
+        edited = st.data_editor(df, num_rows="dynamic", width="stretch",
                                 key=f"edit_{attr}_{sig_key}", hide_index=True)
         setattr(inp, attr, edited)
-    st.download_button("⬇️ Download inputs (Excel)", inp.to_excel_bytes(), "club_inputs.xlsx")
+    st.download_button("⬇️ Download inputs (Excel)", inp.to_excel_bytes, "club_inputs.xlsx")
 
 
 # ----------------------------------------------------------- autosave --
