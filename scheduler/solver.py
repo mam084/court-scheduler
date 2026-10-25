@@ -207,6 +207,11 @@ def solve(
         raise ValueError("These manual changes can't all happen:\n- " + "\n- ".join(problems))
 
     # ---------------------------------------------- decision variables --
+    # Teams whose 1st-choice wishlist asks for 3:45: no 3:45 cost for them.
+    wants_345 = {t: any(w.choice == 1 and w.times and "3:45" in w.times
+                        for w in data.wishes.get(teams[t].name, []))
+                 for t in T}
+
     y = {}
     broken = {}  # (t, d, s) -> details, for practices that land on a no-date
     for t in T:
@@ -260,7 +265,8 @@ def solve(
                     if team.weekend_pref and not any(w.matches(d, s) for w in team.weekend_pref):
                         cost += WEIGHTS["weekend_pref"]
                 else:
-                    cost += WEIGHTS["slot_fit"] * slot_cost(team.age, s)
+                    if not (s == "3:45" and wants_345[t]):
+                        cost += WEIGHTS["slot_fit"] * slot_cost(team.age, s)
                     wishes = data.wishes.get(team.name)
                     if wishes:
                         hit = [w.choice for w in wishes if w.matches(d, s)]
@@ -271,6 +277,8 @@ def solve(
                 who = [team.name] + team.staff
                 if any(r.kind == "not_preferred" and r.matches(d, s) for w_ in who for r in rules_for[w_]):
                     cost += WEIGHTS["not_preferred"]
+                    if s == "3:45":
+                        cost += WEIGHTS["not_preferred_345"]
                 if any(r.kind == "no" and r.matches(d, s) for a in team.assistants for r in rules_for[a]):
                     cost += WEIGHTS["assistant_conflict"]
                 if is_late_exception(team.age, s):
@@ -499,6 +507,15 @@ def solve(
                 miss = m.NewBoolVar(f"miss_{t}_{d}_{s}")
                 m.Add(miss >= p[t, wd, s] - v)
                 obj.append(WEIGHTS["off_pattern"] * 2 * miss)
+
+        # Rotate 3:45: a usual week with both practices at 3:45 costs extra
+        # (once per week in the range), so the early slot is shared around
+        # the young teams. Skipped for teams that asked for 3:45.
+        early = [p[t, wd, "3:45"] for wd in WEEKDAYS if (t, wd, "3:45") in p]
+        if not wants_345[t] and len(early) > 1:
+            both = m.NewBoolVar(f"both345_{t}")
+            m.Add(sum(early) - 1 <= both)
+            obj.append(WEIGHTS["second_345"] * len(weeks) * both)
 
         # Only one weekend practice a week when possible.
         for ws, wdates in weeks.items():

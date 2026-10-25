@@ -723,3 +723,51 @@ def test_saturday_then_sunday_avoided():
         days = set(g["date"])
         assert not any(d.weekday() == 5 and d + pd.Timedelta(days=1) in days for d in days), name
     assert r.shortfalls.empty
+
+
+def _early_pressure_club(extra_avail=()):
+    """Four young teams, with a clinic taking all but one court at 5:30 every
+    weekday: 5 spots at 5:30 a week for 8 practices, so 3 have to go to 3:45."""
+    teams = [{"team": "12-Ana", "age": 12}, {"team": "13-Bo", "age": 13},
+             {"team": "14-Cy", "age": 14}, {"team": "14-Di", "age": 14}]
+    locals_ = [{"program": "Clinic", "days": "Mon, Tue, Wed, Thu, Fri", "time": "5:30", "courts": "1-6",
+                "coaches": "", "on_site": "Yes"}]
+    return _inp(teams, list(extra_avail), locals_=locals_)
+
+
+def _early_per_week(r):
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    early = pr[pr["slot"] == "3:45"]
+    return early.groupby(["name", early["date"].map(week_start)]).size()
+
+
+def test_3_45_rotates_and_youngest_go_first():
+    inp = _early_pressure_club()
+    r = solve(inp, *NOV, time_limit_s=20)
+    _check_hard_rules(inp, r)
+    assert r.shortfalls.empty
+    per_week = _early_per_week(r)
+    assert per_week.max() == 1, per_week[per_week > 1]  # shared, not doubled up on one team
+    # The 3 early spots go to the youngest teams first.
+    template = r.pattern
+    early_teams = set(template[template["slot"] == "3:45"]["team"])
+    assert {"12-Ana", "13-Bo"} <= early_teams
+
+
+def test_team_that_asks_for_3_45_gets_it():
+    teams = [{"team": "13-Eve", "age": 13}, {"team": "13-Fay", "age": 13}]
+    wish = [{"team": "13-Eve", "choice": 1, "times": "3:45"}]
+    r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert (pr[pr["name"] == "13-Eve"]["slot"] == "3:45").all()
+    assert not (pr[pr["name"] == "13-Fay"]["slot"] == "3:45").any()  # 3:45 is still a last resort
+
+
+def test_not_preferred_3_45_kept_off_early_slot():
+    avail = [{"who": "12-Ana", "type": "Not preferred", "times": "3:45"}]
+    inp = _early_pressure_club(avail)
+    r = solve(inp, *NOV, time_limit_s=20)
+    _check_hard_rules(inp, r)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert not (pr[pr["name"] == "12-Ana"]["slot"] == "3:45").any()
+    assert r.shortfalls.empty

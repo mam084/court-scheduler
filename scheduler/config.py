@@ -203,6 +203,13 @@ WEIGHTS = {
     # Reward: a coach's two teams in back-to-back slots the same day
     # (e.g. girls at 5:30 then boys at 7:20).
     "double_up": 12,
+    # Rotating 3:45: a team's second 3:45 practice in the same week, so the
+    # early slot is shared around the young teams instead of one team
+    # getting it every time. Skipped for teams that asked for 3:45.
+    "second_345": 14,
+    # Extra on top of "not_preferred" when the not-preferred time is 3:45
+    # (e.g. a coach who can't get off work that early).
+    "not_preferred_345": 40,
 }
 
 
@@ -210,7 +217,9 @@ def slot_cost(age: int, slot: str) -> int:
     """How undesirable an allowed weekday timeslot is for an age (0 = ideal).
     14s & under: 5:30 ideal, 3:45 as needed. 15+: younger lean 5:30, older 7:20."""
     if slot == "3:45":
-        return 6
+        # Still a last resort for everyone, but younger teams go early
+        # first: 12s 5, 13s 6, 14s 7.
+        return max(3, age - 7)
     if slot == "5:30":
         return 0 if age <= 15 else 1
     if slot == "7:20":

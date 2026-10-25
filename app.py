@@ -123,7 +123,7 @@ def open_project(pid: str) -> bool:
         result_period=(result_.start, result_.end) if result_ else None,
         inp_sig=("project", pid, str(rec["updated_at"])),
         range_start=s_, range_end=e_,
-        time_limit=int(settings.get("time_limit", 30)), makeup=bool(settings.get("makeup", True)),
+        time_limit=int(settings.get("time_limit", 60)), makeup=bool(settings.get("makeup", True)),
         keep_prev=bool(settings.get("keep_prev", True)), published=published_,
         last_saved=payload_hash(make_payload(inp_, s_, e_, settings, result_, published_)),
     )
@@ -212,7 +212,7 @@ with st.sidebar:
                 pid = new_id()
                 label = new_name.strip() or range_label(new_start, new_end)
                 store.save(pid, label, make_payload(new_inp, new_start, new_end,
-                                                    {"time_limit": 30, "makeup": True}, None))
+                                                    {"time_limit": 60, "makeup": True}, None))
                 saved_changed()
                 open_project(pid)
                 st.session_state.resolve = True  # build it right away
