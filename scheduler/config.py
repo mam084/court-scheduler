@@ -171,7 +171,9 @@ WEIGHTS = {
     "late_exception": 25,
     # A team's practices on back-to-back days, including Sat -> Sun
     # (practices should have a day in between when possible).
-    "consecutive_days": 40,
+    # Kept below "wish_miss": back-to-back weekdays are fine, so a team
+    # that asks for Tue/Wed gets Tue/Wed.
+    "consecutive_days": 10,
     # Extra on top for Saturday then Sunday: back-to-back weekdays are fine,
     # back-to-back weekend days are really not.
     "sat_sun": 300,

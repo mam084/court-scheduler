@@ -350,6 +350,13 @@ def solve(
         for ws, wdates in weeks.items():
             m.Add(sum(y_day(t, d) for d in wdates) <= PRACTICES_PER_WEEK)
 
+    # Share of the period's weekdays each team is actually playing (season
+    # start dates), used to weigh the weekly template.
+    weekday_dates = [d for d in open_dates if d.weekday() < 5]
+    active_frac = {t: (sum(1 for d in weekday_dates if not teams[t].start or d >= teams[t].start)
+                       / len(weekday_dates)) if weekday_dates else 1.0
+                   for t in T}
+
     # Weekday pattern: p[t, weekday, slot]; 2 different days.
     p = {(t, wd, s): m.NewBoolVar(f"p_{t}_{wd}_{s}") for t in T for wd in WEEKDAYS for s in WEEKDAY_KEYS
          if teams[t].allowed(s)}
@@ -357,9 +364,38 @@ def solve(
         # Soft so a team with no valid recurring slot can't make the model infeasible.
         pat_short = m.NewIntVar(0, PRACTICES_PER_WEEK, f"patshort_{t}")
         m.Add(sum(v for (tt, _, _), v in p.items() if tt == t) + pat_short == PRACTICES_PER_WEEK)
-        obj.append(300 * pat_short)
+        # A team that only starts at the very end of the range barely uses
+        # the template this period, so a short template costs it less than
+        # it would cost a team playing all month to lose its usual days.
+        obj.append(max(30, round(300 * active_frac[t])) * pat_short)
         for wd in WEEKDAYS:
             m.AddAtMostOne([p[t, wd, s] for s in WEEKDAY_KEYS if (t, wd, s) in p])
+
+    # The template itself follows each team's wishlist, not-preferred days
+    # and age/timeslot fit. Practices on real dates already carry these
+    # costs; pricing the template too means a team with few dates in the
+    # range (a late season start) still gets a usual week that matches
+    # what it asked for, instead of whatever was left over.
+    for (t, wd, s), v in p.items():
+        team = teams[t]
+        tc = 0
+        if not (s == "3:45" and wants_345[t]):
+            tc += WEIGHTS["slot_fit"] * slot_cost(team.age, s)
+        wishes = data.wishes.get(team.name)
+        if wishes:
+            hit = [w.choice for w in wishes
+                   if (not w.days or wd in w.days) and (not w.times or s in w.times)]
+            if not hit:
+                tc += WEIGHTS["wish_miss"]
+            elif min(hit) > 1:
+                tc += WEIGHTS["wish_second"]
+        for who in [team.name] + team.staff:
+            if any(r.kind == "not_preferred" and not r.ranges and (not r.days or wd in r.days)
+                   and (not r.times or s in r.times) for r in rules_for[who]):
+                tc += WEIGHTS["not_preferred"] + (WEIGHTS["not_preferred_345"] if s == "3:45" else 0)
+                break
+        if tc:
+            obj.append(tc * v)
 
     # The template itself must be a valid week (it's what people read):
     # recurring 'no' rules and recurring locals rule slots out, head coaches
@@ -655,6 +691,9 @@ def solve(
     issues = _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflicts,
                      group_unused, assignments, pattern_slots, rules_for, coach_local, heads_of, asst_of,
                      no_slot_weeks)
+    wish_rows = _wish_issues(data, teams, pattern_slots, rules_for, week_start(start))
+    if wish_rows:
+        issues = pd.concat([issues, pd.DataFrame(wish_rows, columns=issues.columns)], ignore_index=True)
 
     practices = assignments[assignments["kind"] == "Practice"] if len(assignments) else assignments
     weekday_pr = practices[practices["date"].map(lambda d: d.weekday() < 5)] if len(practices) else practices
@@ -880,3 +919,89 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
         df = df.assign(o=df["severity"].map(order)).sort_values(["o", "week_of", "team"]).drop(columns="o")
         df = df.reset_index(drop=True)
     return df
+
+
+def _wish_issues(data, teams, pattern_slots, rules_for, week_of) -> list[dict]:
+    """One row per team whose usual week misses its 1st-choice wishlist, with
+    what got in the way of each 1st-choice day/time."""
+    usual = defaultdict(list)
+    for (t, wd, sl) in pattern_slots:
+        usual[t].append((wd, sl))
+    by_slot = defaultdict(list)
+    for (t, wd, sl) in pattern_slots:
+        by_slot[wd, sl].append(t)
+
+    def recurring(lp, wd, sl):
+        return lp.day == wd and slots_overlap(lp.slot, sl) and not lp.ranges
+
+    def blocker(t, wd, sl):
+        team = teams[t]
+        if not team.allowed(sl):
+            return f"{team.age}s can't practice at {sl}"
+        for who in [team.name] + team.heads:
+            for r in rules_for[who]:
+                if r.kind == "no" and not r.ranges and (not r.days or wd in r.days) and (not r.times or sl in r.times):
+                    return f"{who} marked it a no" + (f" ({r.note})" if r.note else "")
+        for h in team.heads:
+            lp = next((lp for lp in data.locals if recurring(lp, wd, sl) and h in lp.coaches), None)
+            if lp:
+                return f"{h} coaches {lp.name} then"
+            other = next((teams[o].name for o in by_slot[wd, sl] if o != t and h in teams[o].heads), None)
+            if other:
+                return f"{h} coaches {other} then"
+        taken = len([o for o in by_slot[wd, sl] if o != t])
+        taken += len({c for lp in data.locals if lp.on_site and recurring(lp, wd, sl) for c in lp.courts})
+        if taken >= len(COURTS):
+            return "every court is taken"
+        for a in team.assistants:
+            if a in team.heads:
+                continue
+            lp = next((lp for lp in data.locals if recurring(lp, wd, sl) and a in lp.coaches), None)
+            if lp:
+                return f"assistant {a} coaches {lp.name} then"
+            other = next((teams[o].name for o in by_slot[wd, sl] if o != t and a in teams[o].staff), None)
+            if other:
+                return f"assistant {a} coaches {other} then"
+        for who in [team.name] + team.staff:
+            if any(r.kind == "not_preferred" and not r.ranges and (not r.days or wd in r.days)
+                   and (not r.times or sl in r.times) for r in rules_for[who]):
+                return f"{who} also marked it not preferred"
+        return "traded off for other teams' requests"
+
+    out = []
+    for t, team in enumerate(teams):
+        firsts = [w for w in data.wishes.get(team.name, []) if w.choice == 1]
+        mine = sorted(usual.get(t, []), key=lambda k: WEEKDAYS.index(k[0]))
+        if not firsts or not mine:
+            continue
+        def first_choice(wd, sl):
+            return any((not w.days or wd in w.days) and (not w.times or sl in w.times) for w in firsts)
+        # A 1st choice naming just one day (e.g. "Mon, then Wed/Thu") can
+        # only cover one practice, so a 2nd-choice second day isn't a miss.
+        first_days = {d for w in firsts for d in (w.days or WEEKDAYS)}
+        seconds = [w for w in data.wishes.get(team.name, []) if w.choice == 2]
+        def second_choice(wd, sl):
+            return any((not w.days or wd in w.days) and (not w.times or sl in w.times) for w in seconds)
+        misses = [(wd, sl) for wd, sl in mine if not first_choice(wd, sl)
+                  and not (len(first_days) < 2 and second_choice(wd, sl))]
+        if not misses:
+            continue
+        mine_days = {wd for wd, _ in mine if first_choice(wd, _)}
+        reasons = {}
+        for w in firsts:
+            for wd in (w.days or WEEKDAYS):
+                if wd in mine_days:
+                    continue
+                for sl in sorted(w.times or set(WEEKDAY_KEYS), key=SLOT_KEYS.index):
+                    if sl in WEEKDAY_KEYS and (wd, sl) not in mine:
+                        reasons.setdefault(f"{wd} {sl}", blocker(t, wd, sl))
+        asked = "; ".join(" ".join(x for x in (", ".join(w.days) if w.days else "any day",
+                                                 ", ".join(sorted(w.times, key=SLOT_KEYS.index)) if w.times else "")
+                                   if x) for w in firsts)
+        detail = f"asked for {asked}"
+        if reasons:
+            detail += ". " + "; ".join(f"{k}: {v}" for k, v in list(reasons.items())[:4])
+        out.append({"severity": "Low", "team": team.name, "week_of": week_of,
+                    "issue": "Usual week isn't the 1st choice: " + ", ".join(f"{wd} {sl}" for wd, sl in misses),
+                    "detail": detail})
+    return out

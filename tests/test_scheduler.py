@@ -771,3 +771,30 @@ def test_not_preferred_3_45_kept_off_early_slot():
     pr = r.assignments[r.assignments["kind"] == "Practice"]
     assert not (pr[pr["name"] == "12-Ana"]["slot"] == "3:45").any()
     assert r.shortfalls.empty
+
+
+def test_late_starting_team_template_follows_wishlist():
+    # Starts on the last Saturday: only one weekday in range, but its usual
+    # week should still be the Tue/Thu it asked for.
+    teams = [{"team": "17-Lin", "age": 17, "start_date": "11/28/2026"}, {"team": "16-Bo", "age": 16}]
+    wish = [{"team": "17-Lin", "choice": 1, "days": "Tue, Thu", "times": "7:20"}]
+    r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=10)
+    lin = r.pattern[r.pattern["team"] == "17-Lin"]
+    assert set(zip(lin["day"], lin["slot"])) == {("Tue", "7:20"), ("Thu", "7:20")}
+
+
+def test_back_to_back_weekdays_when_asked_for():
+    teams = [{"team": "14 Black", "age": 14, "head_coach": "Matt"}]
+    wish = [{"team": "14 Black", "choice": 1, "days": "Tue, Wed", "times": "5:30"}]
+    r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=10)
+    assert set(r.pattern["day"]) == {"Tue", "Wed"}
+
+
+def test_wishlist_miss_explained_in_review():
+    # Pat heads both teams and both want Tue/Thu 5:30: one can't have it.
+    teams = [{"team": "16 Black", "age": 16, "head_coach": "Pat"}, {"team": "16-Pat", "age": 16}]
+    wish = [{"team": t, "choice": 1, "days": "Tue, Thu", "times": "5:30"} for t in ("16 Black", "16-Pat")]
+    r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=10)
+    rows = r.issues[r.issues["issue"].str.startswith("Usual week isn't the 1st choice")]
+    assert len(rows) >= 1
+    assert rows["detail"].str.contains("Pat coaches").any()

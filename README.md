@@ -39,14 +39,14 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 | Weekdays over weekends | Weekends are used only when weekdays can't fit 2 practices, and then just 1 weekend practice per team that week. Back-to-back weekdays (Tue/Wed) beat a weekend plus a weekday (Sun/Tue) |
 | Keep the published schedule | Rebuilds leave practices (and courts) where the last published version had them, unless something needs them to move |
 | Same weekly schedule | Makeups are flagged in the Review tab |
-| Ranked wishlists | 1st choice, then 2nd choice day/time combos |
+| Ranked wishlists | 1st choice, then 2nd choice day/time combos. The weekly template follows them too, so a team starting late in the range still gets the usual week it asked for, and a team that barely plays this period doesn't crowd out one playing all month. Every team whose usual week misses its 1st choice is listed in the Review tab with what got in the way (a full court, the coach's other team, a local) |
 | Coach double-ups | A coach's two teams back-to-back on the same day (girls at 5:30, boys at 7:20) |
 | Travel tournament rest | No practice the day before or after (especially no late practice the night before). This outranks no-dates: a no-date is broken before a team practices next to a tournament. The week leading in gets priority for 2 practices |
 | Court quality | Courts ranked 1 → 7 → 6 → 5 → 3 → 4 → 2. Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot older and 1s (Black) teams get the better courts |
 | Assistant coaches free | Assistants can be double-booked, at a cost |
 | 3:45 shared around | 3:45 is a last resort, and the youngest teams take it first (12s, then 13s, then 14s). When it's needed, it rotates: a team gets at most one 3:45 a week before another young team gets none. A team that asks for 3:45 on its wishlist gets it; a team marked "Not preferred" at 3:45 is kept off it when possible |
 | Not-preferred days, weekend AM/PM preferences | |
-| A day apart | Back-to-back weekdays are mildly avoided; Saturday then Sunday is strongly avoided |
+| A day apart | Back-to-back weekdays are only lightly avoided (a team that asks for Tue/Wed gets it); Saturday then Sunday is strongly avoided |
 | Same slot both days, home court | |
 
 Closures default to the major family holidays: New Year's Day, July 4, Thanksgiving and the day after, Christmas Eve and Day, and New Year's Eve. The club practices on minor holidays like Labor Day.
