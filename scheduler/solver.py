@@ -203,6 +203,10 @@ def solve(
     for (t, ws), n in per_week.items():
         if n > PRACTICES_PER_WEEK:
             problems.append(f"{teams[t].name}: {n} practices placed by hand in the week of {ws:%b %-d} (max 2)")
+    for (t, d, s) in pinned:
+        if d.weekday() == 5 and any(tt == t and dd == d + timedelta(days=1) for (tt, dd, _) in pinned):
+            problems.append(f"{teams[t].name}: practices placed by hand on both Sat {d:%-m/%-d} and "
+                            f"Sun {d + timedelta(days=1):%-m/%-d} (no team practices Saturday then Sunday)")
     if problems:
         raise ValueError("These manual changes can't all happen:\n- " + "\n- ".join(problems))
 
@@ -590,7 +594,13 @@ def solve(
                         for i in range(len(w.days)) for j in range(len(w.days))}
         for d in open_dates:
             nxt = d + timedelta(days=1)
-            if nxt in open_dates:  # back-to-back days, including Sat -> Sun
+            if d.weekday() == 5 and nxt in open_dates:
+                # Hard rule: never Saturday then Sunday.
+                a, b = y_day(t, d), y_day(t, nxt)
+                if not (isinstance(a, int) and isinstance(b, int)):
+                    m.Add(a + b <= 1)
+                continue
+            if nxt in open_dates:  # back-to-back days
                 if d.weekday() < 4 and (DAYS[d.weekday()], DAYS[nxt.weekday()]) in wished_pairs:
                     continue
                 a, b = y_day(t, d), y_day(t, nxt)
@@ -599,7 +609,7 @@ def solve(
                 cons = m.NewBoolVar(f"cons_{t}_{d}")
                 m.Add(cons >= a + b - 1)
                 consec_vars[t, d] = cons
-                obj.append((WEIGHTS["consecutive_days"] + (WEIGHTS["sat_sun"] if d.weekday() == 5 else 0)) * cons)
+                obj.append(WEIGHTS["consecutive_days"] * cons)
 
         used = []
         for s in WEEKDAY_KEYS:

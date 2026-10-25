@@ -829,3 +829,30 @@ def test_open_requested_slot_beats_sticking_to_usual():
     pr = r.assignments[r.assignments["kind"] == "Practice"]
     first_week = pr[pr["date"].map(week_start) == date(2026, 11, 1)]
     assert set(first_week["date"].map(lambda d: d.strftime("%a"))) == {"Tue", "Wed"}
+
+
+def test_saturday_then_sunday_is_never_scheduled():
+    # Weekdays are out entirely; the only open days are Sat 11/7 (end of one
+    # week) and Sun 11/8 (start of the next). Two short weeks would push the
+    # old soft rule into Sat->Sun; the hard rule never does, and the missing
+    # practice is flagged instead.
+    teams = [{"team": f"16-W{i}", "age": 16} for i in range(2)]
+    weekends = [{"date": d, "open": "9AM-9PM"} for d in ("11/7", "11/8")]
+    closures = [{"date": f"11/{n}/2026", "reason": "closed"} for n in (2, 3, 4, 5, 6, 9, 10, 11, 12, 13)]
+    r = solve(_inp(teams, weekends=weekends, closures=closures), date(2026, 11, 1), date(2026, 11, 14),
+              time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    for name, g in pr.groupby("name"):
+        days = set(g["date"])
+        assert not any(d.weekday() == 5 and d + pd.Timedelta(days=1) in days for d in days), name
+    assert not r.shortfalls.empty
+
+
+def test_hand_placed_saturday_and_sunday_refused():
+    teams = [{"team": "16-W", "age": 16}, {"team": "16-X", "age": 16, "head_coach": "Xi"}]
+    weekends = [{"date": d, "open": "9AM-9PM"} for d in ("11/7", "11/8")]
+    inp = _with_overrides(_inp(teams, weekends=weekends), [
+        {"team": "16-W", "action": "Add", "date": "11/7/2026", "time": "9AM"},
+        {"team": "16-W", "action": "Add", "date": "11/8/2026", "time": "9AM"}])
+    with pytest.raises(ValueError, match="Saturday then Sunday"):
+        solve(inp, *NOV, time_limit_s=10)

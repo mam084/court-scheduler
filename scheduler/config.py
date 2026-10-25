@@ -174,14 +174,12 @@ WEIGHTS = {
     "home_court": 8,
     # A late_ok young team (e.g. 14 Black) practicing at 7:20 / 7 PM.
     "late_exception": 25,
-    # A team's practices on back-to-back days, including Sat -> Sun
-    # (practices should have a day in between when possible).
+    # A team's practices on back-to-back weekdays (practices should have a
+    # day in between when possible). Saturday then Sunday is a hard rule in
+    # the solver, never allowed.
     # Kept below "wish_miss": back-to-back weekdays are fine, so a team
     # that asks for Tue/Wed gets Tue/Wed.
     "consecutive_days": 10,
-    # Extra on top for Saturday then Sunday: back-to-back weekdays are fine,
-    # back-to-back weekend days are really not.
-    "sat_sun": 300,
     # Wishlist: practice matching only the 2nd choice / matching neither.
     "wish_second": 6,
     "wish_miss": 16,

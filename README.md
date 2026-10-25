@@ -24,6 +24,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - Every team gets 2 practices a week. No-dates are kept unless that's the only way to get there; then the head coach's no-date is broken first on a day an assistant is free, then both coaches', then the team's own. Each one is flagged at the top of the page and in the Review tab
 - Only 14s and under practice at 3:45, and 14s and under never practice at 7:20 (unless the team is marked `late_ok`, and then only when needed)
 - Weekends: only open dates and blocks, only a team's allowed weekend options, and never one team alone in a block
+- Never Saturday then Sunday for the same team (a weekday no-date is broken, flagged, before that happens; practices placed by hand on both days are refused)
 - Local tournaments take their courts (all by default) for the whole day, plus the coaches of their locals program
 - Teams at a travel tournament don't practice on tournament days
 - At most one practice per team per day, and two per week (weeks run Sunday–Saturday)
@@ -46,7 +47,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 | Assistant coaches free | Assistants can be double-booked, at a cost |
 | 3:45 shared around | 3:45 is a last resort, and the youngest teams take it first (12s, then 13s, then 14s). When it's needed, it rotates: a team gets at most one 3:45 a week before another young team gets none. A team that asks for 3:45 on its wishlist gets it; a team marked "Not preferred" at 3:45 is kept off it when possible |
 | Not-preferred days, weekend AM/PM preferences | |
-| A day apart | Back-to-back weekdays are only lightly avoided, and not at all when the team asked for both days (e.g. Tue/Wed); Saturday then Sunday is strongly avoided |
+| A day apart | Back-to-back weekdays are only lightly avoided, and not at all when the team asked for both days (e.g. Tue/Wed). Saturday then Sunday is a hard rule (above) |
 | Same slot both days, home court | |
 
 Closures default to the major family holidays: New Year's Day, July 4, Thanksgiving and the day after, Christmas Eve and Day, and New Year's Eve. The club practices on minor holidays like Labor Day.
