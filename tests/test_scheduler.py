@@ -13,6 +13,7 @@ from scheduler.data import (
     COLUMNS, parse_courts, parse_date_ranges, parse_days, parse_names, parse_slot, parse_times,
     parse_weekend_tokens,
 )
+from scheduler.config import slots_overlap
 from scheduler.solver import week_start
 
 NOV = (date(2026, 11, 1), date(2026, 11, 30))
@@ -1047,3 +1048,18 @@ def test_one_off_no_date_doesnt_move_the_usual_week():
         full = set(full[full == 2].index)
         hits = played[(played["day"] == p.day) & (played["slot"] == p.slot) & played["wk"].isin(full)]
         assert len(hits) * 2 >= len(full), (p.team, p.day, p.slot, len(hits), len(full))
+
+
+@pytest.mark.parametrize("seed", [3, 7, 11])
+def test_usual_week_is_a_valid_week(seed):
+    """The weekly template is read as a real week: one team per court, and
+    never on a court a recurring program holds."""
+    inp = simulate(8, 6, 4, seed=seed, start=NOV[0], end=NOV[1])
+    r = solve(inp, *NOV, time_limit_s=30)
+    pat = r.pattern
+    assert (pat.groupby(["day", "slot", "court"]).size() <= 1).all(), pat.sort_values(["day", "slot", "court"])
+    data = clean(inp, *NOV)
+    for p in pat.itertuples():
+        for lp in data.locals:
+            if lp.on_site and not lp.ranges and lp.day == p.day and slots_overlap(lp.slot, p.slot):
+                assert p.court not in lp.courts, (p.team, p.day, p.slot, lp.name)

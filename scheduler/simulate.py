@@ -124,7 +124,8 @@ def simulate(
     loc = []
     for prog, days, time_, courts in LOCAL_TEMPLATES[:n_locals]:
         who = rng.sample(staff, k=min(len(staff), rng.choice([1, 2])))
-        loc.append({"program": prog, "days": days, "time": time_, "courts": courts,
+        loc.append({"program": prog, "side": "Girls" if prog.startswith("Girls") else "Boys" if prog.startswith("Boys") else "",
+                    "days": days, "time": time_, "courts": courts,
                     "coaches": "; ".join(who), "on_site": "Yes", "dates": ""})
     locals_df = pd.DataFrame(loc, columns=COLUMNS["Locals"])
 

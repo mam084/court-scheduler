@@ -585,7 +585,8 @@ if VIEW == TAB_EDIT:
             tp = tp.sort_values(["date", "o"])
         usual_rows = result.pattern[result.pattern["team"] == e_team] if len(result.pattern) else result.pattern
         usual_txt = ", ".join(f"{r.day} {r.slot}" for r in usual_rows.itertuples()) or "none"
-        home = f" · home Court {usual_rows['court'].iloc[0]}" if len(usual_rows) else ""
+        _hc = "home_court" if "home_court" in usual_rows.columns else "court"  # schedules saved before home_court
+        home = f" · home Court {usual_rows[_hc].iloc[0]}" if len(usual_rows) else ""
         st.caption(f"Usual days: **{usual_txt}**{home}")
 
         c_left, c_right = st.columns([3, 2])

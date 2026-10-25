@@ -28,7 +28,7 @@ Soft preferences (weights in config.py)
 from __future__ import annotations
 
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -720,10 +720,28 @@ def solve(
         assignments["o"] = assignments["slot"].map(SLOT_KEYS.index)
         assignments = assignments.sort_values(["date", "o", "court"]).drop(columns="o").reset_index(drop=True)
 
+    # Courts for the usual week, so it reads as a real week (one team per
+    # court): each team keeps the court it actually gets most weeks on that
+    # day and time, else its home court, else the best one left. Higher teams
+    # in the pecking order choose first.
+    usual_court_of = {}
+    for (wd, s) in {(wd, s) for (_, wd, s) in pattern_slots}:
+        free = [c for c in COURT_RANK if not any(
+            lp.on_site and recurring_local(lp, wd, s) and c in lp.courts for lp in data.locals)]
+        for t in sorted((t for (t, w, ss) in pattern_slots if (w, ss) == (wd, s)), key=lambda t: -weights[t]):
+            seen = Counter(court_of[t, d, s] for (tt, d, ss) in booked
+                           if tt == t and ss == s and DAYS[d.weekday()] == wd)
+            prefs = [c for c, _ in seen.most_common()] + [home_court[t]] + COURT_RANK
+            c = next((c for c in prefs if c in free), home_court[t])
+            if c in free:
+                free.remove(c)
+            usual_court_of[t, wd, s] = c
+
     pattern = pd.DataFrame([
         {"team": teams[t].name, "club": teams[t].club, "age": teams[t].age,
          "coach": "; ".join(teams[t].staff), "head": "; ".join(teams[t].heads),
-         "day": wd, "slot": s, "slot_label": SLOTS[s], "court": home_court[t]}
+         "day": wd, "slot": s, "slot_label": SLOTS[s], "court": usual_court_of[t, wd, s],
+         "home_court": home_court[t]}
         for (t, wd, s) in sorted(pattern_slots, key=lambda k: (k[0], WEEKDAYS.index(k[1])))
     ])
 
