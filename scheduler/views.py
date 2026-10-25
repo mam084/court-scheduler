@@ -428,7 +428,7 @@ def practice_counts_html(counts: pd.DataFrame, highlight: set[str] | None = None
                 out.append(f'<td class="cs-none" title="No weekly target this week">{n if n else "–"}</td>')
             elif r.short:
                 c = "cs-short2" if r.short >= 2 else "cs-short1"
-                out.append(f'<td class="{c}" title="Short {r.short} practice(s)">{r.scheduled} of {r.target}</td>')
+                out.append(f'<td class="{c}" title="Short {r.short} practice{'' if r.short == 1 else 's'}">{r.scheduled} of {r.target}</td>')
             else:
                 out.append(f'<td class="cs-ok">{r.scheduled} of {r.target}</td>')
         out.append("</tr>")

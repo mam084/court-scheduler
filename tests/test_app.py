@@ -179,3 +179,36 @@ def test_pecking_order_page_and_calendar_downloads(db):
     assert not at.exception
     labels = [d.proto.label for d in at.get("download_button")]
     assert {"📆 Google Calendar (.ics)", "🖨️ Printable calendar", "📊 Calendar (Excel)"} <= set(labels)
+
+
+def test_hand_placed_practice_can_be_moved_again_and_removed(db):
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Moves", 5)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("✏️ Edit practices").run()
+    team = at.selectbox(key="ed_team").value
+    at.radio(key="ed_mode").set_value("Move a practice").run()
+
+    def practices():
+        a = at.session_state["result"].assignments
+        return a[(a["kind"] == "Practice") & (a["name"] == team)].sort_values("date")
+
+    first = practices().iloc[0]
+    d, old_slot = first["date"], first["slot"]
+    pk = f"{team}_{d}_{old_slot}"
+    move_btn = next(b for b in at.button if b.label == "Move it")
+    assert move_btn.disabled  # nothing changed yet
+    others = [s for s in ("3:45", "5:30", "7:20") if s != old_slot]
+    for new_slot in others:  # move it, then move the hand-placed practice again
+        at.selectbox(key=f"ed_ns_{pk}").set_value(new_slot).run()
+        next(b for b in at.button if b.label == "Move it").click().run()
+        assert not at.exception
+        assert not at.error, [e.value for e in at.error]
+        p = practices()
+        assert ((p["date"] == d) & (p["slot"] == new_slot)).any()
+        assert at.success  # "Moved ..." confirmation
+        pk = f"{team}_{d}_{new_slot}"
+    adds = at.session_state["inp"].overrides
+    assert (adds["action"] == "Add").sum() <= 1  # each move replaced the previous hand placement

@@ -64,11 +64,12 @@ def simulate(
     team_rows = []
     girls_heads = []
     ages_g = sorted(12 + round(i * 6 / max(1, n_girls - 1)) for i in range(n_girls)) if n_girls else []
-    for age in ages_g:
+    for i, age in enumerate(ages_g):
         head = next(pool)
         girls_heads.append(head)
+        rank = ages_g[:i + 1].count(age)  # pecking order within the age group: 16-1, 16-2, ...
         team_rows.append({"team": f"{age}-{head}", "club": "Girls", "age": age, "head_coach": head,
-                          "assistants": next(pool) if rng.random() < 0.7 else ""})
+                          "assistants": next(pool) if rng.random() < 0.7 else "", "rank": f"{age}-{rank}"})
 
     # ---- boys teams: "<age> Black" / "<age> Green" --------------------
     ages_b = sorted(13 + round(i * 5 / max(1, n_boys - 1)) for i in range(n_boys)) if n_boys else []
@@ -79,7 +80,7 @@ def simulate(
         # Many boys coaches also run or assist a girls team (makes double-ups possible).
         head = rng.choice(girls_heads) if girls_heads and rng.random() < 0.5 else next(pool)
         team_rows.append({"team": f"{age} {color}", "club": "Boys", "age": age, "head_coach": head,
-                          "assistants": next(pool)})
+                          "assistants": next(pool), "rank": f"{age}-{1 if color == 'Black' else 2}"})
     teams = pd.DataFrame(team_rows)
     for c in COLUMNS["Teams"]:
         if c not in teams:

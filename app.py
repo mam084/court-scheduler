@@ -22,7 +22,7 @@ for _mod in [m for m in list(sys.modules) if m == "scheduler" or m.startswith("s
     del sys.modules[_mod]
 
 from scheduler import ScheduleInput, clean, month_range, simulate, solve
-from scheduler.config import ALL_COURTS, COURTS, DAYS, court_name, PROGRAM_KEYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
+from scheduler.config import ALL_COURTS, COURTS, DAYS, court_name, court_short, PROGRAM_KEYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
 from scheduler.data import (
     ATTRS, COLUMNS, blank, empty, parse_courts, parse_date_ranges, parse_days, parse_names, parse_rank, parse_times,
     program_side,
@@ -43,6 +43,11 @@ st.set_page_config(page_title="Court Scheduler", page_icon="🏐", layout="wide"
 def next_month(today: date) -> tuple[date, date]:
     y, m = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
     return month_range(y, m)
+
+
+def plural(n: int, word: str, many: str | None = None) -> str:
+    """'1 team', '3 teams' (or a given plural: plural(2, 'match', 'matches'))."""
+    return f"{n} {word if n == 1 else (many or word + 's')}"
 
 
 def blank_template(start: date, end: date) -> bytes:
@@ -135,6 +140,17 @@ def open_project(pid: str) -> bool:
     return True
 
 
+def create_schedule(label: str, new_inp: ScheduleInput, s_: date, e_: date):
+    """Save a new schedule, open it and build it right away."""
+    pid = new_id()
+    store.save(pid, label, make_payload(new_inp, s_, e_, {"time_limit": 60, "makeup": True}, None))
+    saved_changed()
+    open_project(pid)
+    st.session_state.resolve = True
+    st.session_state.flash = f"Created “{label}”. It saves automatically; bookmark this page to come back."
+    st.rerun()
+
+
 def close_project():
     for k in PROJECT_KEYS:
         st.session_state.pop(k, None)
@@ -212,15 +228,7 @@ with st.sidebar:
             if problems:
                 st.error(" ".join(problems))
             else:
-                pid = new_id()
-                label = new_name.strip() or range_label(new_start, new_end)
-                store.save(pid, label, make_payload(new_inp, new_start, new_end,
-                                                    {"time_limit": 60, "makeup": True}, None))
-                saved_changed()
-                open_project(pid)
-                st.session_state.resolve = True  # build it right away
-                st.session_state.flash = f"Created “{label}”. It saves automatically; bookmark this page to come back."
-                st.rerun()
+                create_schedule(new_name.strip() or range_label(new_start, new_end), new_inp, new_start, new_end)
         st.caption(f"Schedules are saved to a {store.kind}" +
                    ("." if store.permanent else " on the app server and can be cleared when the app restarts."))
     else:
@@ -282,8 +290,21 @@ if st.session_state.get("project_id") is None:
     st.header("🏐 Court Scheduler")
     if "flash" in st.session_state:
         st.success(st.session_state.pop("flash"))
-    st.info("Create a new schedule in the sidebar (pick its dates, then upload your club spreadsheet or try the "
-            "simulated club), or open a saved one from the **Schedule** menu.")
+    st.markdown("Builds a fair practice schedule for every team across courts 1–7: locals and tournaments are "
+                "blocked off first, no-dates are respected, every team gets its two practices a week, and coaches' "
+                "requests are weighed against each other. Everything it couldn't give someone is listed with the reason.")
+    c1, c2, c3 = st.columns(3)
+    c1.markdown("**1. Inputs**  \nUpload the club spreadsheet (teams, no-dates, wishlists, programs), or start "
+                "from a simulated club.")
+    c2.markdown("**2. Auto-schedule**  \nAn optimizer places every practice, then gives each team a home court "
+                "by the pecking order.")
+    c3.markdown("**3. Review & share**  \nCheck the court view, tweak practices by hand, publish, and send coaches "
+                "a calendar file.")
+    d_s, d_e = next_month(date.today())
+    if st.button(f"🏐 Try it with a simulated club ({range_label(d_s, d_e)})", type="primary"):
+        create_schedule("Demo club", simulate(6, 4, 4, seed=7, start=d_s, end=d_e), d_s, d_e)
+    st.caption("Or create a schedule from your own spreadsheet in the sidebar, or open a saved one from the "
+               "**Schedule** menu.")
     if saved:
         st.markdown("**Saved schedules**")
         for p in saved:
@@ -323,7 +344,7 @@ if run or st.session_state.pop("resolve", False):
             st.session_state.result_period = (start, end)
             sf = st.session_state.result.shortfalls if st.session_state.result.ok else None
             if sf is not None and len(sf):
-                st.toast(f"{sf['team'].nunique()} team(s) short of practices in {sf['week_of'].nunique()} week(s). "
+                st.toast(f"{plural(sf['team'].nunique(), 'team')} short of practices in {plural(sf['week_of'].nunique(), 'week')}. "
                          "See the warning at the top.", icon="⚠️")
             elif sf is not None:
                 st.toast("Every team got all its practices.", icon="✅")
@@ -331,6 +352,7 @@ if run or st.session_state.pop("resolve", False):
             backup = st.session_state.pop("overrides_backup", None)
             if backup is not None:  # a manual change that can't work: undo it, keep the schedule
                 inp.overrides = backup
+                st.session_state.pop("flash", None)  # its "done" message no longer applies
                 st.error(f"That change wasn't applied. {e}")
             else:
                 st.session_state.result = None
@@ -375,22 +397,22 @@ else:
         lines = []
         for ws, g in short.groupby("week_of"):
             lines.append(f"- **Week of {ws:%b %-d}:** {short_list_text(g)}")
-        st.error(f"**{n_teams} team(s) are short {n_missed} practice(s):**\n" + "\n".join(lines) +
+        st.error(f"**{plural(n_teams, 'team')} {'is' if n_teams == 1 else 'are'} short {plural(n_missed, 'practice')}:**\n" + "\n".join(lines) +
                  "\n\nWhy each one happened is in the **Review** tab, and the full week-by-week counts are there too.",
                  icon="⚠️")
     if result.broken:
         lines = [f"- **{b['team']}** · {b['date']:%a %b %-d} {b['slot_label']}: {b['who']}" for b in result.broken]
-        st.warning(f"**{len(result.broken)} practice(s) had to go on a no-date** so the team still gets 2 "
+        st.warning(f"**{plural(len(result.broken), 'practice')} had to go on a no-date** so the team still gets 2 "
                    "practices that week:\n" + "\n".join(lines), icon="⚠️")
     iss = result.issues if result.issues is not None else pd.DataFrame(columns=["issue"])
     satsun = iss[iss["issue"].astype(str).str.startswith("Saturday then Sunday")] if len(iss) else iss
     if len(satsun):
         lines = [f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}" for r in satsun.itertuples()]
-        st.warning(f"**{len(satsun)} team(s) practice Saturday then Sunday**, the only way to avoid a missed "
+        st.warning(f"**{plural(len(satsun), 'team')} practice{'s' if len(satsun) == 1 else ''} Saturday then Sunday**, the only way to avoid a missed "
                    "practice or a head coach's no-date:\n" + "\n".join(lines), icon="⚠️")
     asst = iss[iss["issue"].astype(str).str.startswith("Assistant no-date broken")] if len(iss) else iss
     if len(asst):
-        with st.expander(f"🧑‍🏫 {len(asst)} practice(s) without an assistant who marked a no-date"):
+        with st.expander(f"🧑‍🏫 {plural(len(asst), 'practice')} without an assistant who marked a no-date"):
             for r in asst.itertuples():
                 st.markdown(f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}: {r.detail}")
     if m.get("status") == "FEASIBLE":
@@ -400,7 +422,7 @@ else:
         st.info(f"**{st.session_state.pending_rebuild}** since the last build. Press **⚡ Auto-schedule** "
                 "when you're done making changes.", icon="🔁")
     if result.warnings:
-        with st.expander(f"⚠️ {len(result.warnings)} note(s) about the input"):
+        with st.expander(f"⚠️ {plural(len(result.warnings), 'note')} about the input"):
             for w in result.warnings:
                 st.markdown(f"- {w}")
 
@@ -457,7 +479,7 @@ if VIEW == TAB_COURT:
         if published:
             ch = diff(practices_of(published[-1]), a, cleaned, start, end)
             if len(ch):
-                st.caption(f"📢 {len(ch)} change(s) since “{published[-1]['label']}” was published. "
+                st.caption(f"📢 {plural(len(ch), 'change')} since “{published[-1]['label']}” was published. "
                            "See **📢 Publish** for the list.")
 
         st.markdown(legend_html(a.loc[a["kind"] == "Practice", "age"], stripes), unsafe_allow_html=True)
@@ -524,10 +546,24 @@ def team_slot_label(k: str) -> str:
     return SLOTS[k] + (" (weekend)" if k in WEEKEND_KEYS else "")
 
 
-def apply_overrides(rows: list[dict], message: str, backup: pd.DataFrame | None = None):
-    """Add manual-change rows and rebuild; rolled back if the rebuild can't honor them."""
+def without_pin(ov: pd.DataFrame, team: str, d: date, slot: str) -> pd.DataFrame:
+    """The overrides minus any hand 'Add' that placed this team's practice at d/slot, so a hand-placed
+    practice can be moved or removed again (instead of the old Add fighting the new change)."""
+    if ov.empty:
+        return ov
+    ds = pd.to_datetime(ov["date"].astype(str), errors="coerce").dt.date
+    hit = ((ov["team"] == team) & ov["action"].astype(str).str.strip().str.lower().eq("add")
+           & (ds == d) & (ov["time"].astype(str).str.strip() == slot))
+    return ov[~hit].reset_index(drop=True)
+
+
+def apply_overrides(rows: list[dict], message: str, backup: pd.DataFrame | None = None,
+                    replace_pin: tuple | None = None):
+    """Add manual-change rows and rebuild; rolled back if the rebuild can't honor them.
+    replace_pin=(team, date, slot) first drops the hand 'Add' that put that practice there."""
     st.session_state.overrides_backup = inp.overrides.copy() if backup is None else backup
-    inp.overrides = pd.concat([inp.overrides, pd.DataFrame(rows)], ignore_index=True)
+    base = without_pin(inp.overrides, *replace_pin) if replace_pin else inp.overrides
+    inp.overrides = pd.concat([base, pd.DataFrame(rows)], ignore_index=True)
     st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
     st.session_state.resolve = True
     st.session_state.flash = message
@@ -584,13 +620,18 @@ if VIEW == TAB_EDIT:
                                           key=f"ed_ns_{pk}")
                         nc = st.selectbox("Court", ["Any"] + COURTS, key=f"ed_nc_{pk}",
                                           format_func=lambda c: "Any open court" if c == "Any" else f"Court {c}")
-                        if st.button("Move it", type="primary", width="stretch"):
+                        same = nd == old["date"] and ns == old["slot"]
+                        same_court = same and (nc == "Any" or str(nc) == str(old["court"]))
+                        if st.button("Move it", type="primary", width="stretch", disabled=same_court,
+                                     help="Pick a different date, time or court first." if same_court else None):
+                            where = f" at {ns}" + ("" if nc == "Any" else f", Court {nc}")
                             apply_overrides([
                                 {"team": e_team, "action": "Remove", "date": f"{old['date']:%m/%d/%Y}", "days": "",
                                  "time": old["slot"], "court": "", "note": f"moved to {nd:%a %-m/%-d} {ns}"},
                                 {"team": e_team, "action": "Add", "date": f"{nd:%m/%d/%Y}", "days": "", "time": ns,
                                  "court": "" if nc == "Any" else str(nc), "note": f"moved from {old['date']:%a %-m/%-d}"},
-                            ], f"Moved {e_team} from {old['date']:%a %b %-d} to {nd:%a %b %-d} at {ns}.")
+                            ], f"Moved {e_team} from {old['date']:%a %b %-d} {old['slot']} to {nd:%a %b %-d}{where}.",
+                                replace_pin=(e_team, old["date"], old["slot"]))
                     else:
                         how = st.radio("Then", ["Find a makeup that week if possible", "Cancel it (no makeup)"],
                                        key="ed_how")
@@ -599,7 +640,8 @@ if VIEW == TAB_EDIT:
                             apply_overrides([{"team": e_team, "action": act, "date": f"{old['date']:%m/%d/%Y}",
                                               "days": "", "time": old["slot"], "court": "", "note": "removed by hand"}],
                                             f"{'Removed' if act == 'Remove' else 'Cancelled'} {e_team}'s "
-                                            f"{old['date']:%a %b %-d} practice.")
+                                            f"{old['date']:%a %b %-d} practice.",
+                                            replace_pin=(e_team, old["date"], old["slot"]))
             elif mode == "Suggest a preference":
                 st.caption("Tell the scheduler what this team would rather have. It's weighed against every other "
                            "team's requests, so it's kept when it fits, not forced.")
@@ -656,7 +698,7 @@ if VIEW == TAB_EDIT:
                             index=[i for k, i in drop if k == "a"]).reset_index(drop=True)
                         st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
                         st.session_state.resolve = True
-                        st.session_state.flash = f"Removed {len(drop)} preference(s) for {e_team}. Schedule rebuilt."
+                        st.session_state.flash = f"Removed {plural(len(drop), 'preference')} for {e_team}. Schedule rebuilt."
                         st.rerun()
             elif mode == "Add a practice":
                 ad = st.date_input("Date", value=start, min_value=start, max_value=end, format="MM/DD/YYYY", key="ed_ad")
@@ -704,7 +746,7 @@ if VIEW == TAB_EDIT:
                     inp.overrides = inp.overrides.drop(index=undo).reset_index(drop=True)
                     st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
                     st.session_state.resolve = True
-                    st.session_state.flash = f"Undid {len(undo)} change(s). Schedule rebuilt."
+                    st.session_state.flash = f"Undid {plural(len(undo), 'change')}. Schedule rebuilt."
                     st.rerun()
 
 # ------------------------------------------------------------ programs --
@@ -893,6 +935,8 @@ if VIEW == TAB_PROG:
         st.caption("No programs yet.")
     else:
         view = inp.locals.copy().fillna("")
+        # Show the side the colors actually use (guessed from the name when blank).
+        view["side"] = [program_side(s, n) or "Other" for s, n in zip(view["side"], view["program"])]
         st.dataframe(view.rename(columns={"program": "Program", "side": "Side", "days": "Days", "time": "Time",
                                           "courts": "Courts", "coaches": "Coaches", "on_site": "On site",
                                           "dates": "Dates"}),
@@ -977,7 +1021,7 @@ if VIEW == TAB_TOURN:
             inp.tournaments = inp.tournaments.iloc[keep].reset_index(drop=True)
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
             st.session_state.resolve = True
-            st.session_state.flash = f"Removed {len(drop_t)} tournament(s). Schedule rebuilt."
+            st.session_state.flash = f"Removed {plural(len(drop_t), 'tournament')}. Schedule rebuilt."
             st.rerun()
 
 # ------------------------------------------------------------- coaches --
@@ -1030,15 +1074,16 @@ if VIEW == TAB_COACH:
             mine = a[a["coach"].fillna("").map(lambda s: coach in [x.strip() for x in s.split(";")])]
             if len(mine):
                 mine = (mine.groupby(["date", "day", "slot", "slot_label", "kind", "name", "on_pattern"], as_index=False)
-                        ["court"].agg(lambda cs: ", ".join(str(c) for c in sorted(cs))))
+                        ["court"].agg(lambda cs: ", ".join(court_short(c) for c in sorted(cs))))
                 mine["o"] = mine["slot"].map(SLOT_KEYS.index)
                 mine = mine.sort_values(["date", "o"])
                 mine["role"] = mine["name"].map(lambda n: "Head" if n in heads else ("Assistant" if n in assists else ""))
-            st.markdown(f"**{coach}'s schedule** · {len(mine)} sessions")
+            st.markdown(f"**{coach}'s schedule** · {plural(len(mine), 'session')}")
             if len(mine):
+                show = mine.assign(date=mine["date"].map(lambda d: f"{d:%a %b} {d.day}"))
                 st.dataframe(
-                    mine[["date", "day", "slot_label", "court", "kind", "name", "role"]].rename(columns={
-                        "date": "Date", "day": "Day", "slot_label": "Time", "court": "Court(s)", "kind": "Type",
+                    show[["date", "slot_label", "court", "kind", "name", "role"]].rename(columns={
+                        "date": "Date", "slot_label": "Time", "court": "Court", "kind": "Type",
                         "name": "Team / Program", "role": "Role"}),
                     hide_index=True, width="stretch")
                 st.download_button(f"📆 Add {coach}'s schedule to Google Calendar (.ics)",
@@ -1065,7 +1110,7 @@ if VIEW == TAB_PECK:
     else:
         missing = order[~order["_set"]]["team"].tolist()
         if missing:
-            st.info(f"**{len(missing)} team(s) have no rank yet**, so they're placed between their age group's "
+            st.info(f"**{plural(len(missing), 'team')} {'has' if len(missing) == 1 else 'have'} no rank yet**, so they're placed between their age group's "
                     f"1s and 2s: {', '.join(missing)}.", icon="ℹ️")
         sig_key = abs(hash((st.session_state.get("inp_sig"), st.session_state.get("locals_ver", 0)))) % 10**8
         shown = order[["order", "rank", "team", "club", "head_coach", "assistants"]]
@@ -1087,7 +1132,7 @@ if VIEW == TAB_PECK:
             for team, rank in changed.items():
                 t.loc[t["team"].astype(str).str.strip() == team, "rank"] = str(rank or "").strip()
             inp.teams = t
-            _rebuild(f"Saved {len(changed)} rank(s). Schedule rebuilt.")
+            _rebuild(f"Saved {plural(len(changed), 'rank')}. Schedule rebuilt.")
 
         dl = order.rename(columns={"rank": "Rank", "team": "Team", "club": "Club", "head_coach": "Head Coach",
                                    "assistants": "Asst. Coach"})[["Rank", "Club", "Team", "Head Coach", "Asst. Coach"]]
@@ -1138,14 +1183,14 @@ if VIEW == TAB_PECK:
                 changes = pk.assistant_changes(matches, inp.teams)
                 upd = False
                 if changes:
-                    upd = st.checkbox(f"Also update assistant coaches from this sheet ({len(changes)} team(s) differ)",
+                    upd = st.checkbox(f"Also update assistant coaches from this sheet ({plural(len(changes), 'team')} differ{'s' if len(changes) == 1 else ''})",
                                       key="peck_upd_asst")
                     st.dataframe(pd.DataFrame(changes, columns=["Team", "Assistants now", "In the sheet"]),
                                  hide_index=True, width="stretch")
                 if st.button("✅ Use this pecking order", type="primary", disabled=bool(dupes)):
                     inp.teams = pk.apply(inp.teams, matches, update_assistants=upd)
                     n = sum(1 for m in matches if m.team and m.rank is not None)
-                    _rebuild(f"Pecking order set for {n} team(s)"
+                    _rebuild(f"Pecking order set for {plural(n, 'team')}"
                              + (f", assistants updated for {len(changes)}" if upd and changes else "")
                              + ". Schedule rebuilt.")
 
