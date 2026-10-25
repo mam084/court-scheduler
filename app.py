@@ -531,8 +531,10 @@ if VIEW == TAB_EDIT:
                 st.caption("No practices in this schedule.")
 
         with c_right:
-            mode = st.radio("What do you want to do?", ["Move a practice", "Remove a practice", "Add a practice",
-                                                        "Set usual days"], key="ed_mode")
+            mode = st.radio("What do you want to do?", ["Suggest a preference", "Move a practice", "Remove a practice",
+                                                        "Add a practice", "Set usual days"], key="ed_mode",
+                            help="A preference is weighed against everyone else's and kept when possible. "
+                                 "The other options pin a practice exactly where you put it.")
             labels = [f"{r.date:%a %b %-d} · {r.slot_label} · Court {r.court}" for r in tp.itertuples()]
             if mode in ("Move a practice", "Remove a practice"):
                 if not labels:
@@ -565,6 +567,64 @@ if VIEW == TAB_EDIT:
                                               "days": "", "time": old["slot"], "court": "", "note": "removed by hand"}],
                                             f"{'Removed' if act == 'Remove' else 'Cancelled'} {e_team}'s "
                                             f"{old['date']:%a %b %-d} practice.")
+            elif mode == "Suggest a preference":
+                st.caption("Tell the scheduler what this team would rather have. It's weighed against every other "
+                           "team's requests, so it's kept when it fits, not forced.")
+                pk = f"pref_{e_team}"
+                p_days = st.multiselect("Would rather practice on", WEEKDAYS, key=f"{pk}_pd",
+                                        placeholder="Any day")
+                p_times = st.multiselect("at", WEEKDAY_KEYS, format_func=lambda k: SLOTS[k], key=f"{pk}_pt",
+                                         placeholder="Any time")
+                p_rank = st.radio("How much", ["1st choice", "2nd choice"], horizontal=True, key=f"{pk}_pr")
+                a_days = st.multiselect("Would rather not practice on", WEEKDAYS, key=f"{pk}_ad",
+                                        placeholder="Any day")
+                a_times = st.multiselect("at ", WEEKDAY_KEYS, format_func=lambda k: SLOTS[k], key=f"{pk}_at",
+                                         placeholder="Any time")
+                p_note = st.text_input("Note (optional)", key=f"{pk}_note", placeholder="e.g. coach works until 4")
+                want = bool(p_days or p_times)
+                avoid = bool(a_days or a_times)
+                if st.button("Save preference", type="primary", width="stretch", disabled=not (want or avoid)):
+                    bits = []
+                    if want:
+                        row = {c: "" for c in inp.wishlist.columns}
+                        row.update({"team": e_team, "choice": 1 if p_rank.startswith("1") else 2,
+                                    "days": ", ".join(p_days), "times": ", ".join(p_times), "note": p_note})
+                        inp.wishlist = pd.concat([inp.wishlist, pd.DataFrame([row])], ignore_index=True)
+                        bits.append(f"prefers {' / '.join(p_days) or 'any day'} {', '.join(p_times)}".strip())
+                    if avoid:
+                        row = {c: "" for c in inp.availability.columns}
+                        row.update({"who": e_team, "type": "Not preferred", "days": ", ".join(a_days),
+                                    "times": ", ".join(a_times), "note": p_note})
+                        inp.availability = pd.concat([inp.availability, pd.DataFrame([row])], ignore_index=True)
+                        bits.append(f"would rather not have {' / '.join(a_days) or 'any day'} "
+                                    f"{', '.join(a_times)}".strip())
+                    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+                    st.session_state.resolve = True
+                    st.session_state.flash = f"Saved: {e_team} " + " and ".join(bits) + ". Schedule rebuilt."
+                    st.rerun()
+
+                # This team's current preferences, removable here.
+                wl = inp.wishlist.fillna("")
+                wl = wl[wl["team"] == e_team]
+                av = inp.availability.fillna("")
+                av = av[(av["who"] == e_team) & av["type"].astype(str).str.lower().str.startswith("not")]
+                prefs = {("w", i): f"Prefers ({'1st' if str(r['choice']).startswith('1') else '2nd'}): "
+                                   f"{r['days'] or 'any day'} {r['times'] or 'any time'}" for i, r in wl.iterrows()}
+                prefs.update({("a", i): f"Rather not: {r['days'] or 'any day'} {r['times'] or 'any time'}"
+                              for i, r in av.iterrows()})
+                if prefs:
+                    st.markdown("**Current preferences**")
+                    for lab in prefs.values():
+                        st.caption("• " + lab)
+                    drop = st.multiselect("Remove", list(prefs), format_func=lambda k: prefs[k], key=f"{pk}_drop")
+                    if st.button("Remove selected", disabled=not drop, key=f"{pk}_dropbtn"):
+                        inp.wishlist = inp.wishlist.drop(index=[i for k, i in drop if k == "w"]).reset_index(drop=True)
+                        inp.availability = inp.availability.drop(
+                            index=[i for k, i in drop if k == "a"]).reset_index(drop=True)
+                        st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+                        st.session_state.resolve = True
+                        st.session_state.flash = f"Removed {len(drop)} preference(s) for {e_team}. Schedule rebuilt."
+                        st.rerun()
             elif mode == "Add a practice":
                 ad = st.date_input("Date", value=start, min_value=start, max_value=end, format="MM/DD/YYYY", key="ed_ad")
                 as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1, key="ed_as")

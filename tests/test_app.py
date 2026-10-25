@@ -112,3 +112,36 @@ def test_court_view_opens_on_first_week(db):
     show = next(s for s in at.selectbox if s.label == "Show")
     assert show.value == "Week of Nov 1"
     assert "Weekly template" in show.options
+
+
+def test_suggest_a_preference_adds_wish_and_not_preferred(db):
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Prefs", 9)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("✏️ Edit practices").run()
+    team = at.selectbox(key="ed_team").value
+    n_wish, n_avail = len(at.session_state["inp"].wishlist), len(at.session_state["inp"].availability)
+    pk = f"pref_{team}"
+    at.multiselect(key=f"{pk}_pd").set_value(["Tue"]).run()
+    at.multiselect(key=f"{pk}_pt").set_value(["7:20"]).run()
+    at.multiselect(key=f"{pk}_ad").set_value(["Tue"]).run()
+    at.multiselect(key=f"{pk}_at").set_value(["3:45"]).run()
+    next(b for b in at.button if b.label == "Save preference").click().run()
+    assert not at.exception
+    inp = at.session_state["inp"]
+    assert len(inp.wishlist) == n_wish + 1 and len(inp.availability) == n_avail + 1
+    w = inp.wishlist.iloc[-1]
+    assert (w["team"], w["days"], w["times"], int(w["choice"])) == (team, "Tue", "7:20", 1)
+    a = inp.availability.iloc[-1]
+    assert (a["who"], a["type"], a["days"], a["times"]) == (team, "Not preferred", "Tue", "3:45")
+    assert at.session_state["nav"] == "✏️ Edit practices"
+    # Saved with the schedule, and removable again.
+    assert len(db.get(pid)["payload"]["inputs"]["Wishlist"]) == n_wish + 1
+    drop = at.multiselect(key=f"{pk}_drop")
+    drop.set_value([("w", n_wish), ("a", n_avail)]).run()   # the two rows just added
+    at.button(key=f"{pk}_dropbtn").click().run()
+    assert not at.exception
+    assert len(at.session_state["inp"].wishlist) == n_wish
+    assert len(at.session_state["inp"].availability) == n_avail

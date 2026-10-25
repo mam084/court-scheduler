@@ -46,7 +46,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 | Assistant coaches free | Assistants can be double-booked, at a cost |
 | 3:45 shared around | 3:45 is a last resort, and the youngest teams take it first (12s, then 13s, then 14s). When it's needed, it rotates: a team gets at most one 3:45 a week before another young team gets none. A team that asks for 3:45 on its wishlist gets it; a team marked "Not preferred" at 3:45 is kept off it when possible |
 | Not-preferred days, weekend AM/PM preferences | |
-| A day apart | Back-to-back weekdays are only lightly avoided (a team that asks for Tue/Wed gets it); Saturday then Sunday is strongly avoided |
+| A day apart | Back-to-back weekdays are only lightly avoided, and not at all when the team asked for both days (e.g. Tue/Wed); Saturday then Sunday is strongly avoided |
 | Same slot both days, home court | |
 
 Closures default to the major family holidays: New Year's Day, July 4, Thanksgiving and the day after, Christmas Eve and Day, and New Year's Eve. The club practices on minor holidays like Labor Day.
@@ -56,6 +56,7 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 - **Saved schedules:** create a schedule (name, dates, then upload the club spreadsheet or try the simulated club). Everything saves automatically: inputs, programs and tournaments you add, edits, dates, and the latest solved schedule. Refreshing or reopening the page's link (`?project=…`) picks up where you left off, and the **Schedule** menu lists every saved schedule.
 
 - **Court view:** courts as rows and days as columns (Sunday–Saturday), with each practice, its time and its coaches in the box, and a dashed **Open** box for every free court time. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
+- **Suggest a preference:** in Edit practices, tell the scheduler what a team would rather have ("Tue 7:20, 1st choice") or rather not have ("not Tue 3:45"). It's added to the Wishlist or as a "Not preferred" row and weighed against everyone else's requests, so it's kept when it fits. Each team's preferences are listed there and can be removed.
 - **Edit practices:** move, remove or add a single practice, or set a team's usual days. Removing one can find a makeup or cancel it outright. Hand-set practices show a 📌 and are kept on every rebuild, with everything else fitted around them. If changes can't all happen (court taken, coach double-booked), the app says why and undoes the change. The full list is in the **Overrides** sheet and can be undone there.
 - **Calendar:** a month view, filterable by club, team or coach.
 - **Tournaments:** add a local tournament (dates, courts, locals program) or a travel tournament (dates, club, age groups, then trim the list of teams going). It shows on the court view, calendar and Excel export, and the schedule is rebuilt around it.

@@ -798,3 +798,21 @@ def test_wishlist_miss_explained_in_review():
     rows = r.issues[r.issues["issue"].str.startswith("Usual week isn't the 1st choice")]
     assert len(rows) >= 1
     assert rows["detail"].str.contains("Pat coaches").any()
+
+
+def test_wished_back_to_back_days_beat_a_neighbors_swap():
+    # Seven 15s fill every court Tue-Thu 5:30 except one Wed spot, which
+    # 15-Reb holds on Wed/Fri. 14 Black asked for Tue/Wed 5:30. Moving Reb to
+    # the open Thu 5:30 gives 14 Black its Wednesday; asking for back-to-back
+    # days shouldn't count against it.
+    teams = [{"team": "14 Black", "age": 14, "head_coach": "Matt"},
+             {"team": "15-Reb", "age": 15}] + [{"team": f"16-F{i}", "age": 16} for i in range(6)]
+    wish = [{"team": "14 Black", "choice": 1, "days": "Tue, Wed", "times": "5:30"},
+            {"team": "15-Reb", "choice": 1, "times": "5:30"}]
+    wish += [{"team": f"16-F{i}", "choice": 1, "days": "Tue, Wed", "times": "5:30"} for i in range(5)]
+    avail = [{"who": "15-Reb", "type": "No", "days": "Mon"}]
+    r = solve(_inp(teams, avail, wish), *NOV, time_limit_s=15)
+    mb = r.pattern[r.pattern["team"] == "14 Black"]
+    assert set(zip(mb["day"], mb["slot"])) == {("Tue", "5:30"), ("Wed", "5:30")}
+    mine = r.issues[r.issues["team"] == "14 Black"]
+    assert not mine["issue"].str.contains("Back-to-back").any()  # asked for, so not flagged

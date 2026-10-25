@@ -212,6 +212,12 @@ def solve(
                         for w in data.wishes.get(teams[t].name, []))
                  for t in T}
 
+    # late_ok teams whose 1st-choice wishlist asks for 7:20 / 7 PM: going
+    # late is what they want, not an exception.
+    wants_late = {t: any(w.choice == 1 and w.times and w.times & {"7:20", "7PM"}
+                         for w in data.wishes.get(teams[t].name, []))
+                  for t in T}
+
     y = {}
     broken = {}  # (t, d, s) -> details, for practices that land on a no-date
     for t in T:
@@ -281,7 +287,7 @@ def solve(
                         cost += WEIGHTS["not_preferred_345"]
                 if any(r.kind == "no" and r.matches(d, s) for a in team.assistants for r in rules_for[a]):
                     cost += WEIGHTS["assistant_conflict"]
-                if is_late_exception(team.age, s):
+                if is_late_exception(team.age, s) and not wants_late[t]:
                     cost += WEIGHTS["late_exception"]
                 if d in rest_days[team.name]:
                     tn, when = rest_days[team.name][d]
@@ -561,9 +567,15 @@ def solve(
                 m.Add(sum(wk) - 1 <= extra)
                 obj.append(WEIGHTS["second_weekend"] * extra)
 
+        # Back-to-back weekdays the team asked for (a 1st-choice wish naming
+        # both days, e.g. "Tue, Wed") cost nothing and aren't flagged.
+        wished_pairs = {(w.days[i], w.days[j]) for w in data.wishes.get(team.name, []) if w.choice == 1
+                        for i in range(len(w.days)) for j in range(len(w.days))}
         for d in open_dates:
             nxt = d + timedelta(days=1)
             if nxt in open_dates:  # back-to-back days, including Sat -> Sun
+                if d.weekday() < 4 and (DAYS[d.weekday()], DAYS[nxt.weekday()]) in wished_pairs:
+                    continue
                 a, b = y_day(t, d), y_day(t, nxt)
                 if isinstance(a, int) or isinstance(b, int):
                     continue
