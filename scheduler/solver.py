@@ -203,10 +203,6 @@ def solve(
     for (t, ws), n in per_week.items():
         if n > PRACTICES_PER_WEEK:
             problems.append(f"{teams[t].name}: {n} practices placed by hand in the week of {ws:%b %-d} (max 2)")
-    for (t, d, s) in pinned:
-        if d.weekday() == 5 and any(tt == t and dd == d + timedelta(days=1) for (tt, dd, _) in pinned):
-            problems.append(f"{teams[t].name}: practices placed by hand on both Sat {d:%-m/%-d} and "
-                            f"Sun {d + timedelta(days=1):%-m/%-d} (no team practices Saturday then Sunday)")
     if problems:
         raise ValueError("These manual changes can't all happen:\n- " + "\n- ".join(problems))
 
@@ -303,8 +299,9 @@ def solve(
                     cost += WEIGHTS["not_preferred"]
                     if s == "3:45":
                         cost += WEIGHTS["not_preferred_345"]
-                if any(r.kind == "no" and r.matches(d, s) for a in team.assistants for r in rules_for[a]):
-                    cost += WEIGHTS["assistant_conflict"]
+                if any(r.kind == "no" and r.matches(d, s) for a in team.assistants if a not in team.heads
+                       for r in rules_for[a]):
+                    cost += WEIGHTS["assistant_nodate"]
                 if is_late_exception(team.age, s) and not wants_late[t]:
                     cost += WEIGHTS["late_exception"]
                 if d in rest_days[team.name]:
@@ -594,13 +591,7 @@ def solve(
                         for i in range(len(w.days)) for j in range(len(w.days))}
         for d in open_dates:
             nxt = d + timedelta(days=1)
-            if d.weekday() == 5 and nxt in open_dates:
-                # Hard rule: never Saturday then Sunday.
-                a, b = y_day(t, d), y_day(t, nxt)
-                if not (isinstance(a, int) and isinstance(b, int)):
-                    m.Add(a + b <= 1)
-                continue
-            if nxt in open_dates:  # back-to-back days
+            if nxt in open_dates:  # back-to-back days, including Sat -> Sun
                 if d.weekday() < 4 and (DAYS[d.weekday()], DAYS[nxt.weekday()]) in wished_pairs:
                     continue
                 a, b = y_day(t, d), y_day(t, nxt)
@@ -609,7 +600,7 @@ def solve(
                 cons = m.NewBoolVar(f"cons_{t}_{d}")
                 m.Add(cons >= a + b - 1)
                 consec_vars[t, d] = cons
-                obj.append(WEIGHTS["consecutive_days"] * cons)
+                obj.append((WEIGHTS["consecutive_days"] + (WEIGHTS["sat_sun"] if d.weekday() == 5 else 0)) * cons)
 
         used = []
         for s in WEEKDAY_KEYS:
@@ -958,11 +949,35 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
                                 "detail": "no other open slot that week kept both practices"})
 
     for (t, d), v in consec_vars.items():
-        if solver.Value(v):
-            sat = d.weekday() == 5
-            out.append({"severity": "Medium" if sat else "Low", "team": teams[t].name, "week_of": week_start(d),
+        if solver.Value(v) and d.weekday() != 5:
+            out.append({"severity": "Low", "team": teams[t].name, "week_of": week_start(d),
                         "issue": f"Back-to-back days: {d:%a} & {(d + timedelta(days=1)):%a %-m/%-d}",
-                        "detail": "no other open slot kept 2 practices both weeks" if sat else ""})
+                        "detail": ""})
+
+    # Read off the finished schedule, so hand-placed practices are caught too.
+    if len(a):
+        pr = a[a["kind"] == "Practice"]
+        on_day = set(zip(pr["name"], pr["date"]))
+        for name, d in sorted(on_day, key=lambda k: (k[1], k[0])):
+            if d.weekday() == 5 and (name, d + timedelta(days=1)) in on_day:
+                out.append({"severity": "High", "team": name, "week_of": week_start(d),
+                            "issue": f"Saturday then Sunday: {d:%-m/%-d} & {d + timedelta(days=1):%-m/%-d}",
+                            "detail": "the only way to keep 2 practices both weeks without breaking a head "
+                                      "coach's no-date (or it was placed by hand)"})
+        by_name = {tm.name: tm for tm in teams}
+        for r in pr.itertuples():
+            team = by_name.get(r.name)
+            if team is None:
+                continue
+            for asst in team.assistants:
+                if asst in team.heads:
+                    continue
+                hit = [rule for rule in rules_for[asst] if rule.kind == "no" and rule.matches(r.date, r.slot)]
+                if hit:
+                    out.append({"severity": "Medium", "team": r.name, "week_of": week_start(r.date),
+                                "issue": f"Assistant no-date broken: {asst} on {r.date:%a %-m/%-d} {r.slot}",
+                                "detail": f"{', '.join(team.heads)} runs practice without {asst}"
+                                          + (f" ({hit[0].note})" if hit[0].note else "")})
 
     df = pd.DataFrame(out, columns=["severity", "team", "week_of", "issue", "detail"])
     if not df.empty:

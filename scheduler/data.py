@@ -770,6 +770,17 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
         if who not in team_names and who not in people:
             warnings.append(f"Availability row {i + 2}: '{who}' isn't a team or coach name, so it's ignored")
             continue
+        # A team no-date whose note names one of its assistants ("Cierra can't
+        # make Mondays") is probably that assistant's: as a team no-date it's
+        # the hardest kind to break.
+        if kind == "no" and who in team_names and rule.note:
+            tm = next(t for t in teams if t.name == who)
+            first = re.split(r"[\s']", rule.note.strip(), maxsplit=1)[0]
+            asst = next((a for a in tm.assistants if a not in tm.heads and a.lower() == first.lower()), None)
+            if asst:
+                warnings.append(f"Availability row {i + 2}: '{who}' no-date says \"{rule.note}\". If that's "
+                                f"assistant {asst}'s, put {asst} in the who column instead, so it's treated as "
+                                f"an assistant's no-date (broken before a Sat->Sun or a head coach's)")
         rules.append(rule)
 
     # ---- wishlist ---------------------------------------------------------

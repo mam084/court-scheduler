@@ -831,28 +831,72 @@ def test_open_requested_slot_beats_sticking_to_usual():
     assert set(first_week["date"].map(lambda d: d.strftime("%a"))) == {"Tue", "Wed"}
 
 
-def test_saturday_then_sunday_is_never_scheduled():
-    # Weekdays are out entirely; the only open days are Sat 11/7 (end of one
-    # week) and Sun 11/8 (start of the next). Two short weeks would push the
-    # old soft rule into Sat->Sun; the hard rule never does, and the missing
-    # practice is flagged instead.
+def _ladder_club(who_is_out):
+    """Two weeks, 11/1-11/14. Week 1 only has Sat 11/7 open. Week 2 has
+    Sun 11/8, Wed 11/11 and Fri 11/13. Each team needs Sat 11/7 (or misses a
+    practice), then 2 of Sun / Wed / Fri, where Wed is a no-date for
+    `who_is_out` ('head' or 'assistant'). Two teams so weekend blocks are shared."""
+    teams = [{"team": "16-Ann", "age": 16, "assistants": "Abe"},
+             {"team": "16-Bea", "age": 16, "assistants": "Bo"}]
+    out = {"head": ["Ann", "Bea"], "assistant": ["Abe", "Bo"]}[who_is_out]
+    avail = [{"who": w, "type": "No", "dates": "11/11"} for w in out]
+    weekends = [{"date": d, "open": "9AM-9PM"} for d in ("11/7", "11/8")]
+    closed = [2, 3, 4, 5, 6, 9, 10, 12]
+    closures = [{"date": f"11/{n}/2026", "reason": "closed"} for n in closed]
+    inp = _inp(teams, avail, weekends=weekends, closures=closures)
+    return inp, solve(inp, date(2026, 11, 1), date(2026, 11, 14), time_limit_s=10)
+
+
+def _days(r, team):
+    pr = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["name"] == team)]
+    return {d.strftime("%a %-m/%-d") for d in pr["date"]}
+
+
+def test_sat_sun_beats_breaking_a_head_coach_no_date():
+    inp, r = _ladder_club("head")
+    for team in ("16-Ann", "16-Bea"):
+        assert _days(r, team) == {"Sat 11/7", "Sun 11/8", "Fri 11/13"}, _days(r, team)
+    assert not r.broken
+    flags = r.issues[r.issues["issue"].str.startswith("Saturday then Sunday")]
+    assert set(flags["team"]) == {"16-Ann", "16-Bea"} and (flags["severity"] == "High").all()
+
+
+def test_breaking_an_assistant_no_date_beats_sat_sun():
+    inp, r = _ladder_club("assistant")
+    for team in ("16-Ann", "16-Bea"):
+        assert _days(r, team) == {"Sat 11/7", "Wed 11/11", "Fri 11/13"}, _days(r, team)
+    assert not r.issues["issue"].str.startswith("Saturday then Sunday").any()
+    flags = r.issues[r.issues["issue"].str.startswith("Assistant no-date broken")]
+    assert set(flags["team"]) == {"16-Ann", "16-Bea"}
+
+
+def test_sat_sun_beats_a_missed_practice():
+    # Only Sat 11/7 and Sun 11/8 are open: using both beats missing one.
     teams = [{"team": f"16-W{i}", "age": 16} for i in range(2)]
     weekends = [{"date": d, "open": "9AM-9PM"} for d in ("11/7", "11/8")]
     closures = [{"date": f"11/{n}/2026", "reason": "closed"} for n in (2, 3, 4, 5, 6, 9, 10, 11, 12, 13)]
     r = solve(_inp(teams, weekends=weekends, closures=closures), date(2026, 11, 1), date(2026, 11, 14),
               time_limit_s=10)
-    pr = r.assignments[r.assignments["kind"] == "Practice"]
-    for name, g in pr.groupby("name"):
-        days = set(g["date"])
-        assert not any(d.weekday() == 5 and d + pd.Timedelta(days=1) in days for d in days), name
-    assert not r.shortfalls.empty
+    for team in ("16-W0", "16-W1"):
+        assert _days(r, team) == {"Sat 11/7", "Sun 11/8"}
+    assert r.issues["issue"].str.startswith("Saturday then Sunday").sum() == 2
 
 
-def test_hand_placed_saturday_and_sunday_refused():
+def test_hand_placed_saturday_and_sunday_allowed_but_flagged():
     teams = [{"team": "16-W", "age": 16}, {"team": "16-X", "age": 16, "head_coach": "Xi"}]
     weekends = [{"date": d, "open": "9AM-9PM"} for d in ("11/7", "11/8")]
     inp = _with_overrides(_inp(teams, weekends=weekends), [
         {"team": "16-W", "action": "Add", "date": "11/7/2026", "time": "9AM"},
-        {"team": "16-W", "action": "Add", "date": "11/8/2026", "time": "9AM"}])
-    with pytest.raises(ValueError, match="Saturday then Sunday"):
-        solve(inp, *NOV, time_limit_s=10)
+        {"team": "16-W", "action": "Add", "date": "11/8/2026", "time": "9AM"},
+        {"team": "16-X", "action": "Add", "date": "11/7/2026", "time": "9AM"},
+        {"team": "16-X", "action": "Add", "date": "11/8/2026", "time": "9AM"}])
+    r = solve(inp, *NOV, time_limit_s=10)
+    flags = r.issues[r.issues["issue"].str.startswith("Saturday then Sunday")]
+    assert "16-W" in set(flags["team"])
+
+
+def test_team_no_date_naming_an_assistant_is_pointed_out():
+    teams = [{"team": "15-Madi", "age": 15, "assistants": "Cierra"}]
+    avail = [{"who": "15-Madi", "type": "No", "days": "Mon", "note": "Cierra can't make Mondays"}]
+    data = clean(_inp(teams, avail), *NOV)
+    assert any("put Cierra in the who column" in w for w in data.warnings)

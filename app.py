@@ -379,6 +379,17 @@ else:
         lines = [f"- **{b['team']}** · {b['date']:%a %b %-d} {b['slot_label']}: {b['who']}" for b in result.broken]
         st.warning(f"**{len(result.broken)} practice(s) had to go on a no-date** so the team still gets 2 "
                    "practices that week:\n" + "\n".join(lines), icon="⚠️")
+    iss = result.issues if result.issues is not None else pd.DataFrame(columns=["issue"])
+    satsun = iss[iss["issue"].astype(str).str.startswith("Saturday then Sunday")] if len(iss) else iss
+    if len(satsun):
+        lines = [f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}" for r in satsun.itertuples()]
+        st.warning(f"**{len(satsun)} team(s) practice Saturday then Sunday**, the only way to avoid a missed "
+                   "practice or a head coach's no-date:\n" + "\n".join(lines), icon="⚠️")
+    asst = iss[iss["issue"].astype(str).str.startswith("Assistant no-date broken")] if len(iss) else iss
+    if len(asst):
+        with st.expander(f"🧑‍🏫 {len(asst)} practice(s) without an assistant who marked a no-date"):
+            for r in asst.itertuples():
+                st.markdown(f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}: {r.detail}")
     if m.get("status") == "FEASIBLE":
         st.caption(f"⏱️ The solver hit its {time_limit}-second limit, so this is a good schedule but maybe not "
                    "the best one. Raise the time limit in **Solver settings** for a better one.")

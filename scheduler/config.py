@@ -148,6 +148,10 @@ WEIGHTS = {
     # Assistant coach double-booked (other team or a local). Head coaches
     # can never be double-booked; assistants can, at a cost.
     "assistant_conflict": 60,
+    # An assistant's no-date broken (the head coach runs practice). The
+    # cheapest of the "last resort" breaks. Order, worst first:
+    # missed practice > head coach / team no-date > Sat->Sun > assistant no-date.
+    "assistant_nodate": 60,
     # A weekday practice that doesn't sit on the team's recurring pattern.
     "off_pattern": 25,
     # Moving a practice off its usual slot into a 1st-choice wishlist slot,
@@ -174,12 +178,17 @@ WEIGHTS = {
     "home_court": 8,
     # A late_ok young team (e.g. 14 Black) practicing at 7:20 / 7 PM.
     "late_exception": 25,
-    # A team's practices on back-to-back weekdays (practices should have a
-    # day in between when possible). Saturday then Sunday is a hard rule in
-    # the solver, never allowed.
+    # A team's practices on back-to-back days (practices should have a day
+    # in between when possible).
     # Kept below "wish_miss": back-to-back weekdays are fine, so a team
     # that asks for Tue/Wed gets Tue/Wed.
     "consecutive_days": 10,
+    # Extra on top for Saturday then Sunday. With the Sunday's "weekend" cost
+    # that's 150 + 200 + 10 = 360: below every head coach / team no-date
+    # break ("break_head_nodate" 400 and up), above an assistant's
+    # ("assistant_nodate" 60). So a Sat->Sun happens only to avoid a missed
+    # practice or a head coach's no-date, and it's always flagged.
+    "sat_sun": 200,
     # Wishlist: practice matching only the 2nd choice / matching neither.
     "wish_second": 6,
     "wish_miss": 16,
@@ -195,8 +204,8 @@ WEIGHTS = {
     # when there's no other way: these stay below "missed_practice", so a
     # team gets both practices before any no-date is kept. Cheapest when
     # the head coach is out but an assistant is free to run practice.
-    "break_head_nodate": 250,        # head coach out, an assistant is free
-    "break_head_and_asst": 400,      # head coach out, no assistant free either
+    "break_head_nodate": 400,        # head coach out, an assistant is free
+    "break_head_and_asst": 500,      # head coach out, no assistant free either
     "break_team_nodate": 600,        # the team's own no-date (last resort)
     # Stability: reward for keeping a practice where the last published (or
     # last built) schedule had it, so a small change doesn't reshuffle
