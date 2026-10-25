@@ -150,6 +150,11 @@ WEIGHTS = {
     "assistant_conflict": 60,
     # A weekday practice that doesn't sit on the team's recurring pattern.
     "off_pattern": 25,
+    # Moving a practice off its usual slot into a 1st-choice wishlist slot,
+    # or skipping a usual slot that's off the wishlist / not preferred.
+    # Small, so a coach gets an open slot they asked for that week, but not
+    # zero, so it doesn't bounce around without a gain.
+    "move_to_wish": 4,
     # Practicing on a weekend instead of a weekday. High on purpose: a
     # weekday practice wins unless it's genuinely unavailable.
     "weekend": 150,

@@ -816,3 +816,16 @@ def test_wished_back_to_back_days_beat_a_neighbors_swap():
     assert set(zip(mb["day"], mb["slot"])) == {("Tue", "5:30"), ("Wed", "5:30")}
     mine = r.issues[r.issues["team"] == "14 Black"]
     assert not mine["issue"].str.contains("Back-to-back").any()  # asked for, so not flagged
+
+
+def test_open_requested_slot_beats_sticking_to_usual():
+    # 14 Black asked for Tue/Wed 5:30. A one-week clinic is the only thing on
+    # Wednesdays except the first week, so its usual week is Tue/Thu; in the
+    # week Wednesday is free, it should get Wednesday, not stick to Thursday.
+    teams = [{"team": "14 Black", "age": 14, "head_coach": "Matt"}]
+    wish = [{"team": "14 Black", "choice": 1, "days": "Tue, Wed", "times": "5:30"}]
+    avail = [{"who": "14 Black", "type": "No", "dates": "11/11; 11/18; 11/25"}]
+    r = solve(_inp(teams, avail, wish), *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    first_week = pr[pr["date"].map(week_start) == date(2026, 11, 1)]
+    assert set(first_week["date"].map(lambda d: d.strftime("%a"))) == {"Tue", "Wed"}

@@ -218,6 +218,20 @@ def solve(
                          for w in data.wishes.get(teams[t].name, []))
                   for t in T}
 
+    def not_preferred_at(t, d, s):
+        return any(r.kind == "not_preferred" and r.matches(d, s)
+                   for who in [teams[t].name] + teams[t].staff for r in rules_for[who])
+
+    def wished(t, d, s):
+        """A 1st-choice wishlist slot the team doesn't also mark not preferred."""
+        ws_ = data.wishes.get(teams[t].name, [])
+        return any(w.choice == 1 and w.matches(d, s) for w in ws_) and not not_preferred_at(t, d, s)
+
+    def unwanted(t, d, s):
+        """A slot the team marked not preferred, or one outside a wishlist it gave."""
+        ws_ = data.wishes.get(teams[t].name, [])
+        return not_preferred_at(t, d, s) or (bool(ws_) and not any(w.choice == 1 and w.matches(d, s) for w in ws_))
+
     y = {}
     broken = {}  # (t, d, s) -> details, for practices that land on a no-date
     for t in T:
@@ -541,14 +555,17 @@ def solve(
                 if (t, wd, s) not in p:
                     continue
                 v = ys(t, d, s)
+                # Leaving a usual slot the team didn't ask for, for one it did,
+                # is what coaches want, so it's nearly free. Teams already on
+                # their requested slots stay just as steady.
                 if (t, d, s) in y:
                     off = m.NewBoolVar(f"off_{t}_{d}_{s}")
                     m.Add(off >= v - p[t, wd, s])
                     off_vars[t, d, s] = off
-                    obj.append(WEIGHTS["off_pattern"] * off)
+                    obj.append((WEIGHTS["move_to_wish"] if wished(t, d, s) else WEIGHTS["off_pattern"]) * off)
                 miss = m.NewBoolVar(f"miss_{t}_{d}_{s}")
                 m.Add(miss >= p[t, wd, s] - v)
-                obj.append(WEIGHTS["off_pattern"] * 2 * miss)
+                obj.append((WEIGHTS["move_to_wish"] if unwanted(t, d, s) else WEIGHTS["off_pattern"] * 2) * miss)
 
         # Rotate 3:45: a usual week with both practices at 3:45 costs extra
         # (once per week in the range), so the early slot is shared around
@@ -890,11 +907,23 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
                         "issue": "Required weekend not used: " + " or ".join(f"{d:%a %-m/%-d}" for d in gdates),
                         "detail": "no two teams could share a block there"})
 
+    def asked_for(t, d, sl):
+        ws_ = data.wishes.get(teams[t].name, [])
+        return any(w.choice == 1 and w.matches(d, sl) for w in ws_) and not any(
+            r.kind == "not_preferred" and r.matches(d, sl) for who in [teams[t].name] + teams[t].staff
+            for r in rules_for[who])
+
     for (t, d, sl), v in off_vars.items():
         if solver.Value(v):
+            reason = why(t, week_start(d))
+            if asked_for(t, d, sl) and not reason:
+                out.append({"severity": "Low", "team": teams[t].name, "week_of": week_start(d),
+                            "issue": f"Moved to a requested time: {d:%a %-m/%-d} {sl}",
+                            "detail": "this slot was open this week and is on the team's wishlist"})
+                continue
             out.append({"severity": "Medium", "team": teams[t].name, "week_of": week_start(d),
                         "issue": f"Makeup / moved: {d:%a %-m/%-d} {sl}",
-                        "detail": why(t, week_start(d)) or "differs from the usual weekly slot"})
+                        "detail": reason or "differs from the usual weekly slot"})
 
     a = assignments
     for (c, d, sl), v in asst_conflicts.items():
