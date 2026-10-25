@@ -564,6 +564,14 @@ def solve(
                     m.Add(off >= v - p[t, wd, s])
                     off_vars[t, d, s] = off
                     obj.append((WEIGHTS["move_to_wish"] if wished(t, d, s) else WEIGHTS["off_pattern"]) * off)
+                # Skipping a usual slot costs something only when the team could
+                # normally practice there that date. A one-off block (a no-date,
+                # a tournament or its rest day, a local) isn't the usual week's
+                # fault: the makeup already pays the off-pattern cost, and
+                # charging the template too pushes the usual week onto a day the
+                # team then leaves almost every week.
+                if (t, d, s) not in y or (t, d, s) in broken or d in rest_days[team.name]:
+                    continue
                 miss = m.NewBoolVar(f"miss_{t}_{d}_{s}")
                 m.Add(miss >= p[t, wd, s] - v)
                 obj.append((WEIGHTS["move_to_wish"] if unwanted(t, d, s) else WEIGHTS["off_pattern"] * 2) * miss)
@@ -892,7 +900,7 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
         if n:
             r = why(t, ws)
             out.append({"severity": "High", "team": teams[t].name, "week_of": ws,
-                        "issue": f"Only {target - n} of {target} practice(s) this week",
+                        "issue": f"Only {target - n} of {target} practice{'' if target == 1 else 's'} this week",
                         "detail": (r + "; " if r else "") + "no open slot for a makeup"})
 
     for t, ws, _goal in no_slot_weeks:

@@ -1029,3 +1029,21 @@ def test_calendar_exports(tmp_path):
     assert "Calendar" in load_workbook(_io.BytesIO(to_excel(r, data.closures))).sheetnames
     page = calendar_print_html(r.assignments, *NOV, data.closures, {team}, False, r.weekend_dates)
     assert "November 2026" in page and team in page and "@media print" in page
+
+
+def test_one_off_no_date_doesnt_move_the_usual_week():
+    """A no-date in one week (here the team's Thanksgiving-week Wed) shouldn't
+    push the usual week onto a day the team then leaves every other week."""
+    inp = simulate(6, 4, 4, seed=7, start=NOV[0], end=NOV[1])
+    r = solve(inp, *NOV, time_limit_s=60)
+    pat = r.pattern[r.pattern["team"] == "13 Black"]
+    assert sorted(pat["day"]) == ["Fri", "Wed"], pat
+    # Every team's usual slots are used in most of its full weeks.
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    weekly = pr.assign(wk=pr["date"].map(week_start))
+    for p in r.pattern.itertuples():
+        played = weekly[weekly["name"] == p.team]
+        full = played.groupby("wk").size()
+        full = set(full[full == 2].index)
+        hits = played[(played["day"] == p.day) & (played["slot"] == p.slot) & played["wk"].isin(full)]
+        assert len(hits) * 2 >= len(full), (p.team, p.day, p.slot, len(hits), len(full))
