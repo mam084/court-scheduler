@@ -42,7 +42,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 | Ranked wishlists | 1st choice, then 2nd choice day/time combos. The weekly template follows them too, so a team starting late in the range still gets the usual week it asked for, and a team that barely plays this period doesn't crowd out one playing all month. Every team whose usual week misses its 1st choice is listed in the Review tab with what got in the way (a full court, the coach's other team, a local) |
 | Coach double-ups | A coach's two teams back-to-back on the same day (girls at 5:30, boys at 7:20) |
 | Travel tournament rest | No practice the day before or after (especially no late practice the night before). This outranks no-dates: a no-date is broken before a team practices next to a tournament. The week leading in gets priority for 2 practices |
-| Court quality | Courts ranked 1 → 7 → 6 → 5 → 3 → 4 → 2. Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot older and 1s (Black) teams get the better courts |
+| Court quality | Courts ranked 1 → 7 → 6 → 5 → 3 → 4 → 2. Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot the better courts go by the club's **pecking order** (older age groups first, then rank within the age: `16-1` before `16-2`). When Court 2 is needed, the lowest-ranked team gets it |
 | Assistant coaches free | Assistants can be double-booked, at a cost |
 | 3:45 shared around | 3:45 is a last resort, and the youngest teams take it first (12s, then 13s, then 14s). When it's needed, it rotates: a team gets at most one 3:45 a week before another young team gets none. A team that asks for 3:45 on its wishlist gets it; a team marked "Not preferred" at 3:45 is kept off it when possible |
 | Not-preferred days, weekend AM/PM preferences | |
@@ -58,9 +58,10 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 - **Court view:** courts as rows and days as columns (Sunday–Saturday), with each practice, its time and its coaches in the box, and a dashed **Open** box for every free court time. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
 - **Suggest a preference:** in Edit practices, tell the scheduler what a team would rather have ("Tue 7:20, 1st choice") or rather not have ("not Tue 3:45"). It's added to the Wishlist or as a "Not preferred" row and weighed against everyone else's requests, so it's kept when it fits. Each team's preferences are listed there and can be removed.
 - **Edit practices:** move, remove or add a single practice, or set a team's usual days. Removing one can find a makeup or cancel it outright. Hand-set practices show a 📌 and are kept on every rebuild, with everything else fitted around them. If changes can't all happen (court taken, coach double-booked), the app says why and undoes the change. The full list is in the **Overrides** sheet and can be undone there.
-- **Calendar:** a month view, filterable by club, team or coach.
+- **Calendar:** a month view, filterable by club, team or coach. Download what's shown as a **Google Calendar file** (.ics, for one team, coach, club or everyone), a **printable calendar** (one month per landscape page; print or save as PDF), or an **Excel calendar** in the club's own layout (a block per week, each day with time · what · courts, courts kept as text so `5-7` never turns into a date). The full Excel export includes the calendar too.
 - **Tournaments:** add a local tournament (dates, courts, locals program) or a travel tournament (dates, club, age groups, then trim the list of teams going). It shows on the court view, calendar and Excel export, and the schedule is rebuilt around it.
 - **Programs:** add or edit a program (name, Girls/Boys side, days, every week or start/end dates, timeslots including JumpStart 3:30–4:30 and 4:30–5:30, courts, coaches, on/off-site). Editing lets you drop a single court when sign-ups are low. It's blocked off on the courts and calendar right away, with the practice schedule rebuilt around it. Girls programs show in blue, boys programs in green.
+- **Pecking order:** the club's team ranking (`16-3` = third 16s team; boys and girls can share a rank), shown top to bottom and editable in place. **Import** it from any spreadsheet with a Rank and a Team column: teams are matched by name (`18-Black` = `18 Black`) or by age + head coach (`16-D&D` → `16-Danielle & Darci`), ranks Excel turned into dates (`12-1` → Dec 1) are read back, mismatches can be fixed in a dropdown, and the sheet's assistant coaches can update the app's (TBA = nobody). Downloadable as Excel.
 - **Coaches:** add coaches who aren't on a team yet (e.g. ones who only work programs) to the roster.
 - **Coaches:** each coach's head and assistant teams, locals, no-dates and full schedule, plus an `.ics` download for Google Calendar.
 - **Publish:** mark the schedule as sent to coaches. Rebuilds then keep practices where they were, and this page lists every practice that moved, appeared, disappeared or changed court since a published version, with the reason (a new no-date, a program on the court, a tournament…). Downloadable as CSV.
@@ -89,7 +90,7 @@ One `.xlsx` with these sheets. Download a filled-in example from the app's sideb
 
 | Sheet | Columns |
 |---|---|
-| Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`), `late_ok` (`Yes` lets a 14s-and-under team practice at 7:20 when needed), `level` (`1` or `2`; blank = from the name, "Black" 1s and "Green" 2s) |
+| Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`), `late_ok` (`Yes` lets a 14s-and-under team practice at 7:20 when needed), `rank` (pecking order within the age group: `16-3` or `3`; blank = from the name, "Black" 1 and "Green" 2; files using the older `level` column still work) |
 | Availability | one row per rule: `who` (team or coach), `type` (`No` or `Not preferred`), `days` (`Mon`, `Weekdays`), `dates` (`11/10-11/16`), `times` (`5:30`, `3:45`), `note` |
 | Wishlist | `team`, `choice` (1 or 2), `days` (`Tue, Thu`; blank = any), `times` (`5:30, 7:20`) |
 | Locals | `program`, `side` (`Girls` / `Boys`; blank = guessed from a name like "G HS L"), `days` (`Tue, Thu`), `time` (`5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend `9AM-1PM`), `courts` (`1-4`, `P` = practice court; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional, e.g. `11/02/2026-12/18/2026`) |
@@ -100,6 +101,8 @@ One `.xlsx` with these sheets. Download a filled-in example from the app's sideb
 | Tournaments | `name`, `type` (`Local` or `Travel`), `start_date`, `end_date`, `club`, `ages` (`15-16`, `14U`), `teams` (optional: overrides club + ages), `program` (local: its coaches are busy), `courts` (local; blank = all) |
 
 Every field is forgiving: `Tuesdays and Thursdays`, `Tue/Thu`, `530pm` and `Nov 15-16` all work.
+
+Coach names are matched exactly, so write each coach the same way everywhere. Two coaches who share a first name need different names: `Tyler` and `Tyler Lyons` are two different people. To add a last name later, change it in every place it appears (Teams, Availability, Locals).
 
 > **Privacy:** real coach and team data should never be committed. `.gitignore` excludes everything in `data/` except the simulated sample.
 
@@ -125,6 +128,7 @@ scheduler/
   export.py             Excel workbook + per-coach .ics
   storage.py            saved schedules (SQLite or Postgres via DATABASE_URL)
   changes.py            published versions, what changed, per-team burden counts
+  pecking.py            read a pecking-order sheet and match it to the teams
 tests/                  hard-rule and parsing tests
 ```
 

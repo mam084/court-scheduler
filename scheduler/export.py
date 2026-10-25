@@ -1,20 +1,25 @@
-"""Exports: an Excel workbook in the club's grid layout, and .ics calendar
-files per coach (importable into Google Calendar today; a live Google
+"""Exports: an Excel workbook in the club's grid layout, a calendar in the
+club's own week-block layout, and .ics calendar files for a coach, team,
+club or everyone (importable into Google Calendar today; a live Google
 Calendar sync can replace this later)."""
 
 from __future__ import annotations
 
 import hashlib
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .config import ALL_COURTS, COURTS, DAYS, court_name, SLOT_KEYS, SLOT_TIMES, SLOTS, WEEK_ORDER, WEEKDAYS
+from .config import (
+    ALL_COURTS, COURTS, DAYS, PRACTICE_COURT, court_name, court_short, SLOT_KEYS, SLOT_TIMES, SLOTS, WEEK_ORDER,
+    WEEKDAYS,
+)
 from .solver import ScheduleResult, week_start
+from .views import _hit
 
 _thin = Side(style="thin", color="C9CED8")
 _border = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
@@ -80,6 +85,7 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
     locals_ = a[a["kind"] == "Local"].drop_duplicates(subset=["day", "slot", "court", "name"])
     tmpl = pd.concat([tmpl, locals_[tmpl.columns.intersection(locals_.columns)]], ignore_index=True)
     _grid_sheet(wb, "Weekly Template", tmpl, {})
+    _calendar_sheet(wb, result, closures)
 
     weekend_open = set(result.weekend_dates)
     for ws_date, g in a.groupby(a["date"].map(week_start)):
@@ -188,24 +194,145 @@ def to_ics(result: ScheduleResult, coach: str, club_name: str = "Club Practice",
     """Calendar file of one coach's practices and locals."""
     a = result.assignments
     mine = a[a["coach"].fillna("").map(lambda s: coach in [x.strip() for x in s.split(";")])]
+    return _ics(a, mine, f"{club_name} – {coach}", tz, key_extra=coach)
+
+
+def calendar_ics(result: ScheduleResult, highlight: set[str] | None = None, include_locals: bool = True,
+                 title: str = "Club Practice", tz: str = "America/Los_Angeles") -> bytes:
+    """Calendar file of what the Calendar shows: everything, or only the
+    picked clubs / teams / coaches. One event per practice or program."""
+    a = result.assignments
+    sel = a if include_locals else a[a["kind"] == "Practice"]
+    if highlight:
+        sel = sel[sel.apply(lambda r: _hit(r, highlight), axis=1)]
+    name = title + (" – " + ", ".join(sorted(highlight)) if highlight else "")
+    return _ics(a, sel, name, tz, key_extra="|".join(sorted(highlight or [])))
+
+
+def _ics(a: pd.DataFrame, mine: pd.DataFrame, cal_name: str, tz: str, key_extra: str = "") -> bytes:
     mine = mine.drop_duplicates(subset=["date", "slot", "name"])  # locals span several courts
-    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//court-scheduler//EN",
-             f"X-WR-CALNAME:{_ics_escape(club_name)} – {_ics_escape(coach)}"]
+             f"X-WR-CALNAME:{_ics_escape(cal_name)}", f"X-WR-TIMEZONE:{tz}"]
+    coach = key_extra
     for _, r in mine.iterrows():
         (sh, sm), (eh, em) = SLOT_TIMES[r["slot"]]
         d = r["date"]
         dstart = datetime(d.year, d.month, d.day, sh, sm).strftime("%Y%m%dT%H%M%S")
         dend = datetime(d.year, d.month, d.day, eh, em).strftime("%Y%m%dT%H%M%S")
         courts = a[(a["date"] == d) & (a["slot"] == r["slot"]) & (a["name"] == r["name"])]["court"].tolist()
-        where = "Court " + ", ".join(str(c) for c in sorted(courts))
+        where = _courts_text(courts, long=True)
         key = f"{d:%Y%m%d}|{r['slot']}|{r['name']}|{coach}"
         uid = hashlib.md5(key.encode()).hexdigest() + "@court-scheduler"
         lines += ["BEGIN:VEVENT", f"UID:{uid}", f"DTSTAMP:{stamp}",
                   f"DTSTART;TZID={tz}:{dstart}", f"DTEND;TZID={tz}:{dend}",
                   f"SUMMARY:{_ics_escape(r['name'])} ({r['kind'].lower()})",
                   f"LOCATION:{_ics_escape(where)}",
-                  f"DESCRIPTION:{_ics_escape(SLOTS[r['slot']] + ' · ' + where)}",
+                  f"DESCRIPTION:{_ics_escape(SLOTS[r['slot']] + ' · ' + where + (' · ' + r['coach'] if isinstance(r.get('coach'), str) and r['coach'] else ''))}",
                   "END:VEVENT"]
     lines.append("END:VCALENDAR")
     return ("\r\n".join(lines) + "\r\n").encode()
+
+
+def _courts_text(courts, long: bool = False) -> str:
+    """[1, 2, 3, 7] -> '1-3, 7' (as text, so Excel never turns '1-3' into a date)."""
+    nums = sorted({int(c) for c in courts if pd.notna(c)})
+    parts, run = [], []
+    for c in nums + [None]:
+        if c is not None and c != PRACTICE_COURT and run and c == run[-1] + 1:
+            run.append(c)
+            continue
+        if run:
+            parts.append(court_short(run[0]) if len(run) == 1 else f"{run[0]}-{run[-1]}")
+        run = [c] if c is not None else []
+    txt = ", ".join(parts)
+    if not long:
+        return txt
+    if nums == [PRACTICE_COURT]:
+        return "Practice court"
+    return ("Courts " if len(nums) > 1 else "Court ") + txt
+
+
+def _calendar_sheet(wb, result: ScheduleResult, closures: dict, highlight=None, include_locals: bool = True,
+                    title: str = "Calendar"):
+    """The club's calendar layout: one block per week (Sunday-Saturday), each
+    day three columns: time · what · courts."""
+    a = result.assignments
+    sel = a if include_locals else a[a["kind"] == "Practice"]
+    if highlight:
+        sel = sel[sel.apply(lambda r: _hit(r, highlight), axis=1)]
+    if len(sel):
+        sel = (sel.groupby(["date", "slot", "slot_label", "kind", "name"], as_index=False)
+               .agg(court=("court", list), club=("club", "first")))
+    by_date = {d: g for d, g in sel.groupby("date")} if len(sel) else {}
+    weekend_open = set(result.weekend_dates)
+    sh = wb.create_sheet(title)
+    bold_w = Font(bold=True, color="FFFFFF")
+    local_fill = PatternFill("solid", fgColor="F3F4F6")
+    tourn_fill = PatternFill("solid", fgColor="FFF4D6")
+    row = 1
+    ws = week_start(result.start)
+    while ws <= result.end:
+        days = [ws + timedelta(days=i) for i in range(7)]
+        for j, d in enumerate(days):
+            col = 1 + 3 * j
+            for k, v in enumerate((d, f"{d:%A}", "Cts")):
+                c = sh.cell(row, col + k, v)
+                c.font, c.fill, c.border = bold_w, _head, _border
+                c.alignment = Alignment(horizontal="center")
+            sh.cell(row, col).number_format = "mmm d"
+        entries = {}
+        for j, d in enumerate(days):
+            items = []
+            if not (result.start <= d <= result.end):
+                items.append(("", "", "", None))
+            elif d in closures:
+                items.append(("", f"Closed: {closures[d]}", "", _closed))
+            else:
+                for tn in result.tournaments:
+                    if tn.covers(d) and (not highlight or tn.kind == "local" or set(tn.teams) & set(highlight)):
+                        where = _courts_text(tn.courts) if tn.kind == "local" else "away"
+                        items.append(("", tn.name, where, tourn_fill))
+                if d.weekday() >= 5 and d not in weekend_open and d not in by_date and not items:
+                    items.append(("", "Closed", "", _closed))
+                g = by_date.get(d)
+                if g is not None:
+                    g = g.assign(o=g["slot"].map(SLOT_KEYS.index)).sort_values(["o", "name"])
+                    for r in g.itertuples():
+                        items.append((r.slot_label, r.name, _courts_text(r.court),
+                                      local_fill if r.kind == "Local" else None))
+            entries[j] = items
+        n = max([len(v) for v in entries.values()] + [1])
+        for j, items in entries.items():
+            col = 1 + 3 * j
+            for i in range(n):
+                vals = items[i] if i < len(items) else ("", "", "", None)
+                for k in range(3):
+                    c = sh.cell(row + 1 + i, col + k, vals[k] if vals[k] != "" else None)
+                    c.number_format = "@"   # text: '5-7' stays '5-7'
+                    c.border = _border
+                    c.alignment = Alignment(vertical="top", wrap_text=k == 1)
+                    if vals[3] is not None:
+                        c.fill = vals[3]
+        row += n + 2
+        ws += timedelta(days=7)
+    for j in range(7):
+        sh.column_dimensions[get_column_letter(1 + 3 * j)].width = 11
+        sh.column_dimensions[get_column_letter(2 + 3 * j)].width = 18
+        sh.column_dimensions[get_column_letter(3 + 3 * j)].width = 6
+    sh.page_setup.orientation = "landscape"
+    sh.page_setup.fitToWidth = 1
+    sh.sheet_properties.pageSetUpPr.fitToPage = True
+    sh.page_setup.fitToHeight = 0
+    return sh
+
+
+def calendar_excel(result: ScheduleResult, closures: dict, highlight: set[str] | None = None,
+                   include_locals: bool = True) -> bytes:
+    """Just the calendar, in the club's week-block layout."""
+    wb = Workbook()
+    wb.remove(wb.active)
+    _calendar_sheet(wb, result, closures, highlight, include_locals)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

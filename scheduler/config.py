@@ -36,10 +36,29 @@ COURT_RANK_COST = [0, 1, 2, 3, 4, 6, 20]
 COURT_COST = {c: COURT_RANK_COST[i] for i, c in enumerate(COURT_RANK)}
 
 
+def pecking_key(age: int, rank: int | None) -> tuple:
+    """Sort key for the club's pecking order, top team first: older age
+    groups first, then rank within the age (1 = top). A team with no rank
+    sits between its age group's 1s and 2s."""
+    return (-age, 1.5 if rank is None else rank)
+
+
+def pecking_weights(teams) -> dict[str, int]:
+    """How much each team 'deserves' the better courts, from the pecking
+    order: the top team gets 20, the bottom team 2, everyone else spread in
+    between (teams sharing a rank, e.g. 16-1 boys and girls, tie). The
+    lowest team is the one that ends up on Court 2 when it's needed."""
+    keys = sorted({pecking_key(t.age, t.level) for t in teams})
+    if len(keys) <= 1:
+        return {t.name: 10 for t in teams}
+    pos = {k: i for i, k in enumerate(keys)}  # 0 = top
+    n = len(keys) - 1
+    return {t.name: 2 + round(18 * (n - pos[pecking_key(t.age, t.level)]) / n) for t in teams}
+
+
 def team_court_weight(age: int, level: int | None) -> int:
-    """How much a team 'deserves' the better courts: older first, 1s over 2s."""
-    level_bonus = {1: 4, 2: 0}.get(level, 2)
-    return 2 * max(0, age - 11) + level_bonus
+    """Court weight for a team on its own (no club context)."""
+    return 2 * max(0, age - 11) + max(0, 5 - level) if level else 2 * max(0, age - 11) + 2
 
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]  # index = date.weekday()
 WEEKDAYS = DAYS[:5]

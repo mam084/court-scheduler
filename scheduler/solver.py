@@ -38,7 +38,7 @@ from ortools.sat.python import cp_model
 from .config import week_start as _week_start, day_in_week, slots_overlap
 from .config import (
     COURT_COST, COURT_RANK, COURTS, DAYS, PRACTICES_PER_WEEK, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS,
-    WEIGHTS, is_late_exception, slot_cost, team_court_weight,
+    WEIGHTS, is_late_exception, pecking_weights, slot_cost, team_court_weight,
 )
 from .data import CleanInput, ScheduleInput, clean
 
@@ -669,7 +669,8 @@ def solve(
     pattern_slots = [(t, wd, s) for (t, wd, s), v in p.items() if solver.Value(v)]
 
     # ---------------------------------------------- stage 2: courts --
-    weights = {t: team_court_weight(teams[t].age, teams[t].level) for t in T}
+    pw = pecking_weights(teams)
+    weights = {t: pw[teams[t].name] for t in T}
     fixed_home = {idx[n]: c for n, c in data.usual_court.items()}
     home_court, court_of = _assign_courts(booked, T, courts_on, weights, seed,
                                           fixed_courts={k: c for k, c in pinned.items() if c is not None},

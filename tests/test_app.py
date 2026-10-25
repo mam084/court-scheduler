@@ -2,6 +2,7 @@
 
 from datetime import date
 
+import pandas as pd
 import pytest
 
 from scheduler import simulate, solve
@@ -145,3 +146,36 @@ def test_suggest_a_preference_adds_wish_and_not_preferred(db):
     assert not at.exception
     assert len(at.session_state["inp"].wishlist) == n_wish
     assert len(at.session_state["inp"].availability) == n_avail
+
+
+def test_pecking_order_page_and_calendar_downloads(db):
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Pecking", 10)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("🏅 Pecking order").run()
+    assert not at.exception
+    teams = at.session_state["inp"].teams
+    first = str(teams["team"].iloc[0])
+    age = int(float(teams["age"].iloc[0]))
+    assert any("Save ranks" in b.label for b in at.button)
+    assert any(e.label.startswith("📥 Import a pecking order") for e in at.expander)
+    # Import: apply the same flow the upload uses.
+    from scheduler import pecking as pk
+    rows = pd.DataFrame([{"rank": f"{age}-2", "team": first, "head": "", "assistants": "", "side": ""}])
+    inp = at.session_state["inp"]
+    inp.teams = pk.apply(inp.teams, pk.match_teams(rows, inp.teams))
+    at.session_state["locals_ver"] = at.session_state["locals_ver"] + 1 if "locals_ver" in at.session_state else 1
+    at.session_state["resolve"] = True
+    at.run()
+    assert not at.exception
+    assert str(at.session_state["inp"].teams.loc[at.session_state["inp"].teams["team"] == first, "rank"].iloc[0]) \
+        == f"{age}-2"
+    saved = db.get(pid)["payload"]["inputs"]["Teams"]
+    assert any(r["team"] == first and r["rank"] == f"{age}-2" for r in saved)
+    # Calendar page shows the three downloads.
+    at.radio(key="nav").set_value("📅 Calendar").run()
+    assert not at.exception
+    labels = [d.proto.label for d in at.get("download_button")]
+    assert {"📆 Google Calendar (.ics)", "🖨️ Printable calendar", "📊 Calendar (Excel)"} <= set(labels)

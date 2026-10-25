@@ -439,3 +439,42 @@ def practice_counts_html(counts: pd.DataFrame, highlight: set[str] | None = None
 def short_list_text(short: pd.DataFrame) -> str:
     """'12-Madi (1 of 2), 15-Madi (0 of 2)' for one week's shortfalls."""
     return ", ".join(f"{r.team} ({r.scheduled} of {r.target})" for r in short.itertuples())
+
+
+def calendar_print_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,
+                        highlight: set[str] | None = None, include_locals: bool = False,
+                        weekend_dates: list[date] | None = None, tournaments: list | None = None,
+                        title: str = "Practice calendar") -> str:
+    """A standalone page of the calendar, one month per printed page
+    (open it and print, or save as PDF from the print dialog)."""
+    parts = []
+    d = date(start.year, start.month, 1)
+    while d <= end:
+        last = date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+        a, b = max(d, start), min(last, end)
+        parts.append(f'<section class="cs-month"><h2>{d:%B %Y}</h2>'
+                     + month_calendar_html(assignments, a, b, closures, highlight, include_locals,
+                                           weekend_dates, tournaments) + "</section>")
+        d = last + timedelta(days=1)
+    who = f" · {html.escape(', '.join(sorted(highlight)))}" if highlight else ""
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(title)}</title>
+<style>
+body {{ font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; color: #1f2a44; background: #fff; }}
+h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 17px; margin: 18px 0 8px; }}
+.cs-sub {{ color: #5b6475; font-size: 13px; margin-bottom: 8px; }}
+.cs-tip {{ background: #eef1f6; border-radius: 6px; padding: 8px 12px; font-size: 13px; }}
+@media print {{
+  body {{ margin: 8mm; }} .cs-tip {{ display: none; }}
+  .cs-month {{ break-after: page; }} .cs-month:last-child {{ break-after: auto; }}
+  * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+  @page {{ size: landscape; }}
+}}
+</style></head><body>
+<h1>{html.escape(title)}</h1>
+<div class="cs-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y}{who}</div>
+<div class="cs-sub">Dashed outline = a makeup or a practice off the team's usual day/time.</div>
+<div class="cs-tip">To print or save as PDF: press Ctrl/Cmd + P. Each month prints on its own landscape page.</div>
+{''.join(parts)}
+</body></html>"""

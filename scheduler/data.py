@@ -7,8 +7,10 @@ Sheets / columns
 ----------------
 Teams         team, club, age, head_coach, assistants, start_date, priority,
               weekend_only, weekend_pref, late_ok (Yes = 14s-and-under team that
-              may practice at 7:20, though it's avoided), level (1 = 1s, 2 = 2s;
-              blank = from the name: "Black" 1s, "Green" 2s)
+              may practice at 7:20, though it's avoided), rank (pecking order
+              within the age group: "16-1" or just 1 = the top 16s team, "16-3"
+              the third; boys and girls teams can share a rank; blank = from
+              the name: "Black" 1, "Green" 2. Older column name: level)
 Availability  who, type, days, dates, times, note
 Wishlist      team, choice, days, times, note
 Locals        program, side (Girls/Boys), days, time, courts, coaches, on_site, dates
@@ -56,7 +58,7 @@ from .config import (
 
 COLUMNS = {
     "Teams": ["team", "club", "age", "head_coach", "assistants", "start_date", "priority",
-              "weekend_only", "weekend_pref", "late_ok", "level"],
+              "weekend_only", "weekend_pref", "late_ok", "rank"],
     "Availability": ["who", "type", "days", "dates", "times", "note"],
     "Wishlist": ["team", "choice", "days", "times", "note"],
     "Locals": ["program", "side", "days", "time", "courts", "coaches", "on_site", "dates"],
@@ -73,6 +75,18 @@ ATTRS = {"Teams": "teams", "Availability": "availability", "Wishlist": "wishlist
 
 def empty(sheet: str) -> pd.DataFrame:
     return pd.DataFrame(columns=COLUMNS[sheet])
+
+
+def _migrate(sheet: str, df: pd.DataFrame) -> pd.DataFrame:
+    """Older files and saved schedules call the Teams rank column 'level'."""
+    if sheet == "Teams" and "level" in df.columns:
+        df = df.copy()
+        if "rank" not in df.columns:
+            df["rank"] = df["level"]
+        else:
+            df["rank"] = [lv if blank(rk) else rk for rk, lv in zip(df["rank"], df["level"])]
+        df = df.drop(columns="level")
+    return df
 
 
 @dataclass
@@ -124,7 +138,7 @@ class ScheduleInput:
     def from_records(cls, records: dict[str, list[dict]]) -> "ScheduleInput":
         frames = {}
         for sheet, cols in COLUMNS.items():
-            df = pd.DataFrame(records.get(sheet, []))
+            df = _migrate(sheet, pd.DataFrame(records.get(sheet, [])))
             for c in cols:
                 if c not in df.columns:
                     df[c] = ""
@@ -143,6 +157,7 @@ class ScheduleInput:
                 continue
             df = df.copy()
             df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+            df = _migrate(sheet, df)
             for c in cols:
                 if c not in df.columns:
                     df[c] = None
@@ -416,7 +431,7 @@ class Team:
     weekend_only: list[WeekendToken] = field(default_factory=list)
     weekend_pref: list[WeekendToken] = field(default_factory=list)
     late_ok: bool = False
-    level: int | None = None  # 1 = 1s (Black), 2 = 2s (Green), None = unknown
+    level: int | None = None  # rank within the age group: 1 = top team, None = unknown
 
     def allowed(self, slot: str) -> bool:
         return slot_allowed_for_age(self.age, slot, self.late_ok)
@@ -594,17 +609,50 @@ def parse_ages(value, all_ages: list[int] | None = None) -> list[int]:
     return sorted(out)
 
 
-def _team_level(name: str, value) -> int | None:
-    if not blank(value):
-        m = re.search(r"[12]", str(value))
-        if m:
-            return int(m.group())
+def parse_rank(value, age: int | None = None) -> tuple[int | None, str | None]:
+    """Pecking order within an age group -> (rank, problem).
+
+    '16-3' / '16 - 3' / '16-3s' -> 3 · '3' / 3.0 -> 3 · '1s' -> 1 · 'Black' -> 1,
+    'Green' -> 2. Excel often turns '12-1' into the date Dec 1 (or Jan 12):
+    a date whose month or day is the team's age is read back as age-rank.
+    problem is a short note when the age in the rank doesn't match the team."""
+    if blank(value):
+        return None, None
+    if isinstance(value, (datetime, date, pd.Timestamp)):
+        m_, d_ = value.month, value.day
+        if age in (m_, d_) and m_ != d_:
+            return (d_ if m_ == age else m_), None
+        return d_, (f"looks like Excel turned the rank into a date ({value:%b %-d}); "
+                    f"read it as {m_}-{d_}" + (f", but this team is {age}s" if age and m_ != age else ""))
+    text = str(value).strip().lower()
+    m = re.match(r"^\s*(\d{4})-(\d{2})-(\d{2})", text)  # a date that came through as text
+    if m:
+        return parse_rank(datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))), age)
+    if "black" in text:
+        return 1, None
+    if "green" in text:
+        return 2, None
+    m = re.match(r"^\s*(\d{1,2})\s*[-–/ ]\s*(\d{1,2})", text)
+    if m:
+        a, r = int(m.group(1)), int(m.group(2))
+        note = f"says {a}s but this team is {age}s" if age and a != age else None
+        return r, note
+    m = re.search(r"\d+", text)
+    if m:
+        return int(float(m.group())), None
+    return None, f"couldn't read '{value}' as a rank"
+
+
+def _team_level(name: str, value, age: int | None = None) -> tuple[int | None, str | None]:
+    rank, note = parse_rank(value, age)
+    if rank is not None or note:
+        return rank, note
     low = name.lower()
     if low.endswith("black"):
-        return 1
+        return 1, None
     if low.endswith("green"):
-        return 2
-    return None
+        return 2, None
+    return None, None
 
 
 @dataclass
@@ -716,8 +764,12 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
         late_ok = yes(r.get("late_ok"))
         if late_ok and age > 14:
             warnings.append(f"{row}: late_ok only matters for 14s and under, so it's ignored")
+        rank_val = r.get("rank") if not blank(r.get("rank")) else r.get("level")
+        level, rank_note = _team_level(name, rank_val, age)
+        if rank_note:
+            warnings.append(f"{row}: rank {rank_note}")
         teams.append(Team(name, club, age, heads, assistants, team_start, priority, w_only, w_pref, late_ok,
-                          _team_level(name, r.get("level"))))
+                          level))
 
     team_names = {t.name for t in teams}
     people = {c for t in teams for c in t.staff}
@@ -775,8 +827,12 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
         # the hardest kind to break.
         if kind == "no" and who in team_names and rule.note:
             tm = next(t for t in teams if t.name == who)
-            first = re.split(r"[\s']", rule.note.strip(), maxsplit=1)[0]
-            asst = next((a for a in tm.assistants if a not in tm.heads and a.lower() == first.lower()), None)
+            # The longest coach name the note starts with, so "Tyler Lyons
+            # can't..." is Tyler Lyons, not Tyler.
+            note_l = rule.note.strip().lower()
+            named = max((c for c in people if re.match(re.escape(c.lower()) + r"(?![\w])", note_l)),
+                        key=len, default=None)
+            asst = named if named in tm.assistants and named not in tm.heads else None
             if asst:
                 warnings.append(f"Availability row {i + 2}: '{who}' no-date says \"{rule.note}\". If that's "
                                 f"assistant {asst}'s, put {asst} in the who column instead, so it's treated as "

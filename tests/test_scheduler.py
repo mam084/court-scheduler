@@ -332,7 +332,7 @@ def test_travel_tournament_keeps_teams_home_and_rested():
 def test_court_quality_and_team_levels():
     data = clean(_inp([{"team": "16 Black", "age": 16, "head_coach": "A"},
                        {"team": "16 Green", "age": 16, "head_coach": "B"},
-                       {"team": "16-Ann", "age": 16, "level": "1"}]), *NOV)
+                       {"team": "16-Ann", "age": 16, "rank": "16-1"}]), *NOV)
     assert [t.level for t in data.teams] == [1, 2, 1]
     # Six teams wanting the same slot: Court 2 (worst) is never used, and the
     # older 1s team gets Court 1.
@@ -900,3 +900,132 @@ def test_team_no_date_naming_an_assistant_is_pointed_out():
     avail = [{"who": "15-Madi", "type": "No", "days": "Mon", "note": "Cierra can't make Mondays"}]
     data = clean(_inp(teams, avail), *NOV)
     assert any("put Cierra in the who column" in w for w in data.warnings)
+
+
+
+# -------------------------------------------------------- pecking order --
+
+def test_rank_parsing_handles_club_formats_and_excel_dates():
+    from datetime import datetime
+    from scheduler.data import parse_rank
+    assert parse_rank("16-3", 16) == (3, None)
+    assert parse_rank("16 - 3", 16) == (3, None)
+    assert parse_rank("3", 16) == (3, None)
+    assert parse_rank(2.0, 16) == (2, None)
+    assert parse_rank(datetime(2026, 12, 1), 12) == (1, None)   # Excel turned "12-1" into Dec 1
+    assert parse_rank(datetime(2026, 1, 12), 12) == (1, None)   # ...or Jan 12
+    assert parse_rank("Black", 14) == (1, None) and parse_rank("Green", 14) == (2, None)
+    rank, note = parse_rank("17-1", 16)
+    assert rank == 1 and "17s" in note
+
+
+def test_old_level_column_still_read_as_rank():
+    inp = simulate(4, 2, 2, start=date(2026, 11, 1), end=date(2026, 11, 30))
+    rec = inp.to_records()
+    for row in rec["Teams"]:
+        row["level"] = row.pop("rank")
+    rec["Teams"][0]["level"] = "3"
+    back = ScheduleInput.from_records(rec)
+    assert "level" not in back.teams.columns and back.teams["rank"].iloc[0] == "3"
+
+
+def _pecking_xlsx(tmp_path, rows):
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.active.title = "Sheet1"
+    wb.active.append(["unrelated", "stuff"])
+    ws = wb.create_sheet("Pecking Order")
+    ws.append(["Rank", "Gender", "Team Name", "Head Coach", "Asst. Coach"])
+    for r in rows:
+        ws.append(r)
+    path = tmp_path / "pecking.xlsx"
+    wb.save(path)
+    return path
+
+
+def test_pecking_import_matches_nicknames_and_excel_dates(tmp_path):
+    from datetime import datetime
+    from scheduler import pecking as pk
+    teams = [{"team": "18 Black", "club": "Seaside", "age": 18, "head_coach": "Tyler", "assistants": "Alex"},
+             {"team": "16-Danielle & Darci", "club": "SDVBC", "age": 16, "head_coach": "Danielle; Darci"},
+             {"team": "15-Rebecca", "club": "SDVBC", "age": 15},
+             {"team": "12-Madi", "club": "SDVBC", "age": 12, "assistants": "Lala"},
+             {"team": "13-Bree", "club": "SDVBC", "age": 13}]
+    path = _pecking_xlsx(tmp_path, [
+        ["18-1", "Boy", "18-Black", "Tyler", "Alex"],
+        ["16-1", "Girl", "16-D&D", "Danielle", "Darci"],
+        ["15-3", "Girl", "15-Rebecca", "Rebecca", "Tyler Lyons"],
+        [datetime(2026, 12, 1), "Girl", "12-Madi", "Madi", "Lala"],
+        ["13-2", "Girl", "13-Bree", "Bree", "TBA"]])
+    table = pk.read_pecking(str(path))
+    assert table.attrs["sheet"] == "Pecking Order"
+    ms = pk.match_teams(table, _team_frame(teams))
+    got = {m.sheet_team: (m.team, m.rank_text, m.how) for m in ms}
+    assert got["18-Black"] == ("18 Black", "18-1", "name")
+    assert got["16-D&D"] == ("16-Danielle & Darci", "16-1", "age + head coach")
+    assert got["12-Madi"][:2] == ("12-Madi", "12-1")
+    changes = pk.assistant_changes(ms, _team_frame(teams))
+    assert ("15-Rebecca", "(none)", "Tyler Lyons") in changes
+    assert not any(c[0] == "16-Danielle & Darci" for c in changes)   # Darci is co-head, not a change
+    assert not any(c[0] == "13-Bree" for c in changes)               # TBA = nobody
+    out = pk.apply(_team_frame(teams), ms, update_assistants=True)
+    data = clean(_inp(out.to_dict("records")), *NOV)
+    by = {t.name: t for t in data.teams}
+    assert by["16-Danielle & Darci"].level == 1 and by["12-Madi"].level == 1
+    assert by["15-Rebecca"].assistants == ["Tyler Lyons"]
+    # Tyler (18 Black's head) and Tyler Lyons are different people.
+    assert "Tyler" in data.coaches and "Tyler Lyons" in data.coaches
+
+
+def test_tyler_and_tyler_lyons_are_different_coaches():
+    # Tyler heads 18 Black; Tyler Lyons assists 15-Rebecca. Both teams want the
+    # same slot and only those two teams exist: if the names were confused,
+    # it would count as a head coach double-booking or an assistant conflict.
+    teams = [{"team": "18 Black", "age": 18, "head_coach": "Tyler"},
+             {"team": "15-Rebecca", "age": 15, "assistants": "Tyler Lyons"}]
+    wish = [{"team": t["team"], "choice": 1, "days": "Tue, Thu", "times": "7:20"} for t in teams]
+    avail = [{"who": "Tyler Lyons", "type": "No", "days": "Mon"}]
+    r = solve(_inp(teams, avail, wish), *NOV, time_limit_s=10)
+    assert r.metrics["assistant_conflicts"] == 0
+    assert set(zip(r.pattern["team"], r.pattern["day"])) >= {("18 Black", "Tue"), ("15-Rebecca", "Tue")}
+    # A note naming "Tyler Lyons" on 15-Rebecca's row points at Tyler Lyons, not Tyler.
+    avail = [{"who": "15-Rebecca", "type": "No", "days": "Fri", "note": "Tyler Lyons works Fridays"}]
+    ws = clean(_inp(teams, avail), *NOV).warnings
+    assert any("put Tyler Lyons in the who column" in w for w in ws)
+
+
+def test_lowest_ranked_team_gets_court_2():
+    # Seven teams want Tue/Thu 5:30 and nothing else: all 7 courts are used.
+    # The lowest in the pecking order gets Court 2, the top team Court 1.
+    teams = [{"team": f"16-T{i}", "age": 16, "rank": f"16-{i + 1}"} for i in range(7)]
+    avail = [{"who": t["team"], "type": "No", "days": "Mon, Wed, Fri"} for t in teams] + \
+            [{"who": t["team"], "type": "No", "times": "7:20"} for t in teams]
+    r = solve(_inp(teams, avail), *NOV, time_limit_s=15)
+    pr = r.assignments
+    assert set(pr[pr["court"] == 2]["name"]) == {"16-T6"}
+    assert set(pr[pr["court"] == 1]["name"]) == {"16-T0"}
+
+
+def test_calendar_exports(tmp_path):
+    import io as _io
+    from openpyxl import load_workbook
+    from scheduler.export import calendar_excel, calendar_ics, to_excel
+    from scheduler.views import calendar_print_html
+    inp = simulate(4, 2, 2, start=date(2026, 11, 1), end=date(2026, 11, 30))
+    r = solve(inp, *NOV, time_limit_s=10)
+    data = clean(inp, *NOV)
+    team = r.pattern["team"].iloc[0]
+    n = len(r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["name"] == team)])
+    ics = calendar_ics(r, {team}, False).decode()
+    assert ics.count("BEGIN:VEVENT") == n and team in ics
+    everyone = calendar_ics(r, None, True).decode()
+    assert everyone.count("BEGIN:VEVENT") > n
+    wb = load_workbook(_io.BytesIO(calendar_excel(r, data.closures)))
+    ws = wb.active
+    assert [ws.cell(1, c).value for c in (2, 3, 5)] == ["Sunday", "Cts", "Monday"]
+    courts = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str) and "-" in c.value
+              and c.value[0].isdigit() and len(c.value) <= 5]
+    assert all(c.number_format == "@" for row in ws.iter_rows() for c in row if c.value in courts)
+    assert "Calendar" in load_workbook(_io.BytesIO(to_excel(r, data.closures))).sheetnames
+    page = calendar_print_html(r.assignments, *NOV, data.closures, {team}, False, r.weekend_dates)
+    assert "November 2026" in page and team in page and "@media print" in page

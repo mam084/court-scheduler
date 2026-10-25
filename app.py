@@ -6,6 +6,7 @@ Run locally:  streamlit run app.py
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
 import sys
@@ -23,14 +24,16 @@ for _mod in [m for m in list(sys.modules) if m == "scheduler" or m.startswith("s
 from scheduler import ScheduleInput, clean, month_range, simulate, solve
 from scheduler.config import ALL_COURTS, COURTS, DAYS, court_name, PROGRAM_KEYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
 from scheduler.data import (
-    ATTRS, COLUMNS, empty, parse_courts, parse_date_ranges, parse_days, parse_names, parse_times, program_side,
+    ATTRS, COLUMNS, blank, empty, parse_courts, parse_date_ranges, parse_days, parse_names, parse_rank, parse_times,
+    program_side,
 )
-from scheduler.export import to_excel, to_ics
+from scheduler import pecking as pk
+from scheduler.export import calendar_excel, calendar_ics, to_excel, to_ics
 from scheduler.solver import week_start
 from scheduler.changes import add_version, burden, diff, pattern_of, practices_of, published_at, snapshot
 from scheduler.storage import Store, database_url, make_payload, new_id, read_payload, read_published
 from scheduler.views import (
-    club_stripes, court_grid_html, legend_html, month_calendar_html, open_slot_map, practice_counts_html,
+    calendar_print_html, club_stripes, court_grid_html, legend_html, month_calendar_html, open_slot_map, practice_counts_html,
     range_label, short_list_text, week_dates,
 )
 
@@ -408,11 +411,11 @@ if "flash" in st.session_state:
 # build every section every time), and the choice is remembered, so saving a
 # program or removing something keeps you where you were.
 VIEWS = ["🏟️ Court view", "📅 Calendar", "✏️ Edit practices", "🗓️ Programs", "🏆 Tournaments",
-         "🧑‍🏫 Coaches", "📢 Publish", "🔎 Review", "📝 Inputs"]
+         "🧑‍🏫 Coaches", "🏅 Pecking order", "📢 Publish", "🔎 Review", "📝 Inputs"]
 if st.session_state.get("nav") not in VIEWS:
     st.session_state.nav = VIEWS[0]
 VIEW = st.radio("Section", VIEWS, key="nav", horizontal=True, label_visibility="collapsed")
-TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_COACH, TAB_PUB, TAB_REVIEW, TAB_INPUTS = VIEWS
+TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_COACH, TAB_PECK, TAB_PUB, TAB_REVIEW, TAB_INPUTS = VIEWS
 
 
 def template_locals(a: pd.DataFrame) -> pd.DataFrame:
@@ -492,6 +495,25 @@ if VIEW == TAB_CAL:
         show_locals = c2.toggle("Include locals programs", value=True)
         st.markdown(month_calendar_html(a, start, end, closures, hl or None, show_locals, result.weekend_dates,
                                         result.tournaments), unsafe_allow_html=True)
+
+        who = ("_" + "_".join(sorted(hl))) if hl else ""
+        fname = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"calendar{who}_{start:%Y%m%d}-{end:%Y%m%d}")
+        title = f"{st.session_state.get('project_name') or 'Practice calendar'}"
+        st.caption("Download what's shown above" + (f" ({', '.join(sorted(hl))})" if hl else " (everyone)") + ":")
+        d1, d2, d3 = st.columns(3)
+        d1.download_button("📆 Google Calendar (.ics)",
+                           lambda: calendar_ics(result, hl or None, show_locals, title), f"{fname}.ics",
+                           mime="text/calendar", width="stretch",
+                           help="In Google Calendar: Settings → Import & export → Import. Tip: import into a new "
+                                "calendar (e.g. 'Club practices') so it's easy to remove and re-import after changes.")
+        d2.download_button("🖨️ Printable calendar",
+                           lambda: calendar_print_html(a, start, end, closures, hl or None, show_locals,
+                                                       result.weekend_dates, result.tournaments, title).encode(),
+                           f"{fname}.html", mime="text/html", width="stretch",
+                           help="Opens in your browser; print it or save it as a PDF. One month per page.")
+        d3.download_button("📊 Calendar (Excel)", lambda: calendar_excel(result, closures, hl or None, show_locals),
+                           f"{fname}.xlsx", width="stretch",
+                           help="The club's calendar layout: a block per week, each day with time · what · courts.")
 
 
 # ------------------------------------------------------ edit practices --
@@ -1024,6 +1046,109 @@ if VIEW == TAB_COACH:
                                    mime="text/calendar",
                                    help="In Google Calendar: Settings → Import & export → Import this file.")
 
+# ------------------------------------------------------- pecking order --
+def _rebuild(message: str):
+    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+    st.session_state.resolve = True
+    st.session_state.flash = message
+    st.rerun()
+
+
+if VIEW == TAB_PECK:
+    st.markdown("The club's pecking order: **rank within each age group**, written like `16-3` (the third 16s "
+                "team) or just `3`. Boys and girls teams can share a rank (`16-1` boys and `16-1` girls are equal). "
+                "Higher teams get the better courts (1 → 7 → 6 → 5 → 3 → 4 → 2), and when Court 2 is needed, "
+                "the lowest team gets it.")
+    order = pk.order_table(inp.teams)
+    if order.empty:
+        st.caption("No teams yet.")
+    else:
+        missing = order[~order["_set"]]["team"].tolist()
+        if missing:
+            st.info(f"**{len(missing)} team(s) have no rank yet**, so they're placed between their age group's "
+                    f"1s and 2s: {', '.join(missing)}.", icon="ℹ️")
+        sig_key = abs(hash((st.session_state.get("inp_sig"), st.session_state.get("locals_ver", 0)))) % 10**8
+        shown = order[["order", "rank", "team", "club", "head_coach", "assistants"]]
+        edited = st.data_editor(
+            shown, hide_index=True, width="stretch", key=f"peck_edit_{sig_key}",
+            disabled=["order", "team", "club", "head_coach", "assistants"],
+            column_config={
+                "order": st.column_config.NumberColumn("#", help="Position in the pecking order (1 = top). "
+                                                       "Teams sharing a rank share a number.", width="small"),
+                "rank": st.column_config.TextColumn("Rank", help="Like 16-3, or just 3", width="small"),
+                "team": "Team", "club": "Club", "head_coach": "Head coach", "assistants": "Assistants"})
+        changed = {r.team: r.rank for r, (_, o) in zip(edited.itertuples(), shown.iterrows())
+                   if str(r.rank or "").strip() != str(o["rank"] or "").strip()}
+        if st.button("💾 Save ranks", type="primary", disabled=not changed,
+                     help="Saves the ranks you changed above and rebuilds the schedule"):
+            t = inp.teams.copy()
+            if "rank" not in t.columns:
+                t["rank"] = ""
+            for team, rank in changed.items():
+                t.loc[t["team"].astype(str).str.strip() == team, "rank"] = str(rank or "").strip()
+            inp.teams = t
+            _rebuild(f"Saved {len(changed)} rank(s). Schedule rebuilt.")
+
+        dl = order.rename(columns={"rank": "Rank", "team": "Team", "club": "Club", "head_coach": "Head Coach",
+                                   "assistants": "Asst. Coach"})[["Rank", "Club", "Team", "Head Coach", "Asst. Coach"]]
+        buf = io.BytesIO()
+        dl.to_excel(buf, index=False, sheet_name="Pecking Order")
+        st.download_button("⬇️ Download pecking order (Excel)", buf.getvalue(), "pecking_order.xlsx")
+
+    with st.expander("📥 Import a pecking order from a spreadsheet", expanded=order.empty or bool(
+            len(order) and (~order["_set"]).all())):
+        st.caption("Upload any spreadsheet with a **Rank** column and a **Team** column (Head Coach, Asst. Coach "
+                   "and Gender help match teams but are optional). Teams are matched by name first "
+                   "(`18-Black` = `18 Black`), then by age and head coach, so nicknames like `16-D&D` still work. "
+                   "Ranks Excel turned into dates (`12-1` → Dec 1) are read back correctly.")
+        up = st.file_uploader("Pecking order (.xlsx or .csv)", type=["xlsx", "csv"], key="peck_upload")
+        if up is not None:
+            try:
+                table = pk.read_pecking(up, up.name)
+            except Exception as e:  # noqa: BLE001
+                st.error(str(e))
+                table = None
+            if table is not None:
+                matches = pk.match_teams(table, inp.teams)
+                team_opts = ["(skip)"] + [str(t) for t in inp.teams["team"] if not blank(t)]
+                preview = pd.DataFrame([{
+                    "In the sheet": m.sheet_team, "Rank": m.rank_text,
+                    "Team in the app": m.team or "(skip)",
+                    "Matched by": m.how or "not matched", "Note": m.note} for m in matches])
+                st.caption(f"From the **{table.attrs.get('sheet', 'sheet')}** tab: "
+                           f"{sum(1 for m in matches if m.team)} of {len(matches)} rows matched. "
+                           "Fix any match in the **Team in the app** column.")
+                fixed = st.data_editor(
+                    preview, hide_index=True, width="stretch", key=f"peck_preview_{up.file_id}",
+                    disabled=["In the sheet", "Matched by", "Note"],
+                    column_config={"Team in the app": st.column_config.SelectboxColumn(options=team_opts),
+                                   "Rank": st.column_config.TextColumn(help="Like 16-3")})
+                for m, (_, r) in zip(matches, fixed.iterrows()):
+                    m.team = None if r["Team in the app"] == "(skip)" else r["Team in the app"]
+                    if str(r["Rank"]).strip() != m.rank_text:
+                        m.rank_text = str(r["Rank"]).strip()
+                        m.rank, _ = parse_rank(m.rank_text)
+                picked = [m.team for m in matches if m.team]
+                dupes = sorted({t for t in picked if picked.count(t) > 1})
+                left = pk.unranked(matches, inp.teams)
+                if dupes:
+                    st.error(f"Matched more than once: {', '.join(dupes)}. Fix the Team in the app column.")
+                if left:
+                    st.warning(f"Not in this sheet, so their ranks stay as they are: {', '.join(left)}")
+                changes = pk.assistant_changes(matches, inp.teams)
+                upd = False
+                if changes:
+                    upd = st.checkbox(f"Also update assistant coaches from this sheet ({len(changes)} team(s) differ)",
+                                      key="peck_upd_asst")
+                    st.dataframe(pd.DataFrame(changes, columns=["Team", "Assistants now", "In the sheet"]),
+                                 hide_index=True, width="stretch")
+                if st.button("✅ Use this pecking order", type="primary", disabled=bool(dupes)):
+                    inp.teams = pk.apply(inp.teams, matches, update_assistants=upd)
+                    n = sum(1 for m in matches if m.team and m.rank is not None)
+                    _rebuild(f"Pecking order set for {n} team(s)"
+                             + (f", assistants updated for {len(changes)}" if upd and changes else "")
+                             + ". Schedule rebuilt.")
+
 # ------------------------------------------------------------- publish --
 if VIEW == TAB_PUB:
     st.markdown("Publish the schedule when you send it to coaches. Later rebuilds keep practices where the "
@@ -1131,6 +1256,7 @@ if VIEW == TAB_INPUTS:
                 "Download the tables as a spreadsheet to keep your changes.")
     help_ = {
         "Teams": "Girls teams can leave head_coach blank (taken from the name, e.g. 18-Jordan). "
+                 "rank = pecking order within the age group, like `16-3` (easier: the Pecking order tab). "
                  "start_date = first day the team can practice. weekend_only limits weekends to listed options "
                  "(`11/1 AM; 11/8 3PM`); weekend_pref is a soft preference (`AM`, `Sat AM; Sun PM`). "
                  "late_ok = Yes lets a 14s-and-under team practice at 7:20 (avoided unless needed).",
