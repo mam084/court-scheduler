@@ -50,6 +50,7 @@ CSS = """
 .cs-chip span { font-size: 11.5px; opacity: .85; }
 .cs-chip.cs-local { background-image: repeating-linear-gradient(135deg, transparent, transparent 6px, rgba(0,0,0,.04) 6px, rgba(0,0,0,.04) 12px); }
 .cs-chip.cs-moved { outline: 2px dashed #C0392B; outline-offset: -2px; }
+.cs-pin { font-size: 0.7em; vertical-align: 0.1em; color: #1F2A44; }
 .cs-chip.cs-dim { opacity: .2; }
 .cs-time { font-variant-numeric: tabular-nums; font-weight: 600; }
 .cs-legend { display:flex; flex-wrap:wrap; gap:6px; margin: 6px 0 10px; font-family: system-ui, sans-serif; font-size: 12px; align-items:center; }
@@ -121,7 +122,7 @@ def _chip(r, stripes, highlight=None, compact=False) -> str:
         cls.append("cs-dim")
     name = html.escape(str(r["name"]))
     if r.get("pinned") == True:  # noqa: E712  (NaN-safe)
-        name = "📌 " + name
+        name = '<span class="cs-pin" title="set by hand">●</span> ' + name
     coaches = " · ".join(c.strip() for c in str(r.get("coach") or "").split(";") if c.strip())
     style = f"background:{bg};color:{fg};border-left-color:{stripe}"
     title = f"{r['slot_label']} · {coaches}" + ("" if "cs-moved" not in cls else " · moved from usual time") \
@@ -286,7 +287,7 @@ def open_slot_map(day_dates: dict | None, data, closures: dict | None = None) ->
     return out
 
 
-def legend_html(ages, stripes: dict) -> str:
+def legend_html(ages, stripes: dict, show_moved: bool = True) -> str:
     items = ['<span class="cs-lbl">Age</span>']
     for a in sorted({int(x) for x in ages if pd.notna(x)}):
         bg, fg = AGE_COLORS.get(a, DEFAULT_COLOR)
@@ -303,9 +304,11 @@ def legend_html(ages, stripes: dict) -> str:
                      f'{side}</div>')
     bg, fg = LOCAL_COLORS
     items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};border-left-color:#9AA3B2">Other</div>')
-    items.append('<div class="cs-chip cs-moved" style="background:#fff;color:#C0392B;border-left-color:#fff">'
-                 'Moved / makeup</div>')
-    items.append('<div class="cs-chip" style="background:#fff;color:#1F2A44;border-left-color:#fff">📌 Set by hand</div>')
+    if show_moved:
+        items.append('<div class="cs-chip cs-moved" style="background:#fff;color:#C0392B;border-left-color:#fff">'
+                     'Moved / makeup</div>')
+    items.append('<div class="cs-chip" style="background:#fff;color:#1F2A44;border-left-color:#fff">'
+                 '<span class="cs-pin">●</span> Set by hand</div>')
     return CSS + '<div class="cs-legend">' + "".join(items) + "</div>"
 
 

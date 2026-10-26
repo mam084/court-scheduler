@@ -69,10 +69,10 @@ def test_every_section_renders_and_publish_flow(db):
         assert not at.exception, (v, at.exception)
         assert at.session_state["nav"] == v   # stays on the chosen section
     # Publish, then the version is saved with the schedule.
-    at.radio(key="nav").set_value("📢 Publish").run()
+    at.radio(key="nav").set_value("Publish").run()
     next(b for b in at.button if "Publish this schedule" in b.label).click().run()
     assert not at.exception
-    assert at.session_state["nav"] == "📢 Publish"
+    assert at.session_state["nav"] == "Publish"
     assert len(db.get(pid)["payload"]["published"]) == 1
     # Rebuild: keeps the published schedule, nothing changed.
     next(b for b in at.button if "Auto-schedule" in b.label).click().run()
@@ -87,16 +87,16 @@ def test_program_edits_stay_on_programs_and_can_wait_for_rebuild(db):
     at = AppTest.from_file("../app.py", default_timeout=180)
     at.query_params["project"] = pid
     at.run()
-    at.radio(key="nav").set_value("🗓️ Programs").run()
+    at.radio(key="nav").set_value("Programs").run()
     at.toggle(key="prog_autobuild").set_value(False).run()
     before = at.session_state["result"]
     pick = next(s for s in at.selectbox if s.key and s.key.startswith("edit_pick_"))
     pick.set_value(pick.options[0]).run()
-    assert at.session_state["nav"] == "🗓️ Programs"
+    assert at.session_state["nav"] == "Programs"
     save = next(b for b in at.button if "Save changes" in b.label)
     save.click().run()
     assert not at.exception
-    assert at.session_state["nav"] == "🗓️ Programs"
+    assert at.session_state["nav"] == "Programs"
     assert at.session_state["result"] is before          # no rebuild yet
     assert at.session_state["pending_rebuild"] == "Programs changed"
     next(b for b in at.button if "Auto-schedule" in b.label).click().run()
@@ -121,7 +121,7 @@ def test_suggest_a_preference_adds_wish_and_not_preferred(db):
     at = AppTest.from_file("../app.py", default_timeout=180)
     at.query_params["project"] = pid
     at.run()
-    at.radio(key="nav").set_value("✏️ Edit practices").run()
+    at.radio(key="nav").set_value("Edit practices").run()
     team = at.selectbox(key="ed_team").value
     n_wish, n_avail = len(at.session_state["inp"].wishlist), len(at.session_state["inp"].availability)
     pk = f"pref_{team}"
@@ -137,7 +137,7 @@ def test_suggest_a_preference_adds_wish_and_not_preferred(db):
     assert (w["team"], w["days"], w["times"], int(w["choice"])) == (team, "Tue", "7:20", 1)
     a = inp.availability.iloc[-1]
     assert (a["who"], a["type"], a["days"], a["times"]) == (team, "Not preferred", "Tue", "3:45")
-    assert at.session_state["nav"] == "✏️ Edit practices"
+    assert at.session_state["nav"] == "Edit practices"
     # Saved with the schedule, and removable again.
     assert len(db.get(pid)["payload"]["inputs"]["Wishlist"]) == n_wish + 1
     drop = at.multiselect(key=f"{pk}_drop")
@@ -154,13 +154,13 @@ def test_pecking_order_page_and_calendar_downloads(db):
     at = AppTest.from_file("../app.py", default_timeout=180)
     at.query_params["project"] = pid
     at.run()
-    at.radio(key="nav").set_value("🏅 Pecking order").run()
+    at.radio(key="nav").set_value("Pecking order").run()
     assert not at.exception
     teams = at.session_state["inp"].teams
     first = str(teams["team"].iloc[0])
     age = int(float(teams["age"].iloc[0]))
     assert any("Save ranks" in b.label for b in at.button)
-    assert any(e.label.startswith("📥 Import a pecking order") for e in at.expander)
+    assert any(e.label.startswith("Import a pecking order") for e in at.expander)
     # Import: apply the same flow the upload uses.
     from scheduler import pecking as pk
     rows = pd.DataFrame([{"rank": f"{age}-2", "team": first, "head": "", "assistants": "", "side": ""}])
@@ -175,10 +175,10 @@ def test_pecking_order_page_and_calendar_downloads(db):
     saved = db.get(pid)["payload"]["inputs"]["Teams"]
     assert any(r["team"] == first and r["rank"] == f"{age}-2" for r in saved)
     # Calendar page shows the three downloads.
-    at.radio(key="nav").set_value("📅 Calendar").run()
+    at.radio(key="nav").set_value("Calendar").run()
     assert not at.exception
     labels = [d.proto.label for d in at.get("download_button")]
-    assert {"📆 Google Calendar (.ics)", "🖨️ Printable calendar", "📊 Calendar (Excel)"} <= set(labels)
+    assert {"Google Calendar (.ics)", "Printable calendar", "Calendar (Excel)"} <= set(labels)
 
 
 def test_hand_placed_practice_can_be_moved_again_and_removed(db):
@@ -187,7 +187,7 @@ def test_hand_placed_practice_can_be_moved_again_and_removed(db):
     at = AppTest.from_file("../app.py", default_timeout=180)
     at.query_params["project"] = pid
     at.run()
-    at.radio(key="nav").set_value("✏️ Edit practices").run()
+    at.radio(key="nav").set_value("Edit practices").run()
     team = at.selectbox(key="ed_team").value
     at.radio(key="ed_mode").set_value("Move a practice").run()
 

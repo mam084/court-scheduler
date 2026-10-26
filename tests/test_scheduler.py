@@ -690,7 +690,7 @@ def test_calendar_shows_local_tournament_on_closed_weekend():
                                            "end_date": "11/15/2026"}])
     r = solve(inp, *NOV, time_limit_s=10)
     cal = month_calendar_html(r.assignments, *NOV, weekend_dates=r.weekend_dates, tournaments=r.tournaments)
-    assert cal.count("🏆 Boys 14 Local<") == 2   # Sat and Sun, though neither weekend day is open for practices
+    assert cal.count(">Boys 14 Local<") == 2   # Sat and Sun, though neither weekend day is open for practices
 
 
 def test_breaking_a_no_date_beats_practicing_next_to_a_tournament():

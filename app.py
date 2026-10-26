@@ -37,7 +37,7 @@ from scheduler.views import (
     range_label, short_list_text, week_dates,
 )
 
-st.set_page_config(page_title="Court Scheduler", page_icon="🏐", layout="wide")
+st.set_page_config(page_title="Court Scheduler", layout="wide")
 
 
 def next_month(today: date) -> tuple[date, date]:
@@ -68,7 +68,7 @@ def secret(name: str):
 # ------------------------------------------------------------ password --
 APP_PASSWORD = secret("APP_PASSWORD")
 if APP_PASSWORD and not st.session_state.get("authed"):
-    st.title("🏐 Court Scheduler")
+    st.title("Court Scheduler")
     pw = st.text_input("Club password", type="password")
     if pw and pw == str(APP_PASSWORD):
         st.session_state.authed = True
@@ -166,7 +166,7 @@ if qp and st.session_state.get("project_id") != qp:
 
 # ---------------------------------------------------------------- sidebar --
 with st.sidebar:
-    st.title("🏐 Court Scheduler")
+    st.title("Court Scheduler")
     saved = _saved_list(database_url(), st.session_state.get("saved_ver", 0))
     names = {p["id"]: p["name"] for p in saved}
     _dupes = {n for n in names.values() if list(names.values()).count(n) > 1}
@@ -180,7 +180,7 @@ with st.sidebar:
     options = ["__new__"] + ordered
     _okey = hashlib.sha1("|".join(options).encode()).hexdigest()[:8]
     choice = st.selectbox("Schedule", options, index=options.index(current) if current in options else 0,
-                          format_func=lambda o: "➕ New schedule" if o == "__new__" else names[o],
+                          format_func=lambda o: "New schedule" if o == "__new__" else names[o],
                           key=f"picker_{current}_{_okey}")
     if choice != (current or "__new__"):
         if choice == "__new__":
@@ -233,7 +233,7 @@ with st.sidebar:
                    ("." if store.permanent else " on the app server and can be cleared when the app restarts."))
     else:
         # ---------------------------------------------- open schedule --
-        st.caption("✅ Saved automatically, and opens on any device from its link:")
+        st.caption("Saved automatically, and opens on any device from its link:")
         try:
             _host = st.context.headers.get("host") or ""
         except Exception:  # noqa: BLE001
@@ -264,7 +264,7 @@ with st.sidebar:
                         help="Rebuilding moves only the practices that have to move, starting from the last "
                              "published schedule (or the current one if nothing's published). Turn off to "
                              "start fresh.")
-        run = st.button("⚡ Auto-schedule", type="primary", width="stretch")
+        run = st.button("Auto-schedule", type="primary", width="stretch")
         with st.expander("Rename or delete"):
             nn = st.text_input("Name", value=st.session_state.get("project_name", ""), key=f"rename_{current}")
             if st.button("Rename", width="stretch") and nn.strip():
@@ -273,7 +273,7 @@ with st.sidebar:
                 st.session_state.project_name = nn.strip()
                 st.rerun()
             sure = st.checkbox("Yes, delete this schedule for everyone", key=f"del_{current}")
-            if st.button("🗑️ Delete schedule", disabled=not sure, width="stretch"):
+            if st.button("Delete schedule", disabled=not sure, width="stretch"):
                 store.delete(current)
                 saved_changed()
                 close_project()
@@ -287,7 +287,7 @@ if "flash_warn" in st.session_state:
     st.warning(st.session_state.pop("flash_warn"))
 
 if st.session_state.get("project_id") is None:
-    st.header("🏐 Court Scheduler")
+    st.header("Court Scheduler")
     if "flash" in st.session_state:
         st.success(st.session_state.pop("flash"))
     st.markdown("Builds a fair practice schedule for every team across courts 1–7: locals and tournaments are "
@@ -301,7 +301,7 @@ if st.session_state.get("project_id") is None:
     c3.markdown("**3. Review & share**  \nCheck the court view, tweak practices by hand, publish, and send coaches "
                 "a calendar file.")
     d_s, d_e = next_month(date.today())
-    if st.button(f"🏐 Try it with a simulated club ({range_label(d_s, d_e)})", type="primary"):
+    if st.button(f"Try it with a simulated club ({range_label(d_s, d_e)})", type="primary"):
         create_schedule("Demo club", simulate(6, 4, 4, seed=7, start=d_s, end=d_e), d_s, d_e)
     st.caption("Or create a schedule from your own spreadsheet in the sidebar, or open a saved one from the "
                "**Schedule** menu.")
@@ -318,6 +318,7 @@ for _sheet, _attr in (("Tournaments", "tournaments"), ("Coaches", "coaches"), ("
 if "side" not in inp.locals.columns:
     inp.locals["side"] = ""
 st.session_state.setdefault("keep_prev", True)
+st.session_state.setdefault("show_moved", False)
 st.session_state.setdefault("published", [])
 start, end = st.session_state.range_start, st.session_state.range_end
 time_limit, makeup = st.session_state.time_limit, st.session_state.makeup
@@ -347,7 +348,7 @@ if run or st.session_state.pop("resolve", False):
                 st.toast(f"{plural(sf['team'].nunique(), 'team')} short of practices in {plural(sf['week_of'].nunique(), 'week')}. "
                          "See the warning at the top.", icon="⚠️")
             elif sf is not None:
-                st.toast("Every team got all its practices.", icon="✅")
+                st.toast("Every team got all its practices.")
         except ValueError as e:
             backup = st.session_state.pop("overrides_backup", None)
             if backup is not None:  # a manual change that can't work: undo it, keep the schedule
@@ -375,7 +376,7 @@ except ValueError as e:
     cleaned, closures = None, {}
 
 if result is None:
-    st.info("Press **⚡ Auto-schedule** in the sidebar to build the schedule for these dates. "
+    st.info("Press **Auto-schedule** in the sidebar to build the schedule for these dates. "
             "You can review and edit the inputs in the **Inputs** tab first.")
 elif not result.ok:
     st.error(f"No schedule found ({result.status}). Check for more teams than open courts, "
@@ -412,15 +413,15 @@ else:
                    "practice or a head coach's no-date:\n" + "\n".join(lines), icon="⚠️")
     asst = iss[iss["issue"].astype(str).str.startswith("Assistant no-date broken")] if len(iss) else iss
     if len(asst):
-        with st.expander(f"🧑‍🏫 {plural(len(asst), 'practice')} without an assistant who marked a no-date"):
+        with st.expander(f"{plural(len(asst), 'practice')} without an assistant who marked a no-date"):
             for r in asst.itertuples():
                 st.markdown(f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}: {r.detail}")
     if m.get("status") == "FEASIBLE":
-        st.caption(f"⏱️ The solver hit its {time_limit}-second limit, so this is a good schedule but maybe not "
+        st.caption(f"The solver hit its {time_limit}-second limit, so this is a good schedule but maybe not "
                    "the best one. Raise the time limit in **Solver settings** for a better one.")
     if st.session_state.get("pending_rebuild"):
-        st.info(f"**{st.session_state.pending_rebuild}** since the last build. Press **⚡ Auto-schedule** "
-                "when you're done making changes.", icon="🔁")
+        st.info(f"**{st.session_state.pending_rebuild}** since the last build. Press **Auto-schedule** "
+                "when you're done making changes.")
     if result.warnings:
         with st.expander(f"⚠️ {plural(len(result.warnings), 'note')} about the input"):
             for w in result.warnings:
@@ -432,8 +433,8 @@ if "flash" in st.session_state:
 # Navigation. Only the chosen section is built on each click (tabs would
 # build every section every time), and the choice is remembered, so saving a
 # program or removing something keeps you where you were.
-VIEWS = ["🏟️ Court view", "📅 Calendar", "✏️ Edit practices", "🗓️ Programs", "🏆 Tournaments",
-         "🧑‍🏫 Coaches", "🏅 Pecking order", "📢 Publish", "🔎 Review", "📝 Inputs"]
+VIEWS = ["Court view", "Calendar", "Edit practices", "Programs", "Tournaments",
+         "Coaches", "Pecking order", "Publish", "Review", "Inputs"]
 if st.session_state.get("nav") not in VIEWS:
     st.session_state.nav = VIEWS[0]
 VIEW = st.radio("Section", VIEWS, key="nav", horizontal=True, label_visibility="collapsed")
@@ -474,15 +475,20 @@ if VIEW == TAB_COURT:
                             help="The template is each team's usual weekday slot; weeks show the actual dates, "
                                  "including weekends, makeups and closures.")
         hl = set(c2.multiselect("Highlight a club, team or coach", people_options(a)))
-        show_open = st.toggle("Show open court times", value=True, key="show_open",
+        t1, t2 = st.columns(2)
+        show_open = t1.toggle("Show open court times", value=True, key="show_open",
                               help="A dashed “Open” box marks every free practice time on each court.")
+        show_moved = t2.toggle("Outline moved practices", key="show_moved",
+                               help="Outline makeups and practices that aren't on the team's usual day or time.")
+        if not show_moved:
+            a = a.assign(on_pattern=True)
         if published:
             ch = diff(practices_of(published[-1]), a, cleaned, start, end)
             if len(ch):
-                st.caption(f"📢 {plural(len(ch), 'change')} since “{published[-1]['label']}” was published. "
-                           "See **📢 Publish** for the list.")
+                st.caption(f"{plural(len(ch), 'change')} since “{published[-1]['label']}” was published. "
+                           "See **Publish** for the list.")
 
-        st.markdown(legend_html(a.loc[a["kind"] == "Practice", "age"], stripes), unsafe_allow_html=True)
+        st.markdown(legend_html(a.loc[a["kind"] == "Practice", "age"], stripes, show_moved), unsafe_allow_html=True)
         if pick == "Weekly template":
             tmpl = result.pattern.rename(columns={"team": "name"}).assign(kind="Practice", on_pattern=True)
             loc = template_locals(a)
@@ -504,7 +510,7 @@ if VIEW == TAB_COURT:
                                         open_slots=open_slot_map(dd, cleaned) if show_open else None),
                         unsafe_allow_html=True)
 
-        st.download_button("⬇️ Download schedule (Excel)", lambda: to_excel(result, closures), f"schedule_{start:%Y%m%d}-{end:%Y%m%d}.xlsx")
+        st.download_button("Download schedule (Excel)", lambda: to_excel(result, closures), f"schedule_{start:%Y%m%d}-{end:%Y%m%d}.xlsx")
 
 # ------------------------------------------------------------ calendar --
 if VIEW == TAB_CAL:
@@ -515,7 +521,9 @@ if VIEW == TAB_CAL:
         c1, c2 = st.columns([2, 1])
         hl = set(c1.multiselect("Only show a club, team or coach", people_options(a), key="cal_filter"))
         show_locals = c2.toggle("Include locals programs", value=True)
-        st.markdown(month_calendar_html(a, start, end, closures, hl or None, show_locals, result.weekend_dates,
+        show_moved = c2.toggle("Outline moved practices", key="show_moved",
+                               help="Outline makeups and practices that aren't on the team's usual day or time.")
+        st.markdown(month_calendar_html(a if show_moved else a.assign(on_pattern=True), start, end, closures, hl or None, show_locals, result.weekend_dates,
                                         result.tournaments), unsafe_allow_html=True)
 
         who = ("_" + "_".join(sorted(hl))) if hl else ""
@@ -523,17 +531,17 @@ if VIEW == TAB_CAL:
         title = f"{st.session_state.get('project_name') or 'Practice calendar'}"
         st.caption("Download what's shown above" + (f" ({', '.join(sorted(hl))})" if hl else " (everyone)") + ":")
         d1, d2, d3 = st.columns(3)
-        d1.download_button("📆 Google Calendar (.ics)",
+        d1.download_button("Google Calendar (.ics)",
                            lambda: calendar_ics(result, hl or None, show_locals, title), f"{fname}.ics",
                            mime="text/calendar", width="stretch",
                            help="In Google Calendar: Settings → Import & export → Import. Tip: import into a new "
                                 "calendar (e.g. 'Club practices') so it's easy to remove and re-import after changes.")
-        d2.download_button("🖨️ Printable calendar",
+        d2.download_button("Printable calendar",
                            lambda: calendar_print_html(a, start, end, closures, hl or None, show_locals,
                                                        result.weekend_dates, result.tournaments, title).encode(),
                            f"{fname}.html", mime="text/html", width="stretch",
                            help="Opens in your browser; print it or save it as a PDF. One month per page.")
-        d3.download_button("📊 Calendar (Excel)", lambda: calendar_excel(result, closures, hl or None, show_locals),
+        d3.download_button("Calendar (Excel)", lambda: calendar_excel(result, closures, hl or None, show_locals),
                            f"{fname}.xlsx", width="stretch",
                            help="The club's calendar layout: a block per week, each day with time · what · courts.")
 
@@ -575,7 +583,7 @@ if VIEW == TAB_EDIT:
         st.caption("Build the schedule first.")
     else:
         st.markdown("Change practices by hand. The scheduler **keeps these changes every time it rebuilds**, "
-                    "and fits everything else around them. Practices you place show a 📌.")
+                    "and fits everything else around them. Practices you place are marked “set by hand”.")
         team_names = [t.name for t in cleaned.teams]
         e_team = st.selectbox("Team", team_names, key="ed_team")
         a = result.assignments
@@ -595,7 +603,7 @@ if VIEW == TAB_EDIT:
             if len(tp):
                 st.dataframe(pd.DataFrame({
                     "Date": tp["date"].map(lambda d: f"{d:%a %b %-d}"), "Time": tp["slot_label"],
-                    "Court": tp["court"], "Set by hand": tp.get("pinned", False).map(lambda v: "📌" if v == True else ""),  # noqa: E712
+                    "Court": tp["court"], "Set by hand": tp.get("pinned", False).map(lambda v: "Yes" if v == True else ""),  # noqa: E712
                 }), hide_index=True, width="stretch", height=min(420, 38 + 35 * len(tp)))
             else:
                 st.caption("No practices in this schedule.")
@@ -743,7 +751,7 @@ if VIEW == TAB_EDIT:
                        for i, r in view.iterrows()}
                 st.dataframe(view.rename(columns=str.title), hide_index=True, width="stretch")
                 undo = st.multiselect("Undo changes", list(lab), format_func=lambda i: lab[i], key="ed_undo")
-                if st.button("↩️ Undo selected", disabled=not undo):
+                if st.button("Undo selected", disabled=not undo):
                     inp.overrides = inp.overrides.drop(index=undo).reset_index(drop=True)
                     st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
                     st.session_state.resolve = True
@@ -879,14 +887,14 @@ def try_locals(new_locals: pd.DataFrame, what: str) -> bool:
 
 def done_msg(what: str) -> str:
     return f"{what}. " + ("Schedule rebuilt." if st.session_state.get("prog_autobuild", True)
-                          else "Press ⚡ Auto-schedule when you're done to rebuild.")
+                          else "Press Auto-schedule when you're done to rebuild.")
 
 
 if VIEW == TAB_PROG:
     st.markdown("Programs (locals, JumpStart, leagues…) are blocked off on their courts, and the practice "
                 "schedule is rebuilt around them when you save.")
     st.toggle("Rebuild the schedule each time I save a program", value=True, key="prog_autobuild",
-              help="Turn off to change several programs in a row, then press ⚡ Auto-schedule once at the end.")
+              help="Turn off to change several programs in a row, then press Auto-schedule once at the end.")
     ver = st.session_state.get("locals_ver", 0)
 
     # ---- edit an existing program
@@ -901,8 +909,8 @@ if VIEW == TAB_PROG:
         if pick is not None:
             row = inp.locals.fillna("").iloc[pick].to_dict()
             clicked, v = program_form(f"edit_program_{pick}_{ver}", program_defaults(row),
-                                      ["💾 Save changes", "🗑️ Delete program"])
-            if clicked == "🗑️ Delete program":
+                                      ["Save changes", "Delete program"])
+            if clicked == "Delete program":
                 if try_locals(inp.locals.drop(inp.locals.index[pick]), "delete it"):
                     st.session_state.flash = done_msg(f"Deleted {row['program']}")
                     st.rerun()
@@ -920,7 +928,7 @@ if VIEW == TAB_PROG:
 
     # ---- add a program
     st.subheader("Add a program")
-    clicked, v = program_form("add_program", program_defaults(None), ["➕ Add program"])
+    clicked, v = program_form("add_program", program_defaults(None), ["Add program"])
     if clicked:
         problems, row = program_row(v)
         if problems:
@@ -977,7 +985,7 @@ if VIEW == TAB_TOURN:
                                      key=f"t_teams_{t_club}_{'-'.join(map(str, t_ages))}",
                                      help="Filled in from the club and ages; remove teams that aren't going.")
             t_prog, t_courts = "(none)", []
-        add_t = st.button("➕ Add tournament", type="primary")
+        add_t = st.button("Add tournament", type="primary")
 
     if add_t:
         problems = []
@@ -1017,7 +1025,7 @@ if VIEW == TAB_TOURN:
                      .rename(columns=lambda c: c.replace("_", " ").title()), hide_index=True, width="stretch")
         c1, c2 = st.columns([3, 1])
         drop_t = c1.multiselect("Remove tournaments", list(tv.index), placeholder="Choose tournaments to remove")
-        if c2.button("🗑️ Remove", disabled=not drop_t, width="stretch", key="rm_tourn"):
+        if c2.button("Remove", disabled=not drop_t, width="stretch", key="rm_tourn"):
             keep = [i for i, lab in enumerate(tv.index) if lab not in drop_t]
             inp.tournaments = inp.tournaments.iloc[keep].reset_index(drop=True)
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
@@ -1027,7 +1035,7 @@ if VIEW == TAB_TOURN:
 
 # ------------------------------------------------------------- coaches --
 if VIEW == TAB_COACH:
-    with st.expander("➕ Add a coach", expanded=False):
+    with st.expander("Add a coach", expanded=False):
         st.caption("For coaches who aren't on a team yet (e.g. they only work programs). "
                    "They'll show up in the program and tournament forms.")
         with st.form("add_coach", clear_on_submit=True):
@@ -1087,7 +1095,7 @@ if VIEW == TAB_COACH:
                         "date": "Date", "slot_label": "Time", "court": "Court", "kind": "Type",
                         "name": "Team / Program", "role": "Role"}),
                     hide_index=True, width="stretch")
-                st.download_button(f"📆 Add {coach}'s schedule to Google Calendar (.ics)",
+                st.download_button(f"Add {coach}'s schedule to Google Calendar (.ics)",
                                    lambda: to_ics(result, coach), f"{coach.replace(' ', '_')}_{start:%Y%m%d}-{end:%Y%m%d}.ics",
                                    mime="text/calendar",
                                    help="In Google Calendar: Settings → Import & export → Import this file.")
@@ -1125,7 +1133,7 @@ if VIEW == TAB_PECK:
                 "team": "Team", "club": "Club", "head_coach": "Head coach", "assistants": "Assistants"})
         changed = {r.team: r.rank for r, (_, o) in zip(edited.itertuples(), shown.iterrows())
                    if str(r.rank or "").strip() != str(o["rank"] or "").strip()}
-        if st.button("💾 Save ranks", type="primary", disabled=not changed,
+        if st.button("Save ranks", type="primary", disabled=not changed,
                      help="Saves the ranks you changed above and rebuilds the schedule"):
             t = inp.teams.copy()
             if "rank" not in t.columns:
@@ -1139,9 +1147,9 @@ if VIEW == TAB_PECK:
                                    "assistants": "Asst. Coach"})[["Rank", "Club", "Team", "Head Coach", "Asst. Coach"]]
         buf = io.BytesIO()
         dl.to_excel(buf, index=False, sheet_name="Pecking Order")
-        st.download_button("⬇️ Download pecking order (Excel)", buf.getvalue(), "pecking_order.xlsx")
+        st.download_button("Download pecking order (Excel)", buf.getvalue(), "pecking_order.xlsx")
 
-    with st.expander("📥 Import a pecking order from a spreadsheet", expanded=order.empty or bool(
+    with st.expander("Import a pecking order from a spreadsheet", expanded=order.empty or bool(
             len(order) and (~order["_set"]).all())):
         st.caption("Upload any spreadsheet with a **Rank** column and a **Team** column (Head Coach, Asst. Coach "
                    "and Gender help match teams but are optional). Teams are matched by name first "
@@ -1188,7 +1196,7 @@ if VIEW == TAB_PECK:
                                       key="peck_upd_asst")
                     st.dataframe(pd.DataFrame(changes, columns=["Team", "Assistants now", "In the sheet"]),
                                  hide_index=True, width="stretch")
-                if st.button("✅ Use this pecking order", type="primary", disabled=bool(dupes)):
+                if st.button("Use this pecking order", type="primary", disabled=bool(dupes)):
                     inp.teams = pk.apply(inp.teams, matches, update_assistants=upd)
                     n = sum(1 for m in matches if m.team and m.rank is not None)
                     _rebuild(f"Pecking order set for {plural(n, 'team')}"
@@ -1207,7 +1215,7 @@ if VIEW == TAB_PUB:
             p_label = c1.text_input("Version name", value=f"{range_label(start, end)} · v{len(published) + 1}",
                                     key=f"pub_label_{len(published)}")
             p_note = c2.text_input("Note (optional)", placeholder="e.g. sent to coaches Friday", key="pub_note")
-            if st.button("📢 Publish this schedule", type="primary"):
+            if st.button("Publish this schedule", type="primary"):
                 st.session_state.published = add_version(published, snapshot(result, p_label.strip() or "Published",
                                                                              p_note.strip()))
                 st.session_state.flash = f"Published “{p_label.strip() or 'Published'}”."
@@ -1237,14 +1245,14 @@ if VIEW == TAB_PUB:
                 st.dataframe(view.assign(week_of=view["week_of"].map(lambda d: f"{d:%b %-d}")).rename(columns={
                     "team": "Team", "week_of": "Week of", "change": "Change", "was": "Was", "now": "Now",
                     "why": "Why"}), hide_index=True, width="stretch")
-                st.download_button("⬇️ Download changes (CSV)", view.to_csv(index=False).encode(),
+                st.download_button("Download changes (CSV)", view.to_csv(index=False).encode(),
                                    f"changes_since_{ver_['id'][:8]}.csv", mime="text/csv")
             with st.expander(f"All published versions ({len(published)})"):
                 st.dataframe(pd.DataFrame([{"Version": v["label"], "Published": f"{published_at(v):%b %-d, %Y %-I:%M %p}",
                                             "Note": v.get("note", ""), "Practices": len(v.get("practices", []))}
                                            for v in reversed(published)]), hide_index=True, width="stretch")
                 drop = st.multiselect("Remove versions", order, format_func=lambda i: labels[i], key="pub_drop")
-                if st.button("🗑️ Remove selected", disabled=not drop):
+                if st.button("Remove selected", disabled=not drop):
                     st.session_state.published = [v for i, v in enumerate(published) if i not in drop]
                     st.rerun()
 
@@ -1298,7 +1306,7 @@ if VIEW == TAB_REVIEW:
 
 # -------------------------------------------------------------- inputs --
 if VIEW == TAB_INPUTS:
-    st.markdown("Edit any table, then press **⚡ Auto-schedule** again. "
+    st.markdown("Edit any table, then press **Auto-schedule** again. "
                 "Download the tables as a spreadsheet to keep your changes.")
     help_ = {
         "Teams": "Girls teams can leave head_coach blank (taken from the name, e.g. 18-Jordan). "
@@ -1338,7 +1346,7 @@ if VIEW == TAB_INPUTS:
         edited = st.data_editor(df, num_rows="dynamic", width="stretch",
                                 key=f"edit_{attr}_{sig_key}", hide_index=True)
         setattr(inp, attr, edited)
-    st.download_button("⬇️ Download inputs (Excel)", inp.to_excel_bytes, "club_inputs.xlsx")
+    st.download_button("Download inputs (Excel)", inp.to_excel_bytes, "club_inputs.xlsx")
 
 
 # ----------------------------------------------------------- autosave --

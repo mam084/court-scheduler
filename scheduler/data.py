@@ -586,8 +586,7 @@ class Tournament:
         return self.end > self.start
 
     def label(self) -> str:
-        icon = "🏆" if self.kind == "local" else "✈️"
-        return f"{icon} {self.name}"
+        return self.name
 
 
 def parse_ages(value, all_ages: list[int] | None = None) -> list[int]:
