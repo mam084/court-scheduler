@@ -86,9 +86,15 @@ def solve(
     seed: int = 0,
     previous: pd.DataFrame | None = None,
     previous_pattern: pd.DataFrame | None = None,
+    restore: pd.DataFrame | None = None,
 ) -> ScheduleResult:
     """previous: an earlier schedule's assignments (e.g. the published one).
-    Practices stay where they were unless something needs them to move."""
+    Practices stay where they were unless something needs them to move.
+
+    restore: a published version's practices to bring back exactly. Each one
+    is placed like a hand-placed practice; any that can't happen any more
+    (team gone, club closed, court or coach taken...) is left out with a note,
+    and the solver fills that week as usual."""
     data: CleanInput = clean(inp, start, end)
     t0 = time.time()
     teams = data.teams
@@ -205,6 +211,9 @@ def solve(
             problems.append(f"{teams[t].name}: {n} practices placed by hand in the week of {ws:%b %-d} (max 2)")
     if problems:
         raise ValueError("These manual changes can't all happen:\n- " + "\n- ".join(problems))
+
+    restored, restore_notes = _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on,
+                                            coach_local, rules_for, away)
 
     # ---------------------------------------------- decision variables --
     # Teams whose 1st-choice wishlist asks for 3:45: no 3:45 cost for them.
@@ -697,7 +706,7 @@ def solve(
             "court": court_of[t, d, s], "kind": "Practice", "name": team.name, "club": team.club,
             "age": team.age, "coach": "; ".join(team.staff), "head": "; ".join(team.heads),
             "on_pattern": on_pattern,
-            "pinned": (t, d, s) in pinned,
+            "pinned": (t, d, s) in pinned and (t, d, s) not in restored,
         })
     # Locals show on every date they run (even weekend days not open for
     # practices), so the calendar fills in as soon as a program is added.
@@ -801,8 +810,106 @@ def solve(
             "issue": f"No-date broken: {b['date']:%a %-m/%-d} {b['slot']}",
             "detail": f"{b['who']}; it was the only way to get 2 practices that week"
                       + (f" ({b['note']})" if b["note"] else "")}]), issues], ignore_index=True)
-    return ScheduleResult(status_name, assignments, pattern, issues, metrics, data.warnings, start, end,
+    for n in restore_notes:
+        if n["kept"]:
+            issues = pd.concat([pd.DataFrame([{
+                "severity": "Medium", "team": n["team"], "week_of": week_start(n["date"]),
+                "issue": f"Restored: {n['date']:%a %-m/%-d} {n['slot']}",
+                "detail": f"Kept from the restored version even though {n['why']}"}]), issues], ignore_index=True)
+    warnings = list(data.warnings) + [n["text"] for n in restore_notes if not n["kept"]]
+    return ScheduleResult(status_name, assignments, pattern, issues, metrics, warnings, start, end,
                           shown_weekends, data.tournaments, practice_counts, broken_rows)
+
+
+def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on, coach_local, rules_for, away):
+    """Adds a published version's practices to `pinned` (in place).
+
+    Hand-placed practices win. A practice that can't happen now is dropped
+    with a note; one that can but breaks a rule (a no-date, the team's age
+    slots...) is kept, since restoring means bringing the version back as it
+    was, and flagged so it's easy to move.
+    Returns (keys restored, notes)."""
+    restored: set[tuple] = set()
+    notes: list[dict] = []
+    if restore is None or not len(restore):
+        return restored, notes
+    rv = restore[restore["kind"] == "Practice"] if "kind" in restore else restore
+    taken = defaultdict(set)          # (d, s) -> courts already placed
+    count = defaultdict(int)          # (d, s) -> practices already placed
+    heads_at = defaultdict(set)       # (d, s) -> head coaches already placed
+    team_days, per_week = set(), defaultdict(int)
+    for (t, d, s), c in pinned.items():
+        count[d, s] += 1
+        heads_at[d, s].update(teams[t].heads)
+        team_days.add((t, d))
+        per_week[t, week_start(d)] += 1
+        if c is not None:
+            taken[d, s].add(c)
+    outside, gone = 0, set()
+
+    def drop(name, d, s, why):
+        notes.append({"kept": False, "team": name, "date": d, "slot": s,
+                      "text": f"Not restored: {name} on {d:%a %-m/%-d} at {s}, because {why}"})
+
+    order = sorted(rv.itertuples(), key=lambda r: (r.date, SLOT_KEYS.index(r.slot) if r.slot in SLOT_KEYS else 99))
+    for r in order:
+        name, d, s = str(r.name), r.date, r.slot
+        if name not in idx:
+            gone.add(name)
+            continue
+        if not (start <= d <= end):
+            outside += 1
+            continue
+        t, team = idx[name], teams[idx[name]]
+        c = getattr(r, "court", None)
+        c = None if c is None or pd.isna(c) else int(c)
+        if d in data.closures:
+            drop(name, d, s, f"the club is closed ({data.closures[d] or 'closure'})")
+        elif d.weekday() >= 5 and (d not in data.weekends or s not in slots_on(d)):
+            drop(name, d, s, "that weekend time isn't open")
+        elif s not in slots_on(d):
+            drop(name, d, s, "that time isn't open")
+        elif (t, d) in team_days:
+            drop(name, d, s, "the team already has a practice placed by hand that day")
+        elif per_week[t, week_start(d)] >= PRACTICES_PER_WEEK:
+            drop(name, d, s, "the team already has 2 practices placed that week")
+        elif count[d, s] >= len(courts_on(d, s)):
+            drop(name, d, s, "every court is taken then")
+        elif busy := sorted(set(team.heads) & (heads_at[d, s] | coach_local[d, s])):
+            drop(name, d, s, f"{' and '.join(busy)} is coaching something else then")
+        else:
+            if c is not None and (c not in courts_on(d, s) or c in taken[d, s]):
+                c = None  # its court is taken now: any free court will do
+            pinned[t, d, s] = c
+            restored.add((t, d, s))
+            count[d, s] += 1
+            heads_at[d, s].update(team.heads)
+            team_days.add((t, d))
+            per_week[t, week_start(d)] += 1
+            if c is not None:
+                taken[d, s].add(c)
+            why = []
+            if not team.allowed(s):
+                why.append(f"{team.age}s don't normally use {s}")
+            if team.start and d < team.start:
+                why.append(f"the team's season starts {team.start:%-m/%-d}")
+            if d in away[name]:
+                why.append("the team is at a tournament")
+            if any(rr.kind == "no" and rr.matches(d, s) for rr in rules_for[name]):
+                why.append("it's a team no-date")
+            out = [h for h in team.heads if any(rr.kind == "no" and rr.matches(d, s) for rr in rules_for[h])]
+            if out:
+                why.append(f"head coach {' and '.join(out)} can't make it")
+            if why:
+                notes.append({"kept": True, "team": name, "date": d, "slot": s, "why": "; ".join(why)})
+    if outside:
+        notes.append({"kept": False, "team": "", "date": start, "slot": "",
+                      "text": f"{outside} practice{'s' if outside != 1 else ''} in the restored version fall outside "
+                              f"this schedule's dates and weren't restored"})
+    for name in sorted(gone):
+        notes.append({"kept": False, "team": name, "date": start, "slot": "",
+                      "text": f"Not restored: {name}'s practices, because {name} isn't on the Teams sheet any more"})
+    return restored, notes
 
 
 def _broken_who(b: dict) -> str:

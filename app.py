@@ -101,7 +101,7 @@ except Exception as e:  # noqa: BLE001  (bad DATABASE_URL: explain instead of cr
     st.caption(f"Details: {type(e).__name__}: {str(e).splitlines()[0][:300] if str(e) else ''}")
     st.stop()
 PROJECT_KEYS = ["project_id", "project_name", "inp", "result", "result_period", "inp_sig", "last_saved",
-                "range_start", "range_end", "time_limit", "makeup", "keep_prev", "published", "_save_sig"]
+                "range_start", "range_end", "time_limit", "makeup", "keep_prev", "published", "base_version", "_save_sig"]
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -133,6 +133,7 @@ def open_project(pid: str) -> bool:
         range_start=s_, range_end=e_,
         time_limit=int(settings.get("time_limit", 60)), makeup=bool(settings.get("makeup", True)),
         keep_prev=bool(settings.get("keep_prev", True)), published=published_,
+        base_version=settings.get("base_version"),
         last_saved=payload_hash(make_payload(inp_, s_, e_, settings, result_, published_)),
     )
     st.session_state.pop("_save_sig", None)
@@ -262,7 +263,8 @@ with st.sidebar:
                              "(on another weekday or an open weekend).")
             st.checkbox("Keep practices where they are when rebuilding", key="keep_prev",
                         help="Rebuilding moves only the practices that have to move, starting from the last "
-                             "published schedule (or the current one if nothing's published). Turn off to "
+                             "published schedule (or the version you restored, or the current one if nothing's "
+                             "published). Turn off to "
                              "start fresh.")
         run = st.button("Auto-schedule", type="primary", width="stretch")
         with st.expander("Rename or delete"):
@@ -333,14 +335,25 @@ inp.start, inp.end = start, end
 if run or st.session_state.pop("resolve", False):
     with st.spinner("Building the schedule…"):
         try:
-            prev = prev_pat = None
-            if keep_prev:
-                if published:
-                    prev, prev_pat = practices_of(published[-1]), pattern_of(published[-1])
+            prev = prev_pat = restore = None
+            restore_id = st.session_state.pop("restore_version", None)
+            restore_ver = next((v for v in published if v["id"] == restore_id), None)
+            # After a restore, rebuilds lean on the restored version (not the
+            # newest one) until something new is published.
+            base = (restore_ver or next((v for v in published if v["id"] == st.session_state.get("base_version")),
+                                        None) or (published[-1] if published else None))
+            if restore_ver is not None:
+                restore = practices_of(restore_ver)
+                prev, prev_pat = restore, pattern_of(restore_ver)
+            elif keep_prev:
+                if base is not None:
+                    prev, prev_pat = practices_of(base), pattern_of(base)
                 elif st.session_state.get("result") is not None and st.session_state.result.ok:
                     prev, prev_pat = st.session_state.result.assignments, st.session_state.result.pattern
             st.session_state.result = solve(inp, start, end, time_limit_s=time_limit, makeup_closures=makeup,
-                                            previous=prev, previous_pattern=prev_pat)
+                                            previous=prev, previous_pattern=prev_pat, restore=restore)
+            if restore_ver is not None:
+                st.session_state.base_version = restore_ver["id"]
             st.session_state.pop("pending_rebuild", None)
             st.session_state.result_period = (start, end)
             sf = st.session_state.result.shortfalls if st.session_state.result.ok else None
@@ -1218,6 +1231,7 @@ if VIEW == TAB_PUB:
             if st.button("Publish this schedule", type="primary"):
                 st.session_state.published = add_version(published, snapshot(result, p_label.strip() or "Published",
                                                                              p_note.strip()))
+                st.session_state.base_version = None
                 st.session_state.flash = f"Published “{p_label.strip() or 'Published'}”."
                 st.rerun()
         if not published:
@@ -1229,6 +1243,16 @@ if VIEW == TAB_PUB:
             vi = st.selectbox("Compare the current schedule with", order, format_func=lambda i: labels[i],
                               key="pub_cmp")
             ver_ = published[vi]
+            r1, r2 = st.columns([1, 3], vertical_alignment="center")
+            if r1.button("Restore this version", key="pub_restore",
+                         help="Make this version the current schedule again"):
+                st.session_state.restore_version = ver_["id"]
+                st.session_state.resolve = True
+                st.session_state.flash = (f"Restored “{ver_['label']}”. Anything that can't happen with the "
+                                          "current inputs is listed in the notes at the top and on the Review tab.")
+                st.rerun()
+            r2.caption("Brings back this version's practices exactly, rebuilt around your current inputs. "
+                       "The current schedule is replaced, so publish it first if you want to keep it.")
             ch = diff(practices_of(ver_), result.assignments, cleaned, start, end,
                       pinned={(r.name, r.date, r.slot) for r in result.assignments.itertuples()
                               if getattr(r, "pinned", False) == True})  # noqa: E712
@@ -1254,6 +1278,8 @@ if VIEW == TAB_PUB:
                 drop = st.multiselect("Remove versions", order, format_func=lambda i: labels[i], key="pub_drop")
                 if st.button("Remove selected", disabled=not drop):
                     st.session_state.published = [v for i, v in enumerate(published) if i not in drop]
+                    if any(published[i]["id"] == st.session_state.get("base_version") for i in drop):
+                        st.session_state.base_version = None
                     st.rerun()
 
 # -------------------------------------------------------------- review --
@@ -1352,7 +1378,8 @@ if VIEW == TAB_INPUTS:
 # ----------------------------------------------------------- autosave --
 # Save the inputs, dates, settings and latest schedule whenever anything
 # changed this run, so a refresh or a new visit picks up where you left off.
-_settings = {"time_limit": time_limit, "makeup": makeup, "keep_prev": st.session_state.get("keep_prev", True)}
+_settings = {"time_limit": time_limit, "makeup": makeup, "keep_prev": st.session_state.get("keep_prev", True),
+             "base_version": st.session_state.get("base_version")}
 # Building the whole payload is the slow part, so only do it when something
 # could have changed: the solved schedule, published versions, settings,
 # dates or any input table.

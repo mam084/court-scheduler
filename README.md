@@ -69,7 +69,7 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 - **Programs:** add or edit a program (name, Girls/Boys side, days, every week or start/end dates, timeslots including JumpStart 3:30–4:30 and 4:30–5:30, courts, coaches, on/off-site). Editing lets you drop a single court when sign-ups are low. It's blocked off on the courts and calendar right away, with the practice schedule rebuilt around it. Girls programs show in blue, boys programs in green.
 - **Pecking order:** the club's team ranking (`16-3` = third 16s team; boys and girls can share a rank), shown top to bottom and editable in place. **Import** it from any spreadsheet with a Rank and a Team column: teams are matched by name (`18-Black` = `18 Black`) or by age + head coach (`16-D&D` → `16-Danielle & Darci`), ranks Excel turned into dates (`12-1` → Dec 1) are read back, mismatches can be fixed in a dropdown, and the sheet's assistant coaches can update the app's (TBA = nobody). Downloadable as Excel.
 - **Coaches:** each coach's head and assistant teams, locals, no-dates and full schedule, plus an `.ics` download for Google Calendar. Coaches who aren't on a team yet (e.g. ones who only work programs) can be added to the roster here.
-- **Publish:** mark the schedule as sent to coaches. Rebuilds then keep practices where they were, and this page lists every practice that moved, appeared, disappeared or changed court since a published version, with the reason (a new no-date, a program on the court, a tournament…). Downloadable as CSV.
+- **Publish:** mark the schedule as sent to coaches. Rebuilds then keep practices where they were, and this page lists every practice that moved, appeared, disappeared or changed court since a published version, with the reason (a new no-date, a program on the court, a tournament…). Downloadable as CSV. **Restore this version** makes an older version the current schedule again, rebuilt around the current inputs: anything that can't happen any more is left out with a note, and restored practices that now break a rule are flagged on Review.
 - **Review:** everything that differs from the ideal schedule, with the reason, plus a per-team count of the less-wanted spots (Court 2, 3:45, weekends, makeups, back-to-back days) for this schedule or every published version.
 - **Inputs:** edit any table in place and re-run.
 - **Exports:** an Excel workbook in the club's grid layout (template, one sheet per week, all bookings, review).
@@ -149,4 +149,4 @@ tests/                  hard-rule and parsing tests
 - [ ] Live Google Calendar sync
 - [ ] Monthly prompt for coaches to submit next month's no-dates
 - [x] Local and travel tournaments, court quality ranking
-- [x] Published versions, stable rebuilds and a "what changed" list
+- [x] Published versions, stable rebuilds, a "what changed" list and restoring an older version

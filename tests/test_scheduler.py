@@ -627,6 +627,41 @@ def test_publish_and_what_changed(tmp_path):
     assert set(b["team"]) == set(pr["name"]) and (b["practices"] > 0).all()
 
 
+def test_restore_published_version():
+    """Restoring brings a version's practices back exactly, even after the
+    schedule was rebuilt differently; what can't happen now is noted."""
+    from scheduler.changes import diff, practices_of, snapshot
+    inp = simulate(6, 4, 4, 2026, 11, 7)
+    r1 = solve(inp, *NOV, time_limit_s=20)
+    v1 = snapshot(r1, "Nov v1")
+    old = practices_of(v1)
+    # A different schedule (no stability) so there's something to restore.
+    r2 = solve(inp, *NOV, time_limit_s=20, seed=9)
+    r3 = solve(inp, *NOV, time_limit_s=20, previous=old, restore=old, seed=3)
+    key = ["name", "date", "slot", "court"]
+    got = r3.assignments[r3.assignments["kind"] == "Practice"]
+    assert set(map(tuple, got[key].values)) == set(map(tuple, old[key].values))
+    assert not got["pinned"].any()  # not shown as "set by hand"
+    assert diff(old, r3.assignments, clean(inp, *NOV), *NOV).empty
+    # The club closes on one of its dates: that practice is dropped with a
+    # note and the team still gets its 2 practices that week.
+    victim = old.iloc[3]
+    inp.closures = pd.DataFrame([{"date": f"{victim['date']:%m/%d/%Y}", "reason": "Flood"}])
+    r4 = solve(inp, *NOV, time_limit_s=20, previous=old, restore=old)
+    assert any("Not restored" in w and victim["name"] in w and "Flood" in w for w in r4.warnings)
+    sf = r4.shortfalls
+    assert not ((sf["team"] == victim["name"]) & (sf["week_of"] == week_start(victim["date"]))).any()
+    # A new no-date on a restored practice: kept, but flagged.
+    inp.closures = pd.DataFrame(columns=["date", "reason"])
+    other = old.iloc[7]
+    inp.availability = pd.concat([inp.availability, pd.DataFrame([{
+        "who": other["name"], "type": "No", "dates": f"{other['date']:%m/%d}"}])], ignore_index=True)
+    r5 = solve(inp, *NOV, time_limit_s=20, previous=old, restore=old)
+    got5 = r5.assignments[r5.assignments["kind"] == "Practice"]
+    assert ((got5["name"] == other["name"]) & (got5["date"] == other["date"])).any()
+    assert ((r5.issues["team"] == other["name"]) & r5.issues["issue"].str.startswith("Restored")).any()
+
+
 def test_open_boxes_mark_free_court_times():
     from scheduler.config import COURTS, SLOTS, WEEKDAY_KEYS, slots_overlap
     from scheduler.views import court_grid_html, open_slot_map, week_dates

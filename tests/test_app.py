@@ -212,3 +212,30 @@ def test_hand_placed_practice_can_be_moved_again_and_removed(db):
         pk = f"{team}_{d}_{new_slot}"
     adds = at.session_state["inp"].overrides
     assert (adds["action"] == "Add").sum() <= 1  # each move replaced the previous hand placement
+
+
+def test_restore_published_version_button(db):
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Restore", 6)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Publish").run()
+    next(b for b in at.button if "Publish this schedule" in b.label).click().run()
+    v1 = db.get(pid)["payload"]["published"][0]
+    key = lambda df: set(zip(df["name"], df["date"].map(str), df["slot"], df["court"].map(int)))  # noqa: E731
+    want = {(p["name"], p["date"], p["slot"], int(p["court"])) for p in v1["practices"]}
+    # Rebuild from scratch so the schedule drifts away from v1.
+    at.session_state["keep_prev"] = False
+    next(b for b in at.button if "Auto-schedule" in b.label).click().run()
+    at.session_state["keep_prev"] = True
+    at.run()
+    next(b for b in at.button if "Restore this version" in b.label).click().run()
+    assert not at.exception
+    a = at.session_state["result"].assignments
+    assert key(a[a["kind"] == "Practice"]) == want
+    assert any("Restored" in s.value for s in at.success)
+    assert db.get(pid)["payload"]["settings"]["base_version"] == v1["id"]
+    # Publishing something new clears it.
+    next(b for b in at.button if "Publish this schedule" in b.label).click().run()
+    assert db.get(pid)["payload"]["settings"]["base_version"] is None
