@@ -165,6 +165,32 @@ class ScheduleInput:
         return cls(**{ATTRS[s]: f for s, f in frames.items()})
 
 
+# Tables that belong to the club rather than to one spreadsheet: importing a
+# spreadsheet keeps them, and a new schedule starts with them.
+KEPT_TABLES = {"Locals": "locals", "Tournaments": "tournaments"}
+
+
+def keep_programs(new: "ScheduleInput", old: "ScheduleInput | None", use_file: bool = False) -> list[str]:
+    """Carries the locals programs and tournaments from `old` into `new` (in
+    place), so importing a spreadsheet doesn't wipe them.
+
+    use_file: take the spreadsheet's tables instead, but only where it has
+    rows; an empty or missing sheet never wipes what's there.
+    Returns one line per table saying where it came from."""
+    notes = []
+    for sheet, attr in KEPT_TABLES.items():
+        mine = getattr(old, attr) if old is not None else empty(sheet)
+        mine = mine.dropna(how="all") if mine is not None else empty(sheet)
+        theirs = getattr(new, attr)
+        label = "programs" if sheet == "Locals" else "tournaments"
+        if len(mine) and not (use_file and len(theirs)):
+            setattr(new, attr, mine.copy().reset_index(drop=True))
+            notes.append(f"kept {len(mine)} {label} row{'s' if len(mine) != 1 else ''}")
+        elif len(theirs):
+            notes.append(f"{label} from the file")
+    return notes
+
+
 # ============================================================== parsing ==
 
 def blank(v) -> bool:

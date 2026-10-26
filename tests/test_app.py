@@ -239,3 +239,23 @@ def test_restore_published_version_button(db):
     # Publishing something new clears it.
     next(b for b in at.button if "Publish this schedule" in b.label).click().run()
     assert db.get(pid)["payload"]["settings"]["base_version"] is None
+
+
+def test_replacing_inputs_keeps_programs(db, tmp_path):
+    import io
+    from streamlit.testing.v1 import AppTest
+    from scheduler.data import ScheduleInput
+    pid = _save(db, "Keep programs", 7)
+    before = ScheduleInput.from_records(db.get(pid)["payload"]["inputs"])
+    assert len(before.locals)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    assert not at.exception
+    assert any(c.label == "Also replace programs and tournaments" and c.value is False for c in at.checkbox)
+    # What the replace button does, with a spreadsheet that has no Locals sheet.
+    from scheduler.data import keep_programs
+    new = ScheduleInput.from_excel(io.BytesIO(before.to_excel_bytes()))
+    new.locals = new.locals.iloc[0:0]
+    keep_programs(new, at.session_state["inp"])
+    assert len(new.locals) == len(before.locals)

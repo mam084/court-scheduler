@@ -24,8 +24,8 @@ for _mod in [m for m in list(sys.modules) if m == "scheduler" or m.startswith("s
 from scheduler import ScheduleInput, clean, month_range, simulate, solve
 from scheduler.config import ALL_COURTS, COURTS, DAYS, court_name, court_short, PROGRAM_KEYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
 from scheduler.data import (
-    ATTRS, COLUMNS, blank, empty, parse_courts, parse_date_ranges, parse_days, parse_names, parse_rank, parse_times,
-    program_side,
+    ATTRS, COLUMNS, blank, empty, keep_programs, parse_courts, parse_date_ranges, parse_days, parse_names, parse_rank,
+    parse_times, program_side,
 )
 from scheduler import pecking as pk
 from scheduler.export import calendar_excel, calendar_ics, to_excel, to_ics
@@ -205,6 +205,12 @@ with st.sidebar:
                                "court_scheduler_template.xlsx",
                                help="Sheets: Teams, Availability, Wishlist, Locals, Weekends, Closures, Tournaments. "
                                     "Example rows show the format.")
+            keep_opts = [p["id"] for p in saved] + ["__file__"]  # saved is newest first
+            keep_from = st.selectbox(
+                "Programs and tournaments from", keep_opts,
+                format_func=lambda o: "The spreadsheet" if o == "__file__" else names[o],
+                help="Locals programs and tournaments carry over from a saved schedule, so you don't have to "
+                     "put them in every spreadsheet. If that schedule has none, the spreadsheet's are used.")
         else:
             with st.expander("Simulation settings", expanded=False):
                 n_girls = st.slider("Girls teams", 0, 24, 6)
@@ -222,6 +228,9 @@ with st.sidebar:
                 try:
                     if source == "Upload spreadsheet":
                         new_inp = ScheduleInput.from_excel(up)
+                        if keep_from != "__file__":
+                            rec = store.get(keep_from)
+                            keep_programs(new_inp, read_payload(rec["payload"])[0] if rec else None)
                     else:
                         new_inp = simulate(n_girls, n_boys, n_locals, seed=int(seed), start=new_start, end=new_end)
                 except Exception as e:  # noqa: BLE001
@@ -246,13 +255,22 @@ with st.sidebar:
         st.date_input("To", key="range_end", format="MM/DD/YYYY")
         with st.expander("Replace data with a spreadsheet"):
             rep = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"], key=f"replace_{current}")
-            if rep is not None and st.button("Replace all input tables", width="stretch"):
+            use_file = st.checkbox("Also replace programs and tournaments", key=f"replace_kept_{current}",
+                                   help="Off: the Programs and Tournaments tabs stay as they are. On: use the "
+                                        "spreadsheet's, where it has any (an empty or missing sheet never "
+                                        "wipes them).")
+            if not use_file:
+                st.caption("Programs and tournaments stay as they are.")
+            if rep is not None and st.button("Replace input tables", width="stretch"):
                 try:
-                    st.session_state.inp = ScheduleInput.from_excel(rep)
+                    new_inp = ScheduleInput.from_excel(rep)
+                    kept = keep_programs(new_inp, st.session_state.inp, use_file=use_file)
+                    st.session_state.inp = new_inp
                     st.session_state.inp_sig = ("project", current, rep.name, rep.size)
                     st.session_state.result = None
                     st.session_state.resolve = True
-                    st.session_state.flash = f"Replaced the inputs with {rep.name}."
+                    st.session_state.flash = (f"Replaced the inputs with {rep.name}"
+                                              + (f" ({'; '.join(kept)})" if kept else "") + ".")
                     st.rerun()
                 except Exception as e:  # noqa: BLE001
                     st.error(f"Couldn't read that file: {e}")

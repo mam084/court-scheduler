@@ -1098,3 +1098,29 @@ def test_usual_week_is_a_valid_week(seed):
         for lp in data.locals:
             if lp.on_site and not lp.ranges and lp.day == p.day and slots_overlap(lp.slot, p.slot):
                 assert p.court not in lp.courts, (p.team, p.day, p.slot, lp.name)
+
+
+def test_import_keeps_programs_and_tournaments():
+    from scheduler.data import keep_programs
+    old = _inp([{"team": "14-A", "age": 14}],
+               locals_=[{"program": "G 14 L", "days": "Wed, Fri", "time": "3:45", "courts": "1-7", "on_site": "Yes"}])
+    old.tournaments = pd.DataFrame([{"name": "Boys Local", "type": "Local", "start_date": "11/7/2026",
+                                     "end_date": "11/7/2026"}])
+    # A spreadsheet with no programs or tournaments: both are kept.
+    new = _inp([{"team": "14-B", "age": 14}])
+    notes = keep_programs(new, old)
+    assert list(new.locals["program"]) == ["G 14 L"] and list(new.tournaments["name"]) == ["Boys Local"]
+    assert len(notes) == 2 and list(new.teams["team"]) == ["14-B"]
+    # One with its own programs: still kept, unless asked to use the file's.
+    file_locals = [{"program": "B 14 L", "days": "Mon", "time": "5:30", "courts": "2-4", "on_site": "Yes"}]
+    new = _inp([{"team": "14-B", "age": 14}], locals_=file_locals)
+    keep_programs(new, old)
+    assert list(new.locals["program"]) == ["G 14 L"]
+    new = _inp([{"team": "14-B", "age": 14}], locals_=file_locals)
+    keep_programs(new, old, use_file=True)
+    assert list(new.locals["program"]) == ["B 14 L"]          # the file's programs
+    assert list(new.tournaments["name"]) == ["Boys Local"]    # file had none: kept
+    # Nothing to keep: the file's are used.
+    new = _inp([{"team": "14-B", "age": 14}], locals_=file_locals)
+    keep_programs(new, None)
+    assert list(new.locals["program"]) == ["B 14 L"]
