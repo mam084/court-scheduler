@@ -32,7 +32,7 @@ COURT_RANK = [1, 7, 6, 5, 3, 4, 2]
 # Cost of using a court, by its rank (best = 0). The jump at the end makes
 # the solver move a team to another time rather than put it on Court 2,
 # unless that time is a lot worse for the team.
-COURT_RANK_COST = [0, 1, 2, 3, 4, 6, 20]
+COURT_RANK_COST = [0, 1, 2, 3, 4, 6, 12]
 COURT_COST = {c: COURT_RANK_COST[i] for i, c in enumerate(COURT_RANK)}
 
 
@@ -159,90 +159,86 @@ def is_late_exception(age: int, slot: str) -> bool:
 # Soft-constraint weights (bigger = the solver tries harder to avoid it)
 # ---------------------------------------------------------------------------
 WEIGHTS = {
-    # Missing one of a team's weekly practices (x team priority). Losing a
-    # team's 2nd practice of a week costs 4x more, so shortfalls get spread.
-    "missed_practice": 1000,
-    # A required weekend (e.g. "14th or 15th must be used") left unused.
-    "weekend_required": 800,
-    # Assistant coach double-booked (other team or a local). Head coaches
-    # can never be double-booked; assistants can, at a cost.
-    "assistant_conflict": 60,
-    # An assistant's no-date broken (the head coach runs practice). The
-    # cheapest of the "last resort" breaks. Order, worst first:
-    # missed practice > head coach / team no-date > Sat->Sun > assistant no-date.
-    "assistant_nodate": 60,
-    # A weekday practice that doesn't sit on the team's recurring pattern.
-    "off_pattern": 25,
-    # Moving a practice off its usual slot into a 1st-choice wishlist slot,
-    # or skipping a usual slot that's off the wishlist / not preferred.
-    # Small, so a coach gets an open slot they asked for that week, but not
-    # zero, so it doesn't bounce around without a gain.
-    "move_to_wish": 4,
-    # Practicing on a weekend instead of a weekday. High on purpose: a
-    # weekday practice wins unless it's genuinely unavailable.
-    "weekend": 150,
-    # Each weekend 2-hour block opened (encourages teams to share blocks).
-    "weekend_block": 20,
-    # Weekend practice that doesn't match the team's weekend preference.
-    "weekend_pref": 12,
-    # Travel tournaments: a practice the day before / after the tournament,
-    # extra for a late practice the night before. The week leading into a
-    # tournament also weighs missed practices 1.5x.
-    # Above every no-date break below: breaking a no-date is better than
-    # practicing the day before or after a tournament. Still below
-    # "missed_practice", so a team keeps its 2 practices.
-    "tournament_rest": 800,
-    "tournament_late_eve": 60,
-    # Keeping a team on its home court (stage 2).
-    "home_court": 8,
-    # A late_ok young team (e.g. 14 Black) practicing at 7:20 / 7 PM.
-    "late_exception": 25,
-    # A team's practices on back-to-back days (practices should have a day
-    # in between when possible).
-    # Kept below "wish_miss": back-to-back weekdays are fine, so a team
-    # that asks for Tue/Wed gets Tue/Wed.
-    "consecutive_days": 10,
-    # Extra on top for Saturday then Sunday. With the Sunday's "weekend" cost
-    # that's 150 + 200 + 10 = 360: below every head coach / team no-date
-    # break ("break_head_nodate" 400 and up), above an assistant's
-    # ("assistant_nodate" 60). So a Sat->Sun happens only to avoid a missed
-    # practice or a head coach's no-date, and it's always flagged.
-    "sat_sun": 200,
-    # Wishlist: practice matching only the 2nd choice / matching neither.
-    "wish_second": 6,
-    "wish_miss": 16,
-    # A day/time the team marked "not preferred".
-    "not_preferred": 10,
-    # A team's recurring pattern uses two different timeslots.
-    "split_timeslot": 6,
-    # A practice not on the team's home court.
-    "court_change": 3,
-    # Multiplier on the age/timeslot cost table below.
-    "slot_fit": 2,
-    # Breaking a no-date so a team still gets its 2 practices. Only used
-    # when there's no other way: these stay below "missed_practice", so a
-    # team gets both practices before any no-date is kept. Cheapest when
-    # the head coach is out but an assistant is free to run practice.
-    "break_head_nodate": 400,        # head coach out, an assistant is free
-    "break_head_and_asst": 500,      # head coach out, no assistant free either
-    "break_team_nodate": 600,        # the team's own no-date (last resort)
-    # Stability: reward for keeping a practice where the last published (or
-    # last built) schedule had it, so a small change doesn't reshuffle
-    # everyone. Same idea for keeping its court.
-    "keep_previous": 40,
-    "keep_court": 6,
-    # A second weekend practice for a team in the same week.
-    "second_weekend": 200,
-    # Reward: a coach's two teams in back-to-back slots the same day
-    # (e.g. girls at 5:30 then boys at 7:20).
-    "double_up": 12,
-    # Rotating 3:45: a team's second 3:45 practice in the same week, so the
-    # early slot is shared around the young teams instead of one team
-    # getting it every time. Skipped for teams that asked for 3:45.
-    "second_345": 14,
-    # Extra on top of "not_preferred" when the not-preferred time is 3:45
-    # (e.g. a coach who can't get off work that early).
+    # The club's rule order, most important first (Oct 2026). Each step costs
+    # roughly 2-4x the one below it, so one break of a higher rule outweighs
+    # several of the next one down (e.g. two assistant no-dates still cost
+    # less than one head coach's). Never alone on a weekend, head coaches never double-booked,
+    # age/timeslot rules, one team per court and 2 practices a week max are
+    # hard rules, above all of these.
+    #
+    # 1. Every team gets its practices. Per missed practice, x team priority;
+    #    losing a team's 2nd practice of a week costs 4x more, so shortfalls
+    #    get spread.
+    "missed_practice": 150000,
+    # (Required weekends are a note for coaches, not a rule.)
+    "weekend_required": 0,
+    # 2. No practice the day before / after a travel tournament; a late one
+    #    the night before costs a bit more. The week leading into a
+    #    tournament also weighs missed practices 1.5x.
+    "tournament_rest": 60000,
+    "tournament_late_eve": 2000,
+    # 3-5. Breaking a no-date so a team still gets its 2 practices, worst
+    #    first: the team's own, then the head coach's (worse when no
+    #    assistant is free to run it), then an assistant's.
+    "break_team_nodate": 30000,
+    "break_head_and_asst": 20000,
+    "break_head_nodate": 15000,
+    "assistant_nodate": 8000,
+    # 6. A coach (head or assistant) who works a locals program then: possible
+    #    if they get a sub for the program, and flagged so. Below every
+    #    no-date break, so a sub is asked for before a no-date is broken.
+    #    An assistant on two teams at once costs the same.
+    "locals_sub": 4000,
+    "assistant_conflict": 4000,
+    # 7. Weekday before weekend: a weekend practice only when the weekdays
+    #    can't take it (two weekday practices, even doubled up, win).
+    "weekend": 1500,
+    # 8. Preferred days: the wishlist's days and days marked not preferred.
+    "wish_day_miss": 600,
+    "not_preferred_day": 550,
+    # 9. Preferred times: the wishlist's times (a 2nd-choice match costs a
+    #    little), times marked not preferred (3:45 a bit more: often a coach
+    #    who can't get off work), weekend AM/PM preference.
+    "wish_time_miss": 250,
+    "not_preferred": 220,
     "not_preferred_345": 40,
+    "weekend_pref": 220,
+    "wish_second": 60,
+    # 10. Saturday then Sunday (on top of "consecutive_days"; always flagged).
+    "sat_sun": 100,
+    # 11. A second weekend practice for a team in the same week.
+    "second_weekend": 50,
+    # 12. Back-to-back days (weekdays a team asked for, e.g. Tue/Wed, are free).
+    "consecutive_days": 20,
+    # 13. Everything else, roughly in this order:
+    # age/timeslot fit (multiplier on the slot_cost table below: up to 14)
+    "slot_fit": 2,
+    # rotating 3:45: a team's second 3:45 in a week (not for teams that
+    # asked for 3:45)
+    "second_345": 12,
+    # a late_ok young team (e.g. 14 Black) at 7:20 / 7 PM
+    "late_exception": 11,
+    # keeping the same days and times every week: a practice off the
+    # team's usual week (and a usual slot it skips costs twice this)
+    "off_pattern": 5,
+    # the usual week using two different timeslots
+    "split_timeslot": 6,
+    # stability: reward for keeping a practice where the last published (or
+    # last built) schedule had it, and its court
+    "keep_previous": 15,
+    "keep_court": 4,
+    # each weekend 2-hour block opened (teams share blocks)
+    "weekend_block": 7,
+    # reward: a coach's two teams in back-to-back slots the same day
+    # (e.g. girls at 5:30 then boys at 7:20)
+    "double_up": 6,
+    # courts: home court (stage 2), any court change
+    "home_court": 5,
+    "court_change": 2,
+    # moving off the usual slot into a 1st-choice wishlist slot: small, so a
+    # coach gets an open slot they asked for that week, but not zero, so
+    # practices don't bounce around without a gain
+    "move_to_wish": 3,
 }
 
 

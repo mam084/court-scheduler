@@ -19,9 +19,9 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 
 - On-site locals block their courts; off-site programs block only their coaches
 - One team per court per timeslot
-- A head coach is never in two places at once (two teams, or a team plus a local they work)
+- A head coach is never on two teams at once, or on a team during a local tournament they run
 - Nothing on closure days, before a team's season start, or where a practice was removed by hand
-- Every team gets 2 practices a week. When something has to give, the order is (least bad first): an **assistant's** no-date (the head coach runs practice), then **Saturday then Sunday**, then the **head coach's** no-date on a day an assistant is free, then both coaches', then the team's own. Each one is flagged at the top of the page and in the Review tab (Sat→Sun as High). Put an assistant's own name in the Availability `who` column so it counts as an assistant's no-date; a team row whose note names an assistant gets a reminder
+- At most two practices a week per team
 - Only 14s and under practice at 3:45, and 14s and under never practice at 7:20 (unless the team is marked `late_ok`, and then only when needed)
 - Weekends: only open dates and blocks, only a team's allowed weekend options, and never one team alone in a block
 - Local tournaments take their courts (all by default) for the whole day, plus the coaches of their locals program
@@ -30,20 +30,32 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - JumpStart programs (3:30–4:30, 4:30–5:30) block 3:45 practices on their courts and for their coaches
 - The weekly template obeys the same rules, so it can be read as a real week
 
-**Preferences (traded off by weights in [`scheduler/config.py`](scheduler/config.py))**
+**The club's rule order** (weights in [`scheduler/config.py`](scheduler/config.py); each rule outweighs several breaks of the one below it)
 
-| Preference | Notes |
+1. **Every team gets its 2 practices a week.** Older teams win if courts run out, and shortfalls are spread so teams keep at least 1.
+2. **No practice the day before or after a travel tournament** (a late one the night before is worse). The week leading in gets priority for 2 practices.
+3. **The team's own no-dates.**
+4. **The head coach's no-dates/times** (worse when no assistant is free to run practice).
+5. **An assistant's no-dates/times** (the head coach runs practice). Put the assistant's own name in the Availability `who` column; a team row whose note names an assistant gets a reminder.
+6. **A coach who works a locals program then** (head or assistant): the practice can still happen, flagged *Needs a sub: possible if Matthew gets a sub for B 14 L*, so a sub is asked for before any no-date is broken. An assistant on two teams at once costs the same.
+7. **Weekdays before weekends.** Two weekday practices, even doubled up, beat a weekend plus a weekday.
+8. **Preferred days** (wishlist days, days marked not preferred).
+9. **Preferred times** (wishlist times, times marked not preferred, 3:45 a bit more; weekend AM/PM).
+10. **No Saturday then Sunday** (always flagged).
+11. **One weekend practice per team per week.**
+12. **No back-to-back days** (days a team asked for, e.g. Tue/Wed, are fine).
+13. **Everything else:** age/timeslot fit and sharing 3:45 around, the 14s 7:20 exception, the same weekly schedule, keeping the published schedule, weekend teams sharing blocks, coach double-ups, courts.
+
+Every broken no-date, needed sub and Sat→Sun is flagged at the top of the page and in the Review tab. Required weekends on the Weekends sheet are a note for coaches, not a rule.
+
+| Detail | Notes |
 |---|---|
-| 2 practices per week | Heaviest weight. Older teams win if courts run out, and shortfalls are spread so teams keep at least 1 practice. |
-| Required weekends | e.g. "the 14th or 15th must be used" |
-| Weekdays over weekends | Weekends are used only when weekdays can't fit 2 practices, and then just 1 weekend practice per team that week. Back-to-back weekdays (Tue/Wed) beat a weekend plus a weekday (Sun/Tue) |
 | Keep the published schedule | Rebuilds leave practices (and courts) where the last published version had them, unless something needs them to move |
 | Same weekly schedule | Makeups are flagged in the Review tab. Consistency never beats a coach's request: when a slot the team asked for is open in a given week and its usual slot isn't one it asked for (or is marked not preferred), the practice moves there that week. These show as "Moved to a requested time" in Review |
 | Ranked wishlists | 1st choice, then 2nd choice day/time combos. The weekly template follows them too, so a team starting late in the range still gets the usual week it asked for, and a team that barely plays this period doesn't crowd out one playing all month. Every team whose usual week misses its 1st choice is listed in the Review tab with what got in the way (a full court, the coach's other team, a local) |
 | Coach double-ups | A coach's two teams back-to-back on the same day (girls at 5:30, boys at 7:20) |
 | Travel tournament rest | No practice the day before or after (especially no late practice the night before). This outranks no-dates: a no-date is broken before a team practices next to a tournament. The week leading in gets priority for 2 practices |
 | Court quality | Courts ranked 1 → 7 → 6 → 5 → 3 → 4 → 2. Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot the better courts go by the club's **pecking order** (older age groups first, then rank within the age: `16-1` before `16-2`). When Court 2 is needed, the lowest-ranked team gets it |
-| Assistant coaches free | Assistants can be double-booked, at a cost |
 | 3:45 shared around | 3:45 is a last resort, and the youngest teams take it first (12s, then 13s, then 14s). When it's needed, it rotates: a team gets at most one 3:45 a week before another young team gets none. A team that asks for 3:45 on its wishlist gets it; a team marked "Not preferred" at 3:45 is kept off it when possible |
 | Not-preferred days, weekend AM/PM preferences | |
 | A day apart | Back-to-back weekdays are only lightly avoided, and not at all when the team asked for both days (e.g. Tue/Wed). Saturday then Sunday only to avoid a missed practice or a head coach's no-date (above) |

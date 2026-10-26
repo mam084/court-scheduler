@@ -152,13 +152,19 @@ def solve(
         return PRACTICES_PER_WEEK if inside >= 3 else (1 if inside == 2 else 0)
 
     coach_local = defaultdict(set)  # (d, s) -> coaches working a local then
+    coach_prog = defaultdict(set)   # ... a locals program (could get a sub)
+    coach_tourn = defaultdict(set)  # ... a local tournament (busy all day)
     for d in open_dates:
         for s in slots_on(d):
             for lp in locals_at(d, s):
-                coach_local[d, s].update(lp.coaches)
+                coach_prog[d, s].update(lp.coaches)
             for tn in local_tourn:  # running a local tournament: busy all day
                 if tn.covers(d):
-                    coach_local[d, s].update(tn.coaches)
+                    coach_tourn[d, s].update(tn.coaches)
+            coach_local[d, s] = coach_prog[d, s] | coach_tourn[d, s]
+
+    def programs_of(c, d, s):
+        return [lp.name for lp in locals_at(d, s) if c in lp.coaches]
 
     rules_for = defaultdict(list)
     for r in data.rules:
@@ -213,7 +219,7 @@ def solve(
         raise ValueError("These manual changes can't all happen:\n- " + "\n- ".join(problems))
 
     restored, restore_notes = _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on,
-                                            coach_local, rules_for, away)
+                                            coach_tourn, rules_for, away)
 
     # ---------------------------------------------- decision variables --
     # Teams whose 1st-choice wishlist asks for 3:45: no 3:45 cost for them.
@@ -243,6 +249,7 @@ def solve(
 
     y = {}
     broken = {}  # (t, d, s) -> details, for practices that land on a no-date
+    subs = {}    # (t, d, s) -> [(coach, [programs])]: possible if they get a sub
     for t in T:
         team = teams[t]
         for d in open_dates:
@@ -260,7 +267,7 @@ def solve(
                     team_nos = [r for r in rules_for[team.name] if r.kind == "no" and r.matches(d, s)]
                     if any(r.manual for r in team_nos):
                         continue  # removed by hand: never put back
-                    if any(h in coach_local[d, s] for h in team.heads):
+                    if any(h in coach_tourn[d, s] for h in team.heads):
                         continue
                     y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
                     # No-dates are kept unless it's the only way to get the
@@ -296,18 +303,13 @@ def solve(
                 else:
                     if not (s == "3:45" and wants_345[t]):
                         cost += WEIGHTS["slot_fit"] * slot_cost(team.age, s)
-                    wishes = data.wishes.get(team.name)
-                    if wishes:
-                        hit = [w.choice for w in wishes if w.matches(d, s)]
-                        if not hit:
-                            cost += WEIGHTS["wish_miss"]
-                        elif min(hit) > 1:
-                            cost += WEIGHTS["wish_second"]
-                who = [team.name] + team.staff
-                if any(r.kind == "not_preferred" and r.matches(d, s) for w_ in who for r in rules_for[w_]):
-                    cost += WEIGHTS["not_preferred"]
-                    if s == "3:45":
-                        cost += WEIGHTS["not_preferred_345"]
+                    cost += _wish_cost(data.wishes.get(team.name), DAYS[d.weekday()], s)
+                cost += _not_preferred_cost([r for w_ in [team.name] + team.staff for r in rules_for[w_]
+                                             if r.kind == "not_preferred" and r.matches(d, s)], s)
+                need = [(c, programs_of(c, d, s)) for c in team.staff if c in coach_prog[d, s]]
+                if need:
+                    subs[t, d, s] = need
+                    cost += WEIGHTS["locals_sub"] * len(need)
                 if any(r.kind == "no" and r.matches(d, s) for a in team.assistants if a not in team.heads
                        for r in rules_for[a]):
                     cost += WEIGHTS["assistant_nodate"]
@@ -363,7 +365,7 @@ def solve(
             for s in slots_on(d):
                 H = [y[t, d, s] for t in heads_of[c] if (t, d, s) in y]
                 A = [y[t, d, s] for t in asst_of[c] if (t, d, s) in y]
-                busy = 1 if c in coach_local[d, s] else 0
+                busy = 1 if c in coach_tourn[d, s] else 0  # a program: see "locals_sub"
                 if len(H) > 1:
                     m.AddAtMostOne(H)  # head coach: never two teams at once
                 if A and (len(H) + len(A) + busy) > 1:
@@ -397,7 +399,7 @@ def solve(
         # A team that only starts at the very end of the range barely uses
         # the template this period, so a short template costs it less than
         # it would cost a team playing all month to lose its usual days.
-        obj.append(max(30, round(300 * active_frac[t])) * pat_short)
+        obj.append(max(300, round(3000 * active_frac[t])) * pat_short)
         for wd in WEEKDAYS:
             m.AddAtMostOne([p[t, wd, s] for s in WEEKDAY_KEYS if (t, wd, s) in p])
 
@@ -411,19 +413,10 @@ def solve(
         tc = 0
         if not (s == "3:45" and wants_345[t]):
             tc += WEIGHTS["slot_fit"] * slot_cost(team.age, s)
-        wishes = data.wishes.get(team.name)
-        if wishes:
-            hit = [w.choice for w in wishes
-                   if (not w.days or wd in w.days) and (not w.times or s in w.times)]
-            if not hit:
-                tc += WEIGHTS["wish_miss"]
-            elif min(hit) > 1:
-                tc += WEIGHTS["wish_second"]
-        for who in [team.name] + team.staff:
-            if any(r.kind == "not_preferred" and not r.ranges and (not r.days or wd in r.days)
-                   and (not r.times or s in r.times) for r in rules_for[who]):
-                tc += WEIGHTS["not_preferred"] + (WEIGHTS["not_preferred_345"] if s == "3:45" else 0)
-                break
+        tc += _wish_cost(data.wishes.get(team.name), wd, s)
+        tc += _not_preferred_cost([r for who in [team.name] + team.staff for r in rules_for[who]
+                                   if r.kind == "not_preferred" and not r.ranges and (not r.days or wd in r.days)
+                                   and (not r.times or s in r.times)], s)
         if tc:
             obj.append(tc * v)
 
@@ -816,12 +809,21 @@ def solve(
                 "severity": "Medium", "team": n["team"], "week_of": week_start(n["date"]),
                 "issue": f"Restored: {n['date']:%a %-m/%-d} {n['slot']}",
                 "detail": f"Kept from the restored version even though {n['why']}"}]), issues], ignore_index=True)
+    booked_set = set(booked)
+    for (t, d, s), need in sorted(subs.items(), key=lambda kv: (kv[0][1], teams[kv[0][0]].name)):
+        if (t, d, s) not in booked_set:
+            continue
+        issues = pd.concat([pd.DataFrame([{
+            "severity": "Medium", "team": teams[t].name, "week_of": week_start(d),
+            "issue": f"Needs a sub: {d:%a %-m/%-d} {s}",
+            "detail": "Possible if " + " and ".join(f"{c} gets a sub for {' / '.join(ps)}" for c, ps in need)}]),
+            issues], ignore_index=True)
     warnings = list(data.warnings) + [n["text"] for n in restore_notes if not n["kept"]]
     return ScheduleResult(status_name, assignments, pattern, issues, metrics, warnings, start, end,
                           shown_weekends, data.tournaments, practice_counts, broken_rows)
 
 
-def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on, coach_local, rules_for, away):
+def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on, coach_busy, rules_for, away):
     """Adds a published version's practices to `pinned` (in place).
 
     Hand-placed practices win. A practice that can't happen now is dropped
@@ -875,7 +877,7 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
             drop(name, d, s, "the team already has 2 practices placed that week")
         elif count[d, s] >= len(courts_on(d, s)):
             drop(name, d, s, "every court is taken then")
-        elif busy := sorted(set(team.heads) & (heads_at[d, s] | coach_local[d, s])):
+        elif busy := sorted(set(team.heads) & (heads_at[d, s] | coach_busy[d, s])):
             drop(name, d, s, f"{' and '.join(busy)} is coaching something else then")
         else:
             if c is not None and (c not in courts_on(d, s) or c in taken[d, s]):
@@ -910,6 +912,35 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
         notes.append({"kept": False, "team": name, "date": start, "slot": "",
                       "text": f"Not restored: {name}'s practices, because {name} isn't on the Teams sheet any more"})
     return restored, notes
+
+
+def _wish_cost(wishes, wd: str, s: str) -> int:
+    """Cost of a practice on weekday wd at slot s against a team's wishlist:
+    a 1st-choice match is free, a 2nd-choice one costs a little; otherwise
+    a day the wishlist doesn't name costs more than a time it doesn't."""
+    if not wishes:
+        return 0
+    full = [w.choice for w in wishes if (not w.days or wd in w.days) and (not w.times or s in w.times)]
+    if full:
+        return 0 if min(full) == 1 else WEIGHTS["wish_second"]
+    on_day = [w for w in wishes if not w.days or wd in w.days]
+    if on_day:
+        return WEIGHTS["wish_time_miss"]  # right day, wrong time
+    cost = WEIGHTS["wish_day_miss"]
+    if not any(not w.times or s in w.times for w in wishes):
+        cost += WEIGHTS["wish_time_miss"]
+    return cost
+
+
+def _not_preferred_cost(hits, s: str) -> int:
+    """Not-preferred rules matching a practice: a whole day marked not
+    preferred costs more than a time."""
+    cost = 0
+    if any(not r.times for r in hits):
+        cost += WEIGHTS["not_preferred_day"]
+    if any(r.times for r in hits):
+        cost += WEIGHTS["not_preferred"] + (WEIGHTS["not_preferred_345"] if s == "3:45" else 0)
+    return cost
 
 
 def _broken_who(b: dict) -> str:

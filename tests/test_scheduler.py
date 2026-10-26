@@ -897,13 +897,67 @@ def test_sat_sun_beats_breaking_a_head_coach_no_date():
     assert set(flags["team"]) == {"16-Ann", "16-Bea"} and (flags["severity"] == "High").all()
 
 
-def test_breaking_an_assistant_no_date_beats_sat_sun():
+def test_sat_sun_beats_breaking_an_assistant_no_date():
+    """Assistants' no-dates rank above Saturday->Sunday (club order, Oct 2026)."""
     inp, r = _ladder_club("assistant")
     for team in ("16-Ann", "16-Bea"):
-        assert _days(r, team) == {"Sat 11/7", "Wed 11/11", "Fri 11/13"}, _days(r, team)
-    assert not r.issues["issue"].str.startswith("Saturday then Sunday").any()
-    flags = r.issues[r.issues["issue"].str.startswith("Assistant no-date broken")]
+        assert _days(r, team) == {"Sat 11/7", "Sun 11/8", "Fri 11/13"}, _days(r, team)
+    assert not r.issues["issue"].str.startswith("Assistant no-date broken").any()
+    flags = r.issues[r.issues["issue"].str.startswith("Saturday then Sunday")]
     assert set(flags["team"]) == {"16-Ann", "16-Bea"}
+
+
+def test_rule_order():
+    """The club's order, most important first: each rule outweighs at least
+    two breaks of the next one down."""
+    from scheduler.config import WEIGHTS as W
+    order = [W["missed_practice"], W["tournament_rest"], W["break_team_nodate"], W["break_head_and_asst"],
+             W["break_head_nodate"], W["assistant_nodate"], W["locals_sub"], W["weekend"],
+             W["wish_day_miss"], W["wish_time_miss"], W["sat_sun"] + W["consecutive_days"],
+             W["second_weekend"], W["consecutive_days"]]
+    for hi, lo in zip(order, order[1:]):
+        assert hi > lo, (hi, lo)
+    # Head coach vs assistant: two assistant no-dates still cost less.
+    assert W["break_head_nodate"] > 1.8 * W["assistant_nodate"]
+    # A sub is asked for before any no-date is broken; a weekend before a sub.
+    assert W["assistant_nodate"] > W["locals_sub"] > W["weekend"]
+    # Days before times, for both the wishlist and not-preferred.
+    assert W["wish_day_miss"] > W["wish_time_miss"]
+    assert W["not_preferred_day"] > W["not_preferred"] + W["not_preferred_345"]
+    # Every "everything else" weight is below back-to-back days.
+    for k in ("second_345", "late_exception", "off_pattern", "split_timeslot", "keep_previous", "keep_court",
+              "weekend_block", "double_up", "home_court", "move_to_wish"):
+        assert W[k] < W["consecutive_days"], k
+    assert W["weekend_required"] == 0  # a note for coaches, not a rule
+
+
+def test_wishlist_days_count_more_than_times():
+    from scheduler.data import Wish
+    from scheduler.solver import _wish_cost
+    w = [Wish("16-A", 1, ["Tue", "Thu"], {"5:30"})]
+    assert _wish_cost(w, "Tue", "5:30") == 0
+    assert _wish_cost(w, "Tue", "7:20") < _wish_cost(w, "Mon", "5:30") < _wish_cost(w, "Mon", "7:20")
+
+
+def test_coach_in_a_program_needs_a_sub_before_a_no_date_breaks():
+    """Week of 11/8: Wed, Thu and Fri open, 5:30 only. The head coach works a
+    program Wed 5:30 and the assistant can't do Thursday. The team gets Wed
+    (flagged: possible with a sub) and Fri, instead of breaking the
+    assistant's no-date on Thursday."""
+    teams = [{"team": "16-Ann", "age": 16, "head_coach": "Ann", "assistants": "Abe"}]
+    avail = [{"who": "16-Ann", "type": "No", "times": "7:20"}, {"who": "Abe", "type": "No", "dates": "11/12"}]
+    locals_ = [{"program": "B 14 L", "days": "Wed", "time": "5:30", "courts": "1", "coaches": "Ann",
+                "on_site": "Yes"}]
+    closures = [{"date": f"11/{n}/2026", "reason": "closed"} for n in (9, 10)]
+    r = solve(_inp(teams, avail, locals_=locals_, closures=closures), date(2026, 11, 8), date(2026, 11, 14),
+              time_limit_s=10)
+    assert _days(r, "16-Ann") == {"Wed 11/11", "Fri 11/13"}
+    assert not r.issues["issue"].str.startswith("Assistant no-date broken").any()
+    sub = r.issues[r.issues["issue"].str.startswith("Needs a sub")]
+    assert len(sub) == 1 and "Ann gets a sub for B 14 L" in sub["detail"].iloc[0]
+    # Without the program, no sub is needed.
+    r2 = solve(_inp(teams, avail, closures=closures), date(2026, 11, 8), date(2026, 11, 14), time_limit_s=10)
+    assert not r2.issues["issue"].str.startswith("Needs a sub").any()
 
 
 def test_sat_sun_beats_a_missed_practice():
