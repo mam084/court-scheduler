@@ -58,7 +58,7 @@ Every broken no-date, needed sub and Sat→Sun is flagged at the top of the page
 | Court quality | Courts ranked 1 → 7 → 6 → 5 → 3 → 4 → 2. Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot the better courts go by the club's **pecking order** (older age groups first, then rank within the age: `16-1` before `16-2`). When Court 2 is needed, the lowest-ranked team gets it |
 | 3:45 shared around | 3:45 is a last resort, and the youngest teams take it first (12s, then 13s, then 14s). When it's needed, it rotates: a team gets at most one 3:45 a week before another young team gets none. A team that asks for 3:45 on its wishlist gets it; a team marked "Not preferred" at 3:45 is kept off it when possible |
 | Not-preferred days, weekend AM/PM preferences | |
-| A day apart | Back-to-back weekdays are only lightly avoided, and not at all when the team asked for both days (e.g. Tue/Wed). Saturday then Sunday only to avoid a missed practice or a head coach's no-date (above) |
+| A day apart | Back-to-back days are avoided (rule 12), and not at all when the team asked for both days (e.g. Tue/Wed). Saturday then Sunday is avoided more (rule 10) and always flagged |
 | Same slot both days, home court | |
 
 Closures default to the major family holidays: New Year's Day, July 4, Thanksgiving and the day after, Christmas Eve and Day, and New Year's Eve. The club practices on minor holidays like Labor Day.
