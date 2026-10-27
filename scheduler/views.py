@@ -601,17 +601,20 @@ h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 16px; margin: 18px 0
 .cs-ttl {{ font-weight: 400; color: #5b6475; font-size: 13px; }}
 .cs-sub {{ color: #5b6475; font-size: 13px; margin-bottom: 8px; }}
 .cs-tip {{ background: #eef1f6; border-radius: 6px; padding: 8px 12px; font-size: 13px; }}
+/* Same layout on screen and on paper, so the size measured on screen is the printed size. */
+.cs-week {{ box-sizing: border-box; overflow: hidden; }}
+.cs-week h2 {{ margin: 0 0 6px; padding-top: 14px; }}
+.cs-week .cs-grid {{ min-width: 0 !important; font-size: 13px !important; }}
+.cs-week .cs-grid th {{ font-size: 14px; }}
+.cs-week .cs-grid td {{ height: auto !important; }}
+.cs-week .cs-chip b {{ font-size: 13.5px !important; }} .cs-week .cs-chip span {{ font-size: 12px !important; }}
+.cs-week .cs-wrap {{ overflow: visible !important; }}
+@page {{ size: landscape; margin: 0.35in; }}
 @media print {{
-  body {{ margin: 6mm; }} h1, .cs-tip, .cs-legend-top, .cs-sub {{ display: none; }}
-  .cs-week {{ break-after: page; }} .cs-week:last-child {{ break-after: auto; }}
-  .cs-week h2 {{ margin-top: 0; }}
-  .cs-grid {{ min-width: 0 !important; font-size: 13px !important; }}
-  .cs-grid th {{ font-size: 14px; }}
-  .cs-grid td {{ height: auto !important; }}
-  .cs-chip b {{ font-size: 13.5px !important; }} .cs-chip span {{ font-size: 12px !important; }}
-  .cs-wrap {{ overflow: visible !important; }}
+  body {{ margin: 0; }} h1, .cs-tip, .cs-legend-top, .cs-sub {{ display: none; }}
+  .cs-week {{ break-after: page; break-inside: avoid; }} .cs-week:last-child {{ break-after: auto; }}
+  .cs-week h2 {{ padding-top: 0; }}
   * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
-  @page {{ size: letter landscape; }}
 }}
 </style></head><body>
 <h1>{html.escape(title)}</h1>
@@ -622,8 +625,10 @@ courts 1–4, then courts 5–7 and the practice court.</div>
 {''.join(parts)}
 <script>
 // Only a page that's still too tall (a very busy week) gets shrunk to fit.
+// The box is sized for the smaller of US Letter and A4 landscape inside the
+// 0.35in margins, minus a safety buffer, so nothing spills onto an extra page.
 function fitWeeks() {{
-  var pageH = 7.75 * 96, pageW = 10.3 * 96;
+  var pageH = 7.25 * 96, pageW = 10.1 * 96;
   document.querySelectorAll('.cs-week').forEach(function (s) {{
     s.style.zoom = 1; s.style.width = pageW + 'px';
     var z = 1;
@@ -637,6 +642,12 @@ function fitWeeks() {{
 }}
 window.addEventListener('load', fitWeeks);
 window.addEventListener('beforeprint', fitWeeks);
+if (window.matchMedia) {{  // re-measure once the print layout is actually applied
+  var mq = window.matchMedia('print');
+  (mq.addEventListener ? mq.addEventListener.bind(mq, 'change') : mq.addListener.bind(mq))(function (e) {{
+    if (e.matches) fitWeeks();
+  }});
+}}
 window.addEventListener('afterprint', function () {{
   document.querySelectorAll('.cs-week').forEach(function (s) {{ s.style.zoom = 1; s.style.width = ''; }});
 }});
