@@ -257,7 +257,8 @@ def order_table(teams: pd.DataFrame) -> pd.DataFrame:
                      "rank": "" if blank(t.get("rank")) else str(t["rank"]),
                      "head_coach": "" if blank(t.get("head_coach")) else str(t["head_coach"]),
                      "assistants": "" if blank(t.get("assistants")) else str(t["assistants"]),
-                     "_key": pecking_key(age, rank), "_set": rank is not None})
+                     "_key": pecking_key(age, rank, team_side(t.get("club"), name) == "Boys"),
+                     "_set": rank is not None})
     df = pd.DataFrame(rows)
     if df.empty:
         return df

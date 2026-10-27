@@ -36,24 +36,32 @@ COURT_RANK_COST = [0, 1, 2, 3, 4, 6, 12]
 COURT_COST = {c: COURT_RANK_COST[i] for i, c in enumerate(COURT_RANK)}
 
 
-def pecking_key(age: int, rank: int | None) -> tuple:
+def pecking_key(age: int, rank: int | None, boys: bool = False) -> tuple:
     """Sort key for the club's pecking order, top team first: older age
-    groups first, then rank within the age (1 = top). A team with no rank
-    sits between its age group's 1s and 2s."""
-    return (-age, 1.5 if rank is None else rank)
+    groups first, then rank within the age (1 = top), then boys above girls
+    at the same rank (14-1 boys above 14-1 girls). A team with no rank sits
+    between its age group's 1s and 2s."""
+    return (-age, 1.5 if rank is None else rank, 0 if boys else 1)
+
+
+def team_is_boys(club, name: str = "") -> bool:
+    """A boys-side team: by its club (Seaside / Boys), else its name ('14 Black', '16 Green')."""
+    import re
+    return is_boys_club(club) or bool(re.search(r"\b(black|green)\s*$", str(name).lower()))
 
 
 def pecking_weights(teams) -> dict[str, int]:
     """How much each team 'deserves' the better courts, from the pecking
     order: the top team gets 20, the bottom team 2, everyone else spread in
-    between (teams sharing a rank, e.g. 16-1 boys and girls, tie). The
+    between (at a shared rank, e.g. 16-1, the boys team is just above the girls). The
     lowest team is the one that ends up on Court 2 when it's needed."""
-    keys = sorted({pecking_key(t.age, t.level) for t in teams})
+    key = {t.name: pecking_key(t.age, t.level, team_is_boys(t.club, t.name)) for t in teams}
+    keys = sorted(set(key.values()))
     if len(keys) <= 1:
         return {t.name: 10 for t in teams}
     pos = {k: i for i, k in enumerate(keys)}  # 0 = top
     n = len(keys) - 1
-    return {t.name: 2 + round(18 * (n - pos[pecking_key(t.age, t.level)]) / n) for t in teams}
+    return {t.name: 2 + round(18 * (n - pos[key[t.name]]) / n) for t in teams}
 
 
 def team_court_weight(age: int, level: int | None) -> int:
@@ -271,6 +279,8 @@ WEIGHTS = {
     # stability: reward for keeping a practice where the last published (or
     # last built) schedule had it, and its court
     "keep_previous": 15,
+    # A new practice on the same day as a hand-placed extra (two in one day).
+    "same_day_as_extra": 600,
     # HS boys (15s-18s) at 5:30 and 7:20 on the same courts, so no net change
     # is needed. Stage 1 (days/times): per net change that can't be avoided
     # by courts alone. Stage 2 (courts): per court whose net has to change.
