@@ -34,6 +34,7 @@ from scheduler.data import (
 )
 from scheduler import privates as pv
 from scheduler import access
+from scheduler import gcal
 from scheduler import pecking as pk
 from scheduler.export import calendar_excel, calendar_ics, to_excel, to_ics
 from scheduler.solver import week_start
@@ -457,7 +458,7 @@ if not CAN:  # someone else (an admin) saved a newer version: show it
 
 inp: ScheduleInput = st.session_state.inp
 for _sheet, _attr in (("Tournaments", "tournaments"), ("Coaches", "coaches"), ("Overrides", "overrides"),
-                      ("Privates", "privates")):
+                      ("Privates", "privates"), ("Calendars", "calendars")):
     if not isinstance(getattr(inp, _attr, None), pd.DataFrame):  # schedules saved before these sheets existed
         setattr(inp, _attr, empty(_sheet))
 for _sheet, _attr in (("Locals", "locals"), ("Teams", "teams"), ("Tournaments", "tournaments"),
@@ -1958,6 +1959,113 @@ if VIEW == TAB_PUB:
                         st.session_state.base_version = None
                     st.rerun()
 
+# ------------------------------------------------------ google calendar --
+if VIEW == TAB_PUB and result is not None and cleaned is not None:
+    st.subheader("Google Calendar")
+    st.markdown("Push a published version to the club's Google Calendars: each team's calendar gets its practices "
+                "and tournaments, each club calendar gets every practice and tournament on that side, and each "
+                "program's calendar gets its sessions. Only events this app made are ever changed or removed; "
+                "anything added by hand is left alone.")
+    sa = gcal.service_account_info(SECRETS)
+    client = None
+    if sa:
+        try:
+            client = gcal.CalendarClient(sa)
+        except Exception as e:  # noqa: BLE001
+            st.error(f"The Google key in the secrets didn't work: {e}")
+    if client is None:
+        st.info("Google Calendar isn't connected yet. You can link calendars below now; previews and syncing "
+                "start working once the app's Google key is added (steps in `docs/SETUP_CALENDAR.md`).")
+    else:
+        st.caption(f"Share each calendar with **{client.robot}** (\u201cMake changes to events\u201d).")
+
+    with st.expander("Calendar links", expanded=not gcal.links_from(inp.calendars)):
+        st.caption("Paste each calendar's ID (Google Calendar → the calendar's ⋮ → Settings and sharing → "
+                   "Integrate calendar → Calendar ID). Leave a row blank to skip it.")
+        clubs_ = sorted({t.club for t in cleaned.teams if t.club})
+        progs_ = sorted({lp.name for lp in cleaned.locals})
+        rows_ = gcal.link_rows([t.name for t in cleaned.teams], clubs_, progs_, inp.calendars)
+        ed_links = st.data_editor(rows_, hide_index=True, width="stretch", disabled=["kind", "name"],
+                                  key=f"cal_links_{st.session_state.get('locals_ver', 0)}",
+                                  column_config={"kind": "Calendar for", "name": "Name",
+                                                 "calendar_id": st.column_config.TextColumn("Calendar ID", width="large")})
+        c1, c2 = st.columns(2)
+        if c1.button("Save calendar links", type="primary", width="stretch", key="cal_save"):
+            inp.calendars = ed_links[ed_links["calendar_id"].astype(str).str.strip() != ""].reset_index(drop=True)
+            st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+            st.session_state.flash = f"Saved {plural(len(inp.calendars), 'calendar link')}."
+            st.rerun()
+        if c2.button("Check access", width="stretch", disabled=client is None, key="cal_check"):
+            checks = []
+            for (kind, name), cid in gcal.links_from(ed_links).items():
+                try:
+                    checks.append({"Calendar for": f"{kind}: {name}", "Google calendar": client.calendar_name(cid),
+                                   "OK": "✓"})
+                except Exception as e:  # noqa: BLE001
+                    checks.append({"Calendar for": f"{kind}: {name}", "Google calendar": str(e), "OK": "✗"})
+            st.dataframe(pd.DataFrame(checks), hide_index=True, width="stretch")
+
+    if not published:
+        st.caption("Publish the schedule first; only published versions go to Google Calendar.")
+    else:
+        links = gcal.links_from(inp.calendars)
+        c1, c2 = st.columns([2, 1])
+        vlabels = {i: f"{v['label']} · {published_at(v):%b %-d, %-I:%M %p}" for i, v in enumerate(published)}
+        vi_ = c1.selectbox("Version to send", list(reversed(range(len(published)))), format_func=lambda i: vlabels[i],
+                           key="cal_ver")
+        test_mode = c2.toggle("Test mode", value=True, key="cal_test",
+                              help="Send everything to one test calendar instead, with the calendar it would have "
+                                   "gone to in front of each title. Nothing real is touched.")
+        test_cal = st.text_input("Test calendar ID", key="cal_test_id",
+                                 placeholder="ID of a throwaway calendar shared with the app") if test_mode else ""
+        ver_ = published[vi_]
+        pr_ = practices_of(ver_)
+        loc_ = result.assignments[result.assignments["kind"] == "Local"]
+        side_ = {lp.name: lp.side for lp in cleaned.locals}
+        evs, missing = gcal.desired_events(pr_, loc_, cleaned.tournaments, cleaned.teams, links, start, end,
+                                           test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
+                                           side_)
+        if missing:
+            st.caption(f"No calendar linked (skipped): {', '.join(missing[:12])}"
+                       + (f" and {len(missing) - 12} more" if len(missing) > 12 else ""))
+        all_cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else set(links.values()))
+        ready = client is not None and (not test_mode or bool(test_cal.strip())) and bool(evs)
+        sig_ = (ver_["id"], test_mode, test_cal.strip(), tuple(sorted(links.items())))
+        if st.button(f"Preview changes ({plural(len(evs), 'event')})", disabled=not ready, key="cal_preview",
+                     help=None if ready else "Connect Google, link calendars (and a test calendar in test mode) first."):
+            with st.spinner("Reading the calendars…"):
+                st.session_state.cal_plan = (sig_, gcal.plan(evs, client, start, end, all_cals))
+        held = st.session_state.get("cal_plan")
+        if held and held[0] == sig_:
+            plan_ = held[1]
+            for err in plan_.errors:
+                st.error(err)
+            c = st.columns(4)
+            c[0].metric("Add", len(plan_.create))
+            c[1].metric("Update", len(plan_.update))
+            c[2].metric("Remove", len(plan_.delete))
+            c[3].metric("Already right", plan_.unchanged)
+            if plan_.n_changes:
+                st.dataframe(plan_.table().rename(columns=str.title), hide_index=True, width="stretch",
+                             height=min(400, 38 + 35 * plan_.n_changes))
+                where = "the test calendar" if test_mode else f"{plural(len(all_cals), 'calendar')}"
+                if st.button(f"Sync {plural(plan_.n_changes, 'change')} to {where}", type="primary", key="cal_go"):
+                    bar = st.progress(0.0)
+                    n, errs = gcal.apply(plan_, client, progress=bar.progress)
+                    store.log(VIEWER.log_name, "Google Calendar",
+                              f"{'test mode, ' if test_mode else ''}{ver_['label']}: {len(plan_.create)} added, "
+                              f"{len(plan_.update)} updated, {len(plan_.delete)} removed"
+                              + (f", {len(errs)} failed" if errs else ""), st.session_state.project_id)
+                    st.session_state.pop("cal_plan", None)
+                    if errs:
+                        st.error(f"{plural(len(errs), 'change')} failed:\n" + "\n".join(f"- {e}" for e in errs[:10]))
+                    st.session_state.flash = f"Synced {plural(n, 'change')} to {where}."
+                    if not errs:
+                        st.rerun()
+            elif not plan_.errors:
+                st.success("Google Calendar already matches this version.")
+
+
 # -------------------------------------------------------------- review --
 if VIEW == TAB_REVIEW:
     if result is None:
@@ -2036,6 +2144,8 @@ if VIEW == TAB_INPUTS:
         "Overrides": "Manual changes the scheduler always keeps (easier from the Edit practices tab). action = Add "
                      "(date + time, optional court), Extra (same, on top of the week's practices), Remove (date, optional time; a makeup is found), Cancel "
                      "(no makeup) or Usual (weekdays + time, optional court).",
+        "Calendars": "Google Calendar links (easier: the Publish tab). kind = Team, Club or Program; name = the "
+                     "team / club / program; calendar_id = the calendar's ID from its Google Calendar settings.",
         "Privates": "1-hour private lessons (easier: the Privates tab). time = start, like 4:00 PM. court = P "
                     "(practice court) or 1-7. type = Team or Personal; team = which team, for team privates.",
         "Tournaments": "type = Local (hosted here: blocks its courts and coaches until 7 PM; blank courts = all; "
