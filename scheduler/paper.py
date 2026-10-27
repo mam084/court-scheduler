@@ -43,12 +43,16 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .pp .dh { text-align: left; height: 46px; }
 .pp .dh .num { display: inline-block; border: 1px solid #555; min-width: 20px; padding: 0 3px; font-size: 13px; }
 .pp .dh .note { display: block; font-size: 10.5px; font-weight: 600; margin-top: 2px; line-height: 1.2; }
-.pp td.box { padding: 1px 4px 3px; text-align: left; }
-.ln { display: flex; gap: 4px; line-height: 15px; min-height: 20px; padding-top: 3px; box-sizing: border-box;
+/* Lines sit at the bottom of each box (7:20 last), leaving room above for early privates. */
+.pp td.box { padding: 6px 4px 2px; text-align: left; vertical-align: bottom; }
+.ln { display: flex; gap: 3px; line-height: 14px; min-height: 18px; padding-top: 3px; box-sizing: border-box;
       border-bottom: 1px dotted #b3b8c2; text-align: left; }
 .ln:last-child { border-bottom: none; }
-.ln .t { flex: 0 0 auto; width: 58px; color: #6b7280; font-size: 10.5px; font-variant-numeric: tabular-nums; }
-.ln .w { flex: 1 1 0; min-width: 0; font-weight: 600; text-align: left; overflow-wrap: anywhere; }
+.ln.cont { border-bottom-style: solid; border-bottom-color: #d5d8de; }
+.ln .t { flex: 0 0 auto; width: 49px; color: #6b7280; font-size: 10px; font-variant-numeric: tabular-nums;
+         white-space: nowrap; }
+.ln .w { flex: 1 1 0; min-width: 0; font-weight: 600; font-size: 11px; text-align: left;
+         overflow-wrap: break-word; hyphens: none; }
 .ln .w small { font-weight: 400; color: #555; }
 .ln.pv .w { font-weight: 500; font-style: italic; }
 .ln.tn .w { text-transform: uppercase; letter-spacing: .3px; }
@@ -118,7 +122,11 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
         items.append((0, _line("until 7", html.escape(" / ".join(tn.name for tn in tn_here)), "tn")))
         slots = [s for s in slots if not blocked_by_local_tournament(s) or s in by_slot]
     for s in slots:
-        items.append((_start(s), _line(LABEL.get(s, s), " / ".join(by_slot.get(s, [])))))
+        what = " / ".join(by_slot.get(s, []))
+        line = _line(LABEL.get(s, s), what)
+        if not what:  # open: a second line, so there's room to write something in each hour
+            line += '<div class="ln cont"><span class="t"></span><span class="w"></span></div>'
+        items.append((_start(s), line))
     for p in privs:
         if p["date"] == d and p["court"] == c:
             who = html.escape(p["coach"] + (f" · {p['team']}" if p.get("team") else ""))
