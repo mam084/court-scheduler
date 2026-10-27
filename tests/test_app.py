@@ -316,3 +316,96 @@ def test_cancel_one_program_session(db):
     assert loc[loc["program"] == prog]["skip"].astype(str).str.len().max() > 0
     a = at.session_state["result"].assignments
     assert not ((a["kind"] == "Local") & (a["name"] == prog) & (a["date"].map(lambda x: f"{x:%a %b %-d}") == d)).any()
+
+
+# --------------------------------------------------------- roles (stage 1) --
+
+def _as(db, monkeypatch, email, seed=20, pid=None):
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setenv("COURT_DEV_USER", email)
+    pid = pid or _save(db, "Roles", seed)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    assert not at.exception, at.exception
+    return at, pid
+
+
+def _head_of_first_team(db, pid):
+    from scheduler import clean
+    from scheduler.storage import read_payload
+    inp = read_payload(db.get(pid)["payload"])[0]
+    t = clean(inp, date(2026, 11, 1), date(2026, 11, 30)).teams[0]
+    return t.heads[0], t.name
+
+
+def test_first_sign_in_seeds_admins_and_coach_sees_limited_app(db, monkeypatch):
+    pid = _save(db, "Roles", 21)
+    head, team = _head_of_first_team(db, pid)
+    at, _ = _as(db, monkeypatch, "newcoach@sdvbc.org", pid=pid)
+    assert db.get_user("matthew@sdvbc.org")["app_admin"] and db.get_user("cliff@sdvbc.org")["sched_admin"]
+    views = at.radio(key="nav").options
+    assert "Programs" not in views and "Inputs" not in views and "Access" not in views
+    assert not any("Auto-schedule" in b.label for b in at.button)
+    # Not linked yet: can't edit any team.
+    at.radio(key="nav").set_value("Edit practices").run()
+    assert any("isn't linked" in i.value for i in at.info)
+    # Linked to a head coach: only their teams, preferences only.
+    db.save_user("newcoach@sdvbc.org", "New", head)
+    at, _ = _as(db, monkeypatch, "newcoach@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Edit practices").run()
+    assert team in at.selectbox(key="ed_team").options
+    assert at.radio(key="ed_mode").options == ["Suggest a preference"]
+
+
+def test_coach_preference_saves_without_rebuild_or_overwriting(db, monkeypatch):
+    from scheduler.storage import make_payload, read_payload, read_published
+    pid = _save(db, "Roles", 22)
+    head, team = _head_of_first_team(db, pid)
+    db.save_user("coach@sdvbc.org", "Coach", head)
+    at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
+    before = db.get(pid)["payload"]["result"]["assignments"]
+    # Meanwhile an admin adds a closure in another session.
+    rec = db.get(pid)
+    i_, s_, e_, set_, r_ = read_payload(rec["payload"])
+    i_.closures = pd.concat([i_.closures, pd.DataFrame([{"date": "11/20/2026", "reason": "Gym floor"}])],
+                            ignore_index=True)
+    db.save(pid, rec["name"], make_payload(i_, s_, e_, set_, r_, read_published(rec["payload"])))
+    at.radio(key="nav").set_value("Edit practices").run()
+    at.selectbox(key="ed_team").set_value(team).run()
+    pk = f"pref_{team}"
+    at.multiselect(key=f"{pk}_pd").set_value(["Thu"]).run()
+    next(b for b in at.button if b.label == "Save preference").click().run()
+    assert not at.exception, at.exception
+    pay = db.get(pid)["payload"]
+    assert any(w["team"] == team and w["days"] == "Thu" for w in pay["inputs"]["Wishlist"])
+    assert any(c["reason"] == "Gym floor" for c in pay["inputs"]["Closures"])   # admin's edit kept
+    assert pay["result"]["assignments"] == before                              # no rebuild by a coach
+    assert team in pay["settings"]["pending_prefs"][-1]
+    assert db.activity()[0]["action"] == "Preference"
+
+
+def test_app_admin_can_view_as_and_manage_access(db, monkeypatch):
+    at, pid = _as(db, monkeypatch, "matthew@sdvbc.org", seed=23)
+    views = at.radio(key="nav").options
+    assert "Access" in views and "Programs" not in views          # app admin only, not scheduling admin
+    at.radio(key="nav").set_value("Access").run()
+    assert not at.exception
+    at.selectbox(key="view_as").set_value("Scheduling admin").run()
+    views = at.radio(key="nav").options
+    assert "Programs" in views and "Access" in views
+    assert any("Auto-schedule" in b.label for b in at.button)
+
+
+def test_scheduling_admin_has_everything_but_access(db, monkeypatch):
+    at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", seed=24)
+    db.save_user("cliff@sdvbc.org", "Cliff", "", False, True)
+    at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", seed=24)
+    views = at.radio(key="nav").options
+    assert "Programs" in views and "Publish" in views and "Access" not in views
+
+
+def test_outside_addresses_are_refused():
+    from scheduler import access
+    assert access.email_allowed("x@sdvbc.org") and not access.email_allowed("x@gmail.com")
+    assert access.email_allowed("matthew@sdvbc.org")

@@ -22,7 +22,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import Column, DateTime, MetaData, String, Table, Text, create_engine, delete, insert, select, text, update
+from sqlalchemy import (
+    Boolean, Column, DateTime, Integer, MetaData, String, Table, Text, create_engine, delete, insert, select, text, update,
+)
 
 from .data import ScheduleInput, clean
 from .solver import ScheduleResult
@@ -37,6 +39,26 @@ projects = Table(
     Column("name", String(200), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("payload", Text, nullable=False),
+)
+# Who can sign in and what they can do (see access.py).
+users = Table(
+    "court_scheduler_users", _meta,
+    Column("email", String(200), primary_key=True),
+    Column("name", String(200), nullable=False, default=""),
+    Column("coach", String(200), nullable=False, default=""),       # the coach name on the schedule
+    Column("app_admin", Boolean, nullable=False, default=False),     # manages access and settings
+    Column("sched_admin", Boolean, nullable=False, default=False),   # approves changes, edits the schedule
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+# Who did what: role changes, preference changes, (later) approvals.
+activity = Table(
+    "court_scheduler_log", _meta,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("at", DateTime(timezone=True), nullable=False),
+    Column("who", String(200), nullable=False),
+    Column("action", String(100), nullable=False),
+    Column("detail", Text, nullable=False, default=""),
+    Column("project", String(32), nullable=False, default=""),
 )
 
 
@@ -67,11 +89,12 @@ class Store:
         it, while this app (connecting as the table's owner) still can."""
         if not self.permanent:
             return
-        try:
-            with self.engine.begin() as c:
-                c.execute(text(f"ALTER TABLE {projects.name} ENABLE ROW LEVEL SECURITY"))
-        except Exception:  # noqa: BLE001  (not owner / not supported: carry on)
-            pass
+        for tbl in (projects, users, activity):
+            try:
+                with self.engine.begin() as c:
+                    c.execute(text(f"ALTER TABLE {tbl.name} ENABLE ROW LEVEL SECURITY"))
+            except Exception:  # noqa: BLE001  (not owner / not supported: carry on)
+                pass
 
     @property
     def permanent(self) -> bool:
@@ -121,6 +144,51 @@ class Store:
     def delete(self, pid: str) -> None:
         with self.engine.begin() as c:
             c.execute(delete(projects).where(projects.c.id == pid))
+
+
+    # ------------------------------------------------------------ users --
+    def users(self) -> list[dict]:
+        self._ensure()
+        with self.engine.connect() as c:
+            rows = c.execute(select(users).order_by(users.c.email)).all()
+        return [dict(r._mapping) for r in rows]
+
+    def get_user(self, email: str) -> dict | None:
+        self._ensure()
+        with self.engine.connect() as c:
+            r = c.execute(select(users).where(users.c.email == email.lower())).first()
+        return dict(r._mapping) if r else None
+
+    def save_user(self, email: str, name: str = "", coach: str = "", app_admin: bool = False,
+                  sched_admin: bool = False) -> None:
+        self._ensure()
+        email = email.strip().lower()
+        vals = dict(name=name or "", coach=coach or "", app_admin=bool(app_admin), sched_admin=bool(sched_admin),
+                    updated_at=datetime.now(timezone.utc))
+        with self.engine.begin() as c:
+            if c.execute(select(users.c.email).where(users.c.email == email)).first():
+                c.execute(update(users).where(users.c.email == email).values(**vals))
+            else:
+                c.execute(insert(users).values(email=email, **vals))
+
+    def delete_user(self, email: str) -> None:
+        with self.engine.begin() as c:
+            c.execute(delete(users).where(users.c.email == email.strip().lower()))
+
+    # -------------------------------------------------------------- log --
+    def log(self, who: str, action: str, detail: str = "", project: str = "") -> None:
+        self._ensure()
+        with self.engine.begin() as c:
+            c.execute(insert(activity).values(at=datetime.now(timezone.utc), who=who or "", action=action,
+                                              detail=detail or "", project=project or ""))
+
+    def activity(self, limit: int = 200, project: str | None = None) -> list[dict]:
+        self._ensure()
+        q = select(activity).order_by(activity.c.at.desc(), activity.c.id.desc()).limit(limit)
+        if project:
+            q = q.where(activity.c.project.in_([project, ""]))
+        with self.engine.connect() as c:
+            return [dict(r._mapping) for r in c.execute(q).all()]
 
 
 def new_id() -> str:

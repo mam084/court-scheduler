@@ -89,6 +89,16 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 - **Inputs:** edit any table in place and re-run.
 - **Exports:** an Excel workbook in the club's grid layout (template, one sheet per week, all bookings, review).
 
+## Sign-in and roles
+
+With Google sign-in set up (steps in [`docs/SETUP_LOGINS.md`](docs/SETUP_LOGINS.md)), only club accounts get in, and each person's role decides what they can change:
+
+- **Coaches** see the whole schedule and change their own teams' preferences. A coach's change is saved right away (onto the latest saved copy, so nobody's edits are overwritten) and listed for the admins to fit in at the next Auto-schedule.
+- **Scheduling admins** edit everything on the schedule, rebuild and publish (and, next, approve coaches' change requests).
+- **App admins** manage the **Access** tab (roles, linking logins to coach names, the activity log) and can **View as** any role to test it.
+
+Every role change and coach preference change is logged in the Access tab. Without sign-in configured, the app works as before: anyone with the link can do everything.
+
 ## Saving schedules permanently
 
 Saved schedules go to a database when `DATABASE_URL` is set, and to a local SQLite file (`storage/`, git-ignored) otherwise. The local file is fine on your own computer, but on Streamlit Community Cloud it's wiped whenever the app restarts or redeploys. To keep schedules for good, connect a free Postgres database:
@@ -147,7 +157,8 @@ scheduler/
   solver.py             two-stage CP-SAT scheduler
   views.py              court grid + month calendar (HTML)
   export.py             Excel workbook + per-coach .ics
-  storage.py            saved schedules (SQLite or Postgres via DATABASE_URL)
+  storage.py            saved schedules, users and the activity log (SQLite or Postgres via DATABASE_URL)
+  access.py             roles: who can sign in and what they can change
   changes.py            published versions, what changed, per-team burden counts
   pecking.py            read a pecking-order sheet and match it to the teams
   privates.py           private lessons: reading, conflict checks, per-coach spreadsheet
@@ -161,8 +172,9 @@ tests/                  hard-rule and parsing tests
 - [x] Court view, calendar view, coach view
 - [x] Excel export, per-coach calendar files
 - [x] Any date range; saved schedules that survive refreshes (Postgres via `DATABASE_URL`)
-- [ ] Coach profiles with logins
-- [ ] Coaches request changes and the director approves them, with the solver checking each change
+- [x] Google sign-in with coach / scheduling admin / app admin roles, View as, activity log
+- [ ] Coaches request changes (moves, privates, no-dates) and a scheduling admin approves them, with the solver checking each change; nobody approves their own
+- [ ] Email notifications for new requests and decisions
 - [ ] Live Google Calendar sync
 - [ ] Monthly prompt for coaches to submit next month's no-dates
 - [x] Local and travel tournaments, court quality ranking

@@ -8,8 +8,10 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
 import sys
+import time as time_mod
 from datetime import date, time
 
 import pandas as pd
@@ -31,6 +33,7 @@ from scheduler.data import (
     parse_times, program_side, span_text, tournament_conflicts,
 )
 from scheduler import privates as pv
+from scheduler import access
 from scheduler import pecking as pk
 from scheduler.export import calendar_excel, calendar_ics, to_excel, to_ics
 from scheduler.solver import week_start
@@ -70,8 +73,18 @@ def secret(name: str):
 
 
 # ------------------------------------------------------------ password --
+def _all_secrets():
+    try:
+        st.secrets.get("_")
+        return st.secrets
+    except Exception:  # noqa: BLE001  (no secrets file)
+        return {}
+
+
+SECRETS = _all_secrets()
+AUTH_ON = access.auth_configured(SECRETS)   # Google sign-in set up in secrets
 APP_PASSWORD = secret("APP_PASSWORD")
-if APP_PASSWORD and not st.session_state.get("authed"):
+if APP_PASSWORD and not AUTH_ON and not st.session_state.get("authed"):
     st.title("Court Scheduler")
     pw = st.text_input("Club password", type="password")
     if pw and pw == str(APP_PASSWORD):
@@ -105,7 +118,45 @@ except Exception as e:  # noqa: BLE001  (bad DATABASE_URL: explain instead of cr
     st.caption(f"Details: {type(e).__name__}: {str(e).splitlines()[0][:300] if str(e) else ''}")
     st.stop()
 PROJECT_KEYS = ["project_id", "project_name", "inp", "result", "result_period", "inp_sig", "last_saved",
-                "range_start", "range_end", "time_limit", "makeup", "keep_prev", "published", "base_version", "_save_sig"]
+                "range_start", "range_end", "time_limit", "makeup", "keep_prev", "published", "base_version", "_save_sig",
+                "pending_prefs"]
+
+# --------------------------------------------------------------- sign-in --
+# With Google sign-in set up (see docs/SETUP_LOGINS.md), only club addresses
+# get in, and each person's role decides what they can change. Without it
+# (or locally), the app works as before: anyone who opens it can do
+# everything. COURT_DEV_USER=someone@sdvbc.org tries a role locally.
+if AUTH_ON:
+    if not st.user.is_logged_in:
+        st.title("Court Scheduler")
+        st.markdown("Sign in with your club Google account to see the schedule.")
+        st.button("Sign in with Google", type="primary", on_click=st.login)
+        st.stop()
+    _email, _name = str(st.user.get("email") or ""), str(st.user.get("name") or "")
+    if not access.email_allowed(_email, SECRETS):
+        st.title("Court Scheduler")
+        st.error(f"{_email} isn't a club account. Sign in with your @{access.allowed_domains(SECRETS)[0]} address.")
+        st.button("Sign out", on_click=st.logout)
+        st.stop()
+elif os.environ.get("COURT_DEV_USER"):
+    _email, _name = os.environ["COURT_DEV_USER"], ""
+else:
+    _email = _name = None
+
+
+def _me() -> access.Person | None:
+    """The signed-in person, re-read from the database at most every 30 s."""
+    if _email is None:
+        return None
+    cached = st.session_state.get("_me")
+    if cached and cached[0] == _email and time_mod.time() - cached[1] < 30:
+        return cached[2]
+    p = access.person_for(store, _email, _name, SECRETS)
+    st.session_state._me = (_email, time_mod.time(), p)
+    return p
+
+
+ME = _me()
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -137,7 +188,7 @@ def open_project(pid: str) -> bool:
         range_start=s_, range_end=e_,
         time_limit=int(settings.get("time_limit", 60)), makeup=bool(settings.get("makeup", True)),
         keep_prev=bool(settings.get("keep_prev", True)), published=published_,
-        base_version=settings.get("base_version"),
+        base_version=settings.get("base_version"), pending_prefs=list(settings.get("pending_prefs") or []),
         last_saved=payload_hash(make_payload(inp_, s_, e_, settings, result_, published_)),
     )
     st.session_state.pop("_save_sig", None)
@@ -170,9 +221,42 @@ if qp and st.session_state.get("project_id") != qp:
         st.session_state.flash_warn = "That saved schedule wasn't found (it may have been deleted)."
 
 # ---------------------------------------------------------------- sidebar --
+def _coach_names() -> list[str]:
+    """Coach names in the open schedule (for linking logins and "View as")."""
+    i = st.session_state.get("inp")
+    if i is None:
+        return []
+    try:
+        return clean(i, st.session_state.get("range_start"), st.session_state.get("range_end")).coaches
+    except Exception:  # noqa: BLE001
+        return []
+
+
 with st.sidebar:
     st.title("Court Scheduler")
+    acting = None
+    if ME is not None:
+        st.caption(f"Signed in as **{ME.label}** · {', '.join(ME.roles)}"
+                   + ("" if ME.coach or ME.sched_admin else " · not linked to a coach name yet"))
+        if ME.app_admin:
+            _opts = ["Myself", "Scheduling admin", "Coach (not linked)"] + [f"Coach: {c}" for c in _coach_names()]
+            _va = st.selectbox("View as", _opts, key="view_as",
+                               help="See the app exactly as someone with that role does, to test it. "
+                                    "Only you see this.")
+            if _va == "Scheduling admin":
+                acting = access.Person(ME.email, ME.name, ME.coach, False, True)
+            elif _va == "Coach (not linked)":
+                acting = access.Person(ME.email, ME.name, "", False, False)
+            elif _va.startswith("Coach: "):
+                acting = access.Person(ME.email, _va[7:], _va[7:], False, False)
+        if AUTH_ON:
+            st.button("Sign out", on_click=st.logout, key="signout")
+    VIEWER = access.Viewer(ME, acting)
+    CAN = VIEWER.can_schedule
     saved = _saved_list(database_url(), st.session_state.get("saved_ver", 0))
+    if st.session_state.get("project_id") and not any(p["id"] == st.session_state.project_id for p in saved):
+        saved_changed()  # opened from a link to a schedule newer than the cached menu: refresh it
+        saved = _saved_list(database_url(), st.session_state.get("saved_ver", 0))
     names = {p["id"]: p["name"] for p in saved}
     _dupes = {n for n in names.values() if list(names.values()).count(n) > 1}
     for _p in saved:  # the menu needs unique labels; tell same-named schedules apart
@@ -185,7 +269,8 @@ with st.sidebar:
     options = ["__new__"] + ordered
     _okey = hashlib.sha1("|".join(options).encode()).hexdigest()[:8]
     choice = st.selectbox("Schedule", options, index=options.index(current) if current in options else 0,
-                          format_func=lambda o: "New schedule" if o == "__new__" else names[o],
+                          format_func=lambda o: ("New schedule" if CAN else "Choose a schedule…") if o == "__new__"
+                          else names[o],
                           key=f"picker_{current}_{_okey}")
     if choice != (current or "__new__"):
         if choice == "__new__":
@@ -194,7 +279,10 @@ with st.sidebar:
             open_project(choice)
         st.rerun()
 
-    if current is None:
+    run = False
+    if current is None and not CAN:
+        st.caption("Pick a schedule above to see it.")
+    elif current is None:
         # ------------------------------------------------- new schedule --
         st.subheader("New schedule")
         d_start, d_end = next_month(date.today())
@@ -255,6 +343,11 @@ with st.sidebar:
         if _host:
             _scheme = "http" if _host.startswith(("localhost", "127.")) else "https"
             st.code(f"{_scheme}://{_host}/?project={current}", language=None)
+        if not CAN:
+            st.caption(f"{range_label(st.session_state.range_start, st.session_state.range_end)}. "
+                       "You can change your teams' preferences in **Edit practices**; other changes go through "
+                       "the scheduling admins.")
+    if current is not None and CAN:
         st.date_input("From", key="range_start", format="MM/DD/YYYY")
         st.date_input("To", key="range_end", format="MM/DD/YYYY")
         with st.expander("Replace data with a spreadsheet"):
@@ -325,15 +418,22 @@ if st.session_state.get("project_id") is None:
     c3.markdown("**3. Review & share**  \nCheck the court view, tweak practices by hand, publish, and send coaches "
                 "a calendar file.")
     d_s, d_e = next_month(date.today())
-    if st.button(f"Try it with a simulated club ({range_label(d_s, d_e)})", type="primary"):
-        create_schedule("Demo club", simulate(6, 4, 4, seed=7, start=d_s, end=d_e), d_s, d_e)
-    st.caption("Or create a schedule from your own spreadsheet in the sidebar, or open a saved one from the "
-               "**Schedule** menu.")
+    if CAN:
+        if st.button(f"Try it with a simulated club ({range_label(d_s, d_e)})", type="primary"):
+            create_schedule("Demo club", simulate(6, 4, 4, seed=7, start=d_s, end=d_e), d_s, d_e)
+        st.caption("Or create a schedule from your own spreadsheet in the sidebar, or open a saved one from the "
+                   "**Schedule** menu.")
     if saved:
         st.markdown("**Saved schedules**")
         for p in saved:
             st.markdown(f"- [{p['name']}](?project={p['id']}) · updated {p['updated_at']:%b %-d, %-I:%M %p}")
     st.stop()
+
+if not CAN:  # someone else (an admin) saved a newer version: show it
+    _rec = next((p for p in saved if p["id"] == st.session_state.project_id), None)
+    _sig = st.session_state.get("inp_sig")
+    if _rec and _sig and _sig[0] == "project" and len(_sig) == 3 and _sig[2] != str(_rec["updated_at"]):
+        open_project(st.session_state.project_id)
 
 inp: ScheduleInput = st.session_state.inp
 for _sheet, _attr in (("Tournaments", "tournaments"), ("Coaches", "coaches"), ("Overrides", "overrides"),
@@ -384,6 +484,7 @@ if run or st.session_state.pop("resolve", False):
             if restore_ver is not None:
                 st.session_state.base_version = restore_ver["id"]
             st.session_state.pop("pending_rebuild", None)
+            st.session_state.pending_prefs = []
             st.session_state.result_period = (start, end)
             sf = st.session_state.result.shortfalls if st.session_state.result.ok else None
             if sf is not None and len(sf):
@@ -473,6 +574,11 @@ else:
     if m.get("status") == "FEASIBLE":
         st.caption(f"The solver hit its {time_limit}-second limit, so this is a good schedule but maybe not "
                    "the best one. Raise the time limit in **Solver settings** for a better one.")
+    if CAN and st.session_state.get("pending_prefs"):
+        _pp = st.session_state.pending_prefs
+        st.info(f"**Coaches changed preferences since the last build:** {'; '.join(_pp[-6:])}"
+                + (f" (+{len(_pp) - 6} more)" if len(_pp) > 6 else "")
+                + ". Press **Auto-schedule** to fit them in.")
     if st.session_state.get("pending_rebuild"):
         st.info(f"**{st.session_state.pending_rebuild}** since the last build. Press **Auto-schedule** "
                 "when you're done making changes.")
@@ -487,13 +593,16 @@ if "flash" in st.session_state:
 # Navigation. Only the chosen section is built on each click (tabs would
 # build every section every time), and the choice is remembered, so saving a
 # program or removing something keeps you where you were.
-VIEWS = ["Court view", "Calendar", "Edit practices", "Programs", "Tournaments", "Privates",
-         "Coaches", "Pecking order", "Publish", "Review", "Inputs"]
+ALL_VIEWS = ["Court view", "Calendar", "Edit practices", "Programs", "Tournaments", "Privates",
+             "Coaches", "Pecking order", "Publish", "Review", "Inputs", "Access"]
+(TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_PRIV, TAB_COACH, TAB_PECK, TAB_PUB, TAB_REVIEW,
+ TAB_INPUTS, TAB_ACCESS) = ALL_VIEWS
+ADMIN_ONLY = {TAB_PROG, TAB_TOURN, TAB_PECK, TAB_PUB, TAB_INPUTS}
+VIEWS = [v for v in ALL_VIEWS if (CAN or v not in ADMIN_ONLY)
+         and (v != TAB_ACCESS or (ME is not None and VIEWER.can_manage_access))]
 if st.session_state.get("nav") not in VIEWS:
     st.session_state.nav = VIEWS[0]
 VIEW = st.radio("Section", VIEWS, key="nav", horizontal=True, label_visibility="collapsed")
-(TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_PRIV, TAB_COACH, TAB_PECK, TAB_PUB, TAB_REVIEW,
- TAB_INPUTS) = VIEWS
 
 
 def template_locals(a: pd.DataFrame) -> pd.DataFrame:
@@ -649,13 +758,74 @@ def apply_overrides(rows: list[dict], message: str, backup: pd.DataFrame | None 
     st.rerun()
 
 
+def _pref_key(r: dict, who_col: str) -> tuple:
+    return tuple(str(r.get(c, "") if not blank(r.get(c, "")) else "").strip()
+                 for c in (who_col, "type" if who_col == "who" else "choice", "days", "times", "note"))
+
+
+def change_prefs(team: str, add_wish: dict | None, add_avoid: dict | None, drop_wish: list, drop_avoid: list,
+                 message: str, what: str):
+    """Saves a team's preference change. Scheduling admins edit the open
+    schedule and rebuild. A coach's change is applied to the latest saved
+    copy (so nobody else's edits are overwritten), saved right away, and
+    listed for the admins to fit in at the next Auto-schedule."""
+    def apply(i: ScheduleInput):
+        if add_wish:
+            i.wishlist = pd.concat([i.wishlist, pd.DataFrame([add_wish])], ignore_index=True)
+        if add_avoid:
+            i.availability = pd.concat([i.availability, pd.DataFrame([add_avoid])], ignore_index=True)
+        for attr, col, keys in (("wishlist", "team", drop_wish), ("availability", "who", drop_avoid)):
+            df = getattr(i, attr).fillna("")
+            left = list(keys)
+            keep = []
+            for idx, r in df.iterrows():
+                k = _pref_key(r.to_dict(), col)
+                if k in left:
+                    left.remove(k)
+                else:
+                    keep.append(idx)
+            setattr(i, attr, getattr(i, attr).loc[keep].reset_index(drop=True))
+    if ME is not None:
+        store.log(VIEWER.log_name, "Preference", f"{team}: {what}", st.session_state.project_id)
+    if CAN:
+        apply(inp)
+        st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+        st.session_state.resolve = True
+        st.session_state.flash = message + " Schedule rebuilt."
+        st.rerun()
+    pid = st.session_state.project_id
+    rec = store.get(pid)
+    if rec is None:
+        st.error("This schedule was deleted.")
+        return
+    i_, s_, e_, settings_, r_ = read_payload(rec["payload"])
+    apply(i_)
+    settings_["pending_prefs"] = list(settings_.get("pending_prefs") or []) + [
+        f"{VIEWER.who.label if VIEWER.who else 'A coach'} · {team}: {what}"]
+    store.save(pid, rec["name"], make_payload(i_, s_, e_, settings_, r_, read_published(rec["payload"])))
+    saved_changed()
+    open_project(pid)
+    st.session_state.flash = message + " The scheduling admins will fit it in at the next rebuild."
+    st.rerun()
+
+
 if VIEW == TAB_EDIT:
     if result is None or cleaned is None:
         st.caption("Build the schedule first.")
     else:
-        st.markdown("Change practices by hand. The scheduler **keeps these changes every time it rebuilds**, "
-                    "and fits everything else around them. Practices you place are marked “set by hand”.")
-        team_names = [t.name for t in cleaned.teams]
+        if CAN:
+            st.markdown("Change practices by hand. The scheduler **keeps these changes every time it rebuilds**, "
+                        "and fits everything else around them. Practices you place are marked “set by hand”.")
+            team_names = [t.name for t in cleaned.teams]
+        else:
+            st.markdown("Tell the scheduler what your teams would rather have. Preferences save right away and "
+                        "are weighed against every other team's at the next rebuild. To move, add or remove a "
+                        "practice, ask a scheduling admin (requests in the app are coming next).")
+            team_names = VIEWER.my_teams(cleaned.teams)
+            if not team_names:
+                st.info("Your login isn't linked to a team yet. Ask an app admin to link it to your coach name."
+                        if not VIEWER.coach_name else f"{VIEWER.coach_name} isn't on any team in this schedule.")
+                st.stop()
         e_team = st.selectbox("Team", team_names, key="ed_team")
         e_per_week = next((t.per_week for t in cleaned.teams if t.name == e_team), PRACTICES_PER_WEEK)
         a = result.assignments
@@ -685,7 +855,8 @@ if VIEW == TAB_EDIT:
 
         with c_right:
             mode = st.radio("What do you want to do?", ["Suggest a preference", "Move a practice", "Remove a practice",
-                                                        "Add a practice", "Set usual days", "Practices per week"],
+                                                        "Add a practice", "Set usual days", "Practices per week"]
+                            if CAN else ["Suggest a preference"],
                             key="ed_mode",
                             help="A preference is weighed against everyone else's and kept when possible. "
                                  "The other options pin a practice exactly where you put it.")
@@ -744,24 +915,20 @@ if VIEW == TAB_EDIT:
                 want = bool(p_days or p_times)
                 avoid = bool(a_days or a_times)
                 if st.button("Save preference", type="primary", width="stretch", disabled=not (want or avoid)):
-                    bits = []
+                    bits, wrow, arow = [], None, None
                     if want:
-                        row = {c: "" for c in inp.wishlist.columns}
-                        row.update({"team": e_team, "choice": 1 if p_rank.startswith("1") else 2,
-                                    "days": ", ".join(p_days), "times": ", ".join(p_times), "note": p_note})
-                        inp.wishlist = pd.concat([inp.wishlist, pd.DataFrame([row])], ignore_index=True)
+                        wrow = {c: "" for c in COLUMNS["Wishlist"]}
+                        wrow.update({"team": e_team, "choice": 1 if p_rank.startswith("1") else 2,
+                                     "days": ", ".join(p_days), "times": ", ".join(p_times), "note": p_note})
                         bits.append(f"prefers {' / '.join(p_days) or 'any day'} {', '.join(p_times)}".strip())
                     if avoid:
-                        row = {c: "" for c in inp.availability.columns}
-                        row.update({"who": e_team, "type": "Not preferred", "days": ", ".join(a_days),
-                                    "times": ", ".join(a_times), "note": p_note})
-                        inp.availability = pd.concat([inp.availability, pd.DataFrame([row])], ignore_index=True)
+                        arow = {c: "" for c in COLUMNS["Availability"]}
+                        arow.update({"who": e_team, "type": "Not preferred", "days": ", ".join(a_days),
+                                     "times": ", ".join(a_times), "note": p_note})
                         bits.append(f"would rather not have {' / '.join(a_days) or 'any day'} "
                                     f"{', '.join(a_times)}".strip())
-                    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-                    st.session_state.resolve = True
-                    st.session_state.flash = f"Saved: {e_team} " + " and ".join(bits) + ". Schedule rebuilt."
-                    st.rerun()
+                    change_prefs(e_team, wrow, arow, [], [], f"Saved: {e_team} " + " and ".join(bits) + ".",
+                                 " and ".join(bits))
 
                 # This team's current preferences, removable here.
                 wl = inp.wishlist.fillna("")
@@ -778,13 +945,11 @@ if VIEW == TAB_EDIT:
                         st.caption("• " + lab)
                     drop = st.multiselect("Remove", list(prefs), format_func=lambda k: prefs[k], key=f"{pk}_drop")
                     if st.button("Remove selected", disabled=not drop, key=f"{pk}_dropbtn"):
-                        inp.wishlist = inp.wishlist.drop(index=[i for k, i in drop if k == "w"]).reset_index(drop=True)
-                        inp.availability = inp.availability.drop(
-                            index=[i for k, i in drop if k == "a"]).reset_index(drop=True)
-                        st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-                        st.session_state.resolve = True
-                        st.session_state.flash = f"Removed {plural(len(drop), 'preference')} for {e_team}. Schedule rebuilt."
-                        st.rerun()
+                        change_prefs(e_team, None, None,
+                                     [_pref_key(wl.loc[i].to_dict(), "team") for k, i in drop if k == "w"],
+                                     [_pref_key(av.loc[i].to_dict(), "who") for k, i in drop if k == "a"],
+                                     f"Removed {plural(len(drop), 'preference')} for {e_team}.",
+                                     "removed " + "; ".join(prefs[k] for k in drop))
             elif mode == "Add a practice":
                 ad = st.date_input("Date", value=start, min_value=start, max_value=end, format="MM/DD/YYYY", key="ed_ad")
                 as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1, key="ed_as")
@@ -834,9 +999,12 @@ if VIEW == TAB_EDIT:
                                       "time": us, "court": "" if uc == "Any" else str(uc), "note": "set by hand"}],
                                     f"{e_team} now practices {' & '.join(ud)} at {us}.", backup=original)
 
-        st.subheader("Manual changes")
+        if CAN:
+            st.subheader("Manual changes")
         ov = inp.overrides.fillna("")
-        if ov.empty:
+        if not CAN:
+            pass
+        elif ov.empty:
             st.caption("None yet.")
         else:
             show_all = st.toggle("Show all teams", value=False, key="ed_all")
@@ -1216,48 +1384,51 @@ if VIEW == TAB_PRIV:
                 "or coach that's already busy then is flagged. Privates show on the weekly court view.")
     coach_opts = cleaned.coaches if cleaned else sorted({p["coach"] for p in privs})
     a_now = result.assignments if result is not None else None
-    with st.container(border=True):
-        c1, c2, c3 = st.columns([2, 1, 1])
-        p_coach = c1.selectbox("Coach", coach_opts + ["Someone else…"], key="pv_coach",
-                               index=None, placeholder="Choose a coach")
-        if p_coach == "Someone else…":
-            p_coach = c1.text_input("Coach name", key="pv_coach_new").strip() or None
-        p_date = c2.date_input("Date", value=start, format="MM/DD/YYYY", key="pv_date")
-        p_t = c3.time_input("Start", value=time(16, 0), step=300, key="pv_time",
-                            help="Any start time; privates are always 1 hour.")
-        p_start = p_t.hour * 60 + p_t.minute
-        p_time = pv.clock(p_start)
-        free = pv.free_courts(p_date, p_start, a_now, privs, ALL_COURTS)
-        c1, c2, c3 = st.columns([1, 1, 2])
-        p_team_private = c1.toggle("Team private", key="pv_is_team",
-                                   help="On: a private for one of the club's teams. Off: a personal (non-team) private.")
-        court_opts = [PRACTICE_COURT] + [c for c in COURTS]
-        p_court = c2.selectbox("Court", court_opts, key="pv_court",
-                               format_func=lambda c: court_name(c) + ("" if c in free else " (taken)"))
-        my_teams = [t.name for t in cleaned.teams if p_coach in t.staff] if cleaned and p_coach else []
-        all_teams = [t.name for t in cleaned.teams] if cleaned else []
-        if p_team_private:
-            p_team = c3.selectbox("Team", my_teams + [t for t in all_teams if t not in my_teams], key="pv_team")
-        else:
-            p_team = ""
-            c3.caption("Personal private (not for a team).")
-        c1, c2 = st.columns(2)
-        p_player = c1.text_input("Player(s) (optional)", key="pv_player")
-        p_note = c2.text_input("Note (optional)", key="pv_note")
-        trial = {"row": -1, "coach": p_coach or "", "date": p_date, "day": DAYS[p_date.weekday()], "start": p_start,
-                 "end": p_start + 60, "time": p_time, "end_label": pv.clock(p_start + 60), "court": p_court,
-                 "type": "Team" if p_team_private else "Personal", "team": p_team, "player": p_player, "note": p_note,
-                 "what": ""}
-        clash = pv.conflicts(privs + [trial], a_now, closures).get(-1, []) if p_coach else []
-        if clash:
-            st.warning("Heads up: " + "; ".join(clash) + ".")
-        if st.button("Book private", type="primary", disabled=not p_coach):
-            row = {"coach": p_coach, "date": f"{p_date:%m/%d/%Y}", "time": p_time, "court": court_short(p_court),
-                   "type": trial["type"], "team": p_team, "player": p_player.strip(), "note": p_note.strip()}
-            inp.privates = pd.concat([inp.privates, pd.DataFrame([row])], ignore_index=True)
-            st.session_state.flash = (f"Booked a {trial['type'].lower()} private: {p_coach}, {p_date:%a %b %-d} "
-                                      f"{p_time}, {court_name(p_court)}" + (" (flagged: " + "; ".join(clash) + ")" if clash else "") + ".")
-            st.rerun()
+    if not CAN:
+        st.info("To book a private, ask a scheduling admin for now. Booking requests in the app are coming next.")
+    if CAN:
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([2, 1, 1])
+            p_coach = c1.selectbox("Coach", coach_opts + ["Someone else…"], key="pv_coach",
+                                   index=None, placeholder="Choose a coach")
+            if p_coach == "Someone else…":
+                p_coach = c1.text_input("Coach name", key="pv_coach_new").strip() or None
+            p_date = c2.date_input("Date", value=start, format="MM/DD/YYYY", key="pv_date")
+            p_t = c3.time_input("Start", value=time(16, 0), step=300, key="pv_time",
+                                help="Any start time; privates are always 1 hour.")
+            p_start = p_t.hour * 60 + p_t.minute
+            p_time = pv.clock(p_start)
+            free = pv.free_courts(p_date, p_start, a_now, privs, ALL_COURTS)
+            c1, c2, c3 = st.columns([1, 1, 2])
+            p_team_private = c1.toggle("Team private", key="pv_is_team",
+                                       help="On: a private for one of the club's teams. Off: a personal (non-team) private.")
+            court_opts = [PRACTICE_COURT] + [c for c in COURTS]
+            p_court = c2.selectbox("Court", court_opts, key="pv_court",
+                                   format_func=lambda c: court_name(c) + ("" if c in free else " (taken)"))
+            my_teams = [t.name for t in cleaned.teams if p_coach in t.staff] if cleaned and p_coach else []
+            all_teams = [t.name for t in cleaned.teams] if cleaned else []
+            if p_team_private:
+                p_team = c3.selectbox("Team", my_teams + [t for t in all_teams if t not in my_teams], key="pv_team")
+            else:
+                p_team = ""
+                c3.caption("Personal private (not for a team).")
+            c1, c2 = st.columns(2)
+            p_player = c1.text_input("Player(s) (optional)", key="pv_player")
+            p_note = c2.text_input("Note (optional)", key="pv_note")
+            trial = {"row": -1, "coach": p_coach or "", "date": p_date, "day": DAYS[p_date.weekday()], "start": p_start,
+                     "end": p_start + 60, "time": p_time, "end_label": pv.clock(p_start + 60), "court": p_court,
+                     "type": "Team" if p_team_private else "Personal", "team": p_team, "player": p_player, "note": p_note,
+                     "what": ""}
+            clash = pv.conflicts(privs + [trial], a_now, closures).get(-1, []) if p_coach else []
+            if clash:
+                st.warning("Heads up: " + "; ".join(clash) + ".")
+            if st.button("Book private", type="primary", disabled=not p_coach):
+                row = {"coach": p_coach, "date": f"{p_date:%m/%d/%Y}", "time": p_time, "court": court_short(p_court),
+                       "type": trial["type"], "team": p_team, "player": p_player.strip(), "note": p_note.strip()}
+                inp.privates = pd.concat([inp.privates, pd.DataFrame([row])], ignore_index=True)
+                st.session_state.flash = (f"Booked a {trial['type'].lower()} private: {p_coach}, {p_date:%a %b %-d} "
+                                          f"{p_time}, {court_name(p_court)}" + (" (flagged: " + "; ".join(clash) + ")" if clash else "") + ".")
+                st.rerun()
 
     for msg in priv_problems:
         st.error(msg)
@@ -1282,8 +1453,8 @@ if VIEW == TAB_PRIV:
             hide_index=True, width="stretch")
         lab = {p["row"]: f"{p['coach']} · {p['date']:%a %b %-d} {p['time']} · {court_name(p['court'])}" for p in shown}
         c1, c2 = st.columns([3, 1])
-        drop = c1.multiselect("Remove privates", list(lab), format_func=lambda i: lab[i], key="pv_drop")
-        if c2.button("Remove", disabled=not drop, width="stretch", key="pv_drop_btn"):
+        drop = c1.multiselect("Remove privates", list(lab), format_func=lambda i: lab[i], key="pv_drop") if CAN else []
+        if CAN and c2.button("Remove", disabled=not drop, width="stretch", key="pv_drop_btn"):
             inp.privates = inp.privates.reset_index(drop=True).drop(index=drop).reset_index(drop=True)
             st.session_state.flash = f"Removed {plural(len(drop), 'private')}."
             st.rerun()
@@ -1297,28 +1468,29 @@ if VIEW == TAB_PRIV:
 
 # ------------------------------------------------------------- coaches --
 if VIEW == TAB_COACH:
-    with st.expander("Add a coach", expanded=False):
-        st.caption("For coaches who aren't on a team yet (e.g. they only work programs). "
-                   "They'll show up in the program and tournament forms.")
-        with st.form("add_coach", clear_on_submit=True):
-            c1, c2, c3 = st.columns(3)
-            nc_name = c1.text_input("Name")
-            nc_email = c2.text_input("Email (optional)")
-            nc_phone = c3.text_input("Phone (optional)")
-            nc_note = st.text_input("Note (optional)", placeholder="e.g. JumpStart coach")
-            if st.form_submit_button("Add coach", type="primary"):
-                existing = set(cleaned.coaches) if cleaned else set()
-                if not nc_name.strip():
-                    st.error("Enter a name.")
-                elif nc_name.strip() in existing:
-                    st.warning(f"{nc_name.strip()} is already a coach.")
-                else:
-                    inp.coaches = pd.concat([inp.coaches, pd.DataFrame([{
-                        "coach": nc_name.strip(), "email": nc_email.strip(), "phone": nc_phone.strip(),
-                        "note": nc_note.strip()}])], ignore_index=True)
-                    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-                    st.session_state.flash = f"Added coach {nc_name.strip()}."
-                    st.rerun()
+    if CAN:
+        with st.expander("Add a coach", expanded=False):
+            st.caption("For coaches who aren't on a team yet (e.g. they only work programs). "
+                       "They'll show up in the program and tournament forms.")
+            with st.form("add_coach", clear_on_submit=True):
+                c1, c2, c3 = st.columns(3)
+                nc_name = c1.text_input("Name")
+                nc_email = c2.text_input("Email (optional)")
+                nc_phone = c3.text_input("Phone (optional)")
+                nc_note = st.text_input("Note (optional)", placeholder="e.g. JumpStart coach")
+                if st.form_submit_button("Add coach", type="primary"):
+                    existing = set(cleaned.coaches) if cleaned else set()
+                    if not nc_name.strip():
+                        st.error("Enter a name.")
+                    elif nc_name.strip() in existing:
+                        st.warning(f"{nc_name.strip()} is already a coach.")
+                    else:
+                        inp.coaches = pd.concat([inp.coaches, pd.DataFrame([{
+                            "coach": nc_name.strip(), "email": nc_email.strip(), "phone": nc_phone.strip(),
+                            "note": nc_note.strip()}])], ignore_index=True)
+                        st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+                        st.session_state.flash = f"Added coach {nc_name.strip()}."
+                        st.rerun()
     if cleaned is None:
         st.caption("Fix the input errors first.")
     else:
@@ -1636,18 +1808,129 @@ if VIEW == TAB_INPUTS:
     st.download_button("Download inputs (Excel)", inp.to_excel_bytes, "club_inputs.xlsx")
 
 
+# -------------------------------------------------------------- access --
+if VIEW == TAB_ACCESS:
+    st.markdown("Who can use the app and what they can do. **Coaches** see the whole schedule and change their own "
+                "teams' preferences. **Scheduling admins** edit the schedule, rebuild, publish and (next) approve "
+                "coaches' requests. **App admins** manage this page and can use *View as* to test any role.")
+    if not AUTH_ON:
+        st.warning("Google sign-in isn't set up on this copy of the app yet, so anyone with the link can still do "
+                   "everything. The setup steps are in `docs/SETUP_LOGINS.md`.")
+    always = set(access.app_admins(SECRETS))
+    people = store.users()
+    names_ = _coach_names()
+    link_opts = [""] + sorted(set(names_) | {p_["coach"] for p_ in people if p_["coach"]})
+    table = pd.DataFrame([{"email": p_["email"], "name": p_["name"], "coach": p_["coach"],
+                           "app_admin": bool(p_["app_admin"]) or p_["email"] in always,
+                           "sched_admin": bool(p_["sched_admin"])} for p_ in people],
+                         columns=["email", "name", "coach", "app_admin", "sched_admin"])
+    st.subheader("People")
+    if table.empty:
+        st.caption("Nobody has signed in yet.")
+    else:
+        unlinked = table[(table["coach"] == "") & ~table["sched_admin"]]["email"].tolist()
+        if unlinked:
+            st.info(f"Not linked to a coach name yet: {', '.join(unlinked)}. Pick their name in the **Coach** column "
+                    "so they can edit their teams' preferences.")
+        edited = st.data_editor(
+            table, hide_index=True, width="stretch", key=f"access_{st.session_state.get('access_ver', 0)}",
+            disabled=["email"],
+            column_config={
+                "email": "Email", "name": "Name",
+                "coach": st.column_config.SelectboxColumn("Coach", options=link_opts,
+                                                          help="Their name on the schedule (Teams / Locals sheets)"),
+                "app_admin": st.column_config.CheckboxColumn("App admin", help="Manages this page"),
+                "sched_admin": st.column_config.CheckboxColumn("Scheduling admin",
+                                                               help="Edits the schedule and approves requests")})
+        changes = []
+        for (_, old), (_, new) in zip(table.iterrows(), edited.iterrows()):
+            diff_ = [f"{lab} {old[c]!s} → {new[c]!s}" for c, lab in (("name", "name"), ("coach", "coach"),
+                     ("app_admin", "app admin"), ("sched_admin", "scheduling admin")) if old[c] != new[c]]
+            if diff_:
+                changes.append((new, diff_))
+        if st.button("Save changes", type="primary", disabled=not changes, key="access_save"):
+            kept = []
+            for new, diff_ in changes:
+                admin = bool(new["app_admin"])
+                if new["email"] in always and not admin:
+                    admin = True
+                    kept.append(new["email"])
+                store.save_user(new["email"], new["name"] or "", new["coach"] or "", admin, bool(new["sched_admin"]))
+                store.log(VIEWER.log_name, "Access", f"{new['email']}: " + "; ".join(diff_))
+            st.session_state.pop("_me", None)
+            st.session_state.access_ver = st.session_state.get("access_ver", 0) + 1
+            st.session_state.flash = (f"Saved {plural(len(changes), 'change')}."
+                                      + (f" {', '.join(kept)} stays an app admin (set in the app's secrets, so the "
+                                         "club can't get locked out)." if kept else ""))
+            st.rerun()
+
+    with st.expander("Add someone before they sign in"):
+        with st.form("access_add", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            n_email = c1.text_input("Club email")
+            n_name = c2.text_input("Name")
+            n_coach = c3.selectbox("Coach name on the schedule", link_opts)
+            c1, c2 = st.columns(2)
+            n_app = c1.checkbox("App admin")
+            n_sched = c2.checkbox("Scheduling admin")
+            if st.form_submit_button("Add", type="primary"):
+                e_ = n_email.strip().lower()
+                if not e_ or "@" not in e_:
+                    st.error("Enter an email address.")
+                elif not access.email_allowed(e_, SECRETS):
+                    st.error(f"Only @{', @'.join(access.allowed_domains(SECRETS))} addresses can sign in.")
+                elif store.get_user(e_):
+                    st.warning(f"{e_} is already listed above.")
+                else:
+                    store.save_user(e_, n_name.strip(), n_coach, n_app, n_sched)
+                    store.log(VIEWER.log_name, "Access", f"added {e_}"
+                              + "".join(f"; {r}" for r, on in (("app admin", n_app), ("scheduling admin", n_sched)) if on))
+                    st.session_state.access_ver = st.session_state.get("access_ver", 0) + 1
+                    st.session_state.flash = f"Added {e_}."
+                    st.rerun()
+
+    removable = [p_["email"] for p_ in people if p_["email"] not in always and (ME is None or p_["email"] != ME.email)]
+    if removable:
+        c1, c2 = st.columns([3, 1])
+        gone = c1.multiselect("Remove access", removable, key="access_rm",
+                              help="They can still sign in with a club address, but come back as a plain coach.")
+        if c2.button("Remove", disabled=not gone, width="stretch", key="access_rm_btn"):
+            for e_ in gone:
+                store.delete_user(e_)
+                store.log(VIEWER.log_name, "Access", f"removed {e_}")
+            st.session_state.access_ver = st.session_state.get("access_ver", 0) + 1
+            st.session_state.flash = f"Removed {plural(len(gone), 'person', 'people')}."
+            st.rerun()
+
+    st.subheader("Activity")
+    st.caption("Every role change and every preference a coach changes, newest first. Approvals will be listed "
+               "here too, and nobody will be able to approve their own request.")
+    log_ = store.activity(300)
+    if not log_:
+        st.caption("Nothing yet.")
+    else:
+        lg = pd.DataFrame(log_)
+        lg["at"] = pd.to_datetime(lg["at"], utc=True).dt.tz_convert("America/Los_Angeles").dt.strftime("%b %-d, %-I:%M %p")
+        pnames = {p_["id"]: p_["name"] for p_ in saved}
+        lg["project"] = lg["project"].map(lambda x: pnames.get(x, "") if x else "")
+        st.dataframe(lg[["at", "who", "action", "detail", "project"]].rename(columns={
+            "at": "When", "who": "Who", "action": "What", "detail": "Details", "project": "Schedule"}),
+            hide_index=True, width="stretch", height=min(500, 38 + 35 * len(lg)))
+
+
 # ----------------------------------------------------------- autosave --
 # Save the inputs, dates, settings and latest schedule whenever anything
 # changed this run, so a refresh or a new visit picks up where you left off.
 _settings = {"time_limit": time_limit, "makeup": makeup, "keep_prev": st.session_state.get("keep_prev", True),
-             "base_version": st.session_state.get("base_version")}
+             "base_version": st.session_state.get("base_version"),
+             "pending_prefs": list(st.session_state.get("pending_prefs") or [])}
 # Building the whole payload is the slow part, so only do it when something
 # could have changed: the solved schedule, published versions, settings,
 # dates or any input table.
 _sig = (id(st.session_state.get("result")), len(st.session_state.get("published", [])),
         tuple(v["id"] for v in st.session_state.get("published", [])), json.dumps(_settings), str(start), str(end),
         hashlib.sha1(json.dumps(inp.to_records(), sort_keys=True, default=str).encode()).hexdigest())
-if _sig != st.session_state.get("_save_sig"):
+if CAN and _sig != st.session_state.get("_save_sig"):
     _payload = make_payload(inp, start, end, _settings, st.session_state.get("result"),
                             st.session_state.get("published", []))
     _h = payload_hash(_payload)
