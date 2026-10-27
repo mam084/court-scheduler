@@ -78,9 +78,14 @@ CSS = """
 .cs-grid th .cs-thead-t { margin-top: 4px; text-align: left; font-weight: 600; }
 .cs-grid th .cs-thead-t .cs-chip { margin: 0 0 3px 0; padding: 2px 5px; font-size: 11px; line-height: 1.2; }
 .cs-grid th .cs-thead-t .cs-chip span { display: block; font-weight: 400; font-size: 10.5px; opacity: .9; }
-.cs-grid tr.cs-pc td { background: #F6F3EC; }
+.cs-grid tr.cs-pc td, .cs-grid tr.cs-pcb td { background: #F6F3EC; }
 .cs-grid tr.cs-pc td.cs-daycell { background: #EDE6D6; color: #5A4A2A; border-top: 3px solid #1F2A44; }
 .cs-grid tr.cs-pc td:not(.cs-daycell) { border-top: 3px solid #1F2A44; }
+/* weekday time bands: same time at the same height every day; dotted lines between bands */
+.cs-grid td.cs-band { height: 22px; padding: 3px 4px 1px; }
+.cs-grid td.cs-b0 { border-bottom: 1px dotted #C9CED8; }
+.cs-grid td.cs-b1 { border-top: 1px dotted #C9CED8; border-bottom: 1px dotted #C9CED8; }
+.cs-grid td.cs-b2 { border-top: 1px dotted #C9CED8; }
 </style>
 """
 
@@ -95,7 +100,8 @@ body .cs-grid td.cs-wkend { background: #20283A; }
 body .cs-grid td.cs-daycell { background: #283044; color: #E8ECF3; }
 body .cs-grid td.cs-closed { background: repeating-linear-gradient(45deg,#232833,#232833 8px,#2B313D 8px,#2B313D 16px);
                              color: #A3AAB8; }
-body .cs-grid tr.cs-pc td { background: #26241C; }
+body .cs-grid tr.cs-pc td, body .cs-grid tr.cs-pcb td { background: #26241C; }
+body .cs-grid td.cs-b0, body .cs-grid td.cs-b1, body .cs-grid td.cs-b2 { border-color: #394155; }
 body .cs-grid tr.cs-pc td.cs-daycell { background: #343024; color: #EADFC4; border-top-color: #8A93A8; }
 body .cs-grid tr.cs-pc td:not(.cs-daycell) { border-top-color: #8A93A8; }
 body .cs-open { border-color: #566079; color: #A0A9BC; }
@@ -308,26 +314,25 @@ def court_grid_html(
         out.append(f"<th{cls}>{wd}{sub}</th>")
     out.append("</tr></thead><tbody>")
     rows_ = list(courts) if courts else list(ALL_COURTS)  # a subset, for a printed half-week
+    # Each court is three rows, one per weekday time band (JumpStart/3:45, 5:30, 7:20), so a
+    # time sits at the same height every day. Weekend days span all three with their blocks.
+    n_bands = len(BAND_STARTS)
     for i, c in enumerate(rows_):
         pc = c not in COURTS
-        out.append(f'<tr{" class=cs-pc" if pc else ""}><td class="cs-daycell">{court_name(c)}'
-                   + ('<br><small style="font-weight:400">programs &amp; privates</small>' if pc else "") + "</td>")
         court_rows = bookings[bookings["court"] == c] if len(bookings) else bookings
+        cells: dict[str, list] = {}  # wd -> [(band, minutes, html)]
         for wd in cols:
             if wd in blocked:
-                if i == 0:
-                    out.append(f'<td class="cs-closed" rowspan="{len(rows_)}">{blocked[wd]}</td>')
                 continue
-            cell = court_rows[court_rows["day"] == wd].copy() if len(court_rows) else court_rows
-            tn_here = [tn for tn in partial.get(wd, []) if c in tn.courts]
-            chips = "".join(_tourn_chip(tn, compact=True) for tn in tn_here)
-            items = []
-            if len(cell):
-                items += [(_minutes(r["slot"]), _chip(r, stripes, highlight, local_coaches=local_coaches))
-                          for _, r in cell.iterrows()]
+            weekend = wd not in WEEKDAYS
+            cell = court_rows[court_rows["day"] == wd] if len(court_rows) else court_rows
+            items = [(0, -1, _tourn_chip(tn, compact=True)) for tn in partial.get(wd, []) if c in tn.courts]
+            for _, r in (cell.iterrows() if len(cell) else []):
+                m = _minutes(r["slot"])
+                items.append((0 if weekend else _band(m), m, _chip(r, stripes, highlight, local_coaches=local_coaches)))
             here_pv = [pv for pv in (privates or []) if pv["day"] == wd and pv["court"] == c]
             for pv in here_pv:
-                items.append((pv["start"] + 0.25, _private_chip(pv)))
+                items.append((0 if weekend else _band(pv["start"]), pv["start"] + 0.25, _private_chip(pv)))
             if open_slots:
                 taken = list(cell["slot"]) if len(cell) else []
                 free = [sl for sl, cs in (open_slots.get(wd) or {}).items()
@@ -340,15 +345,44 @@ def court_grid_html(
                     else:  # back-to-back weekend blocks read as one span: "9AM–1PM Open"
                         tip = f"{SLOTS[a_].split('–')[0]}–{SLOTS[b_].split('–')[-1]}"
                         txt = f"{a_}–{WEEKEND_ENDS.get(b_, b_)}"
-                    items.append((_minutes(a_) + 0.5,
+                    m = _minutes(a_)
+                    items.append((0 if weekend else _band(m), m + 0.5,
                                   f'<div class="cs-open" title="Court {c} is free {html.escape(tip)}">'
                                   f'<span class="cs-time">{txt}</span> Open<span class="cs-write"></span></div>'))
-            chips += "".join(h for _, h in sorted(items, key=lambda x: x[0]))
-            cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
-            out.append(f"<td{cls}>{chips}</td>")
-        out.append("</tr>")
+            cells[wd] = items
+        for band in range(n_bands):
+            tr_cls = ("cs-pc" if band == 0 else "cs-pcb") if pc else ("cs-cfirst" if band == 0 else "")
+            out.append(f'<tr class="{tr_cls}">' if tr_cls else "<tr>")
+            if band == 0:
+                out.append(f'<td class="cs-daycell" rowspan="{n_bands}">{court_name(c)}'
+                           + ('<br><small style="font-weight:400">programs &amp; privates</small>' if pc else "")
+                           + "</td>")
+            for wd in cols:
+                if wd in blocked:
+                    if i == 0 and band == 0:
+                        out.append(f'<td class="cs-closed" rowspan="{len(rows_) * n_bands}">{blocked[wd]}</td>')
+                    continue
+                weekend = wd not in WEEKDAYS
+                if weekend and band > 0:
+                    continue  # covered by the weekend cell's rowspan
+                its = [x for x in cells[wd] if weekend or x[0] == band]
+                html_ = "".join(h for _, _, h in sorted(its, key=lambda x: x[1]))
+                if weekend:
+                    out.append(f'<td class="cs-wkend cs-wkcell" rowspan="{n_bands}">{html_}</td>')
+                else:
+                    out.append(f'<td class="cs-band cs-b{band}">{html_}</td>')
+            out.append("</tr>")
     out.append("</tbody></table></div>")
     return "".join(out)
+
+
+# Weekday time bands in the court grid: JumpStart / 3:45, then 5:30, then 7:20.
+BAND_STARTS = [0, 17 * 60 + 30, 19 * 60 + 20]
+
+
+def _band(minutes: float) -> int:
+    """Which weekday band something starting at `minutes` (from midnight) goes in."""
+    return sum(1 for b in BAND_STARTS[1:] if minutes >= b)
 
 
 WEEKEND_ENDS = {"9AM": "11AM", "11AM": "1PM", "1PM": "3PM", "3PM": "5PM", "5PM": "7PM", "7PM": "9PM"}

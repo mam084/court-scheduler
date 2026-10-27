@@ -35,27 +35,26 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .cs-week { box-sizing: border-box; overflow: hidden; padding-top: 14px; }
 .cs-week h2 { font-size: 17px; margin: 0 0 6px; font-weight: 600; letter-spacing: .5px; }
 .cs-week h2 span { font-weight: 400; color: #5b6475; font-size: 12px; letter-spacing: 0; }
-.pp { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 11.5px; }
+.pp { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 13px; }
 .pp th, .pp td { border: 1px solid #555; vertical-align: top; }
-.pp th { font-weight: 500; font-size: 12px; padding: 2px 4px; background: #fff; }
+.pp th { font-weight: 500; font-size: 13px; padding: 2px 4px; background: #fff; }
 .pp th.ct { width: 46px; }
-.pp td.ct { font-weight: 600; text-align: center; vertical-align: middle; font-size: 12px; }
+.pp td.ct { font-weight: 600; text-align: center; vertical-align: middle; font-size: 13px; }
 .pp .dh { text-align: left; height: 46px; }
 .pp .dh .num { display: inline-block; border: 1px solid #555; min-width: 20px; padding: 0 3px; font-size: 13px; }
-.pp .dh .note { display: block; font-size: 10.5px; font-weight: 600; margin-top: 2px; line-height: 1.2; }
-/* Lines sit at the bottom of each box (7:20 last), leaving room above for early privates. */
-.pp td.box { padding: 6px 4px 2px; text-align: left; vertical-align: bottom; }
-.ln { display: flex; gap: 3px; line-height: 14px; min-height: 18px; padding-top: 3px; box-sizing: border-box;
-      border-bottom: 1px dotted #b3b8c2; text-align: left; }
-.ln:last-child { border-bottom: none; }
-.ln.cont { border-bottom-style: solid; border-bottom-color: #d5d8de; }
-.ln .t { flex: 0 0 auto; width: 49px; color: #6b7280; font-size: 10px; font-variant-numeric: tabular-nums;
-         white-space: nowrap; }
-.ln .w { flex: 1 1 0; min-width: 0; font-weight: 600; font-size: 11px; text-align: right;
-         overflow-wrap: break-word; hyphens: none; }
+.pp .dh .note { display: block; font-size: 11.5px; font-weight: 600; margin-top: 2px; line-height: 1.2; }
+/* Lines sit at the bottom of each box (7:20 last), leaving room above for early privates.
+   Sized so a week fits its two pages at full size (no shrinking). */
+.pp td.box { padding: 4px 5px 2px; text-align: left; vertical-align: bottom; }
+.sl { border-bottom: 1px dotted #9aa0aa; }
+.sl:last-child { border-bottom: none; }
+.ln { display: flex; gap: 4px; line-height: 15px; min-height: 19px; padding-top: 3px; box-sizing: border-box; }
+.ln .t { flex: 0 0 auto; color: #555b66; font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ln .w { flex: 1 1 0; min-width: 0; font-weight: 600; font-size: 13px; text-align: right; overflow-wrap: break-word; }
+.wk .ln { min-height: 21px; padding-top: 4px; }
 .ln .w small { font-weight: 400; color: #555; }
-.ln.pv .w { font-weight: 500; font-style: italic; }
-.ln.tn .w { text-transform: uppercase; letter-spacing: .3px; }
+.pv .ln .w { font-weight: 500; font-style: italic; }
+.tn .ln .w { letter-spacing: .2px; }
 td.off { background: repeating-linear-gradient(45deg,#f4f4f4,#f4f4f4 6px,#e8e8e8 6px,#e8e8e8 12px); color: #666;
          text-align: center; vertical-align: middle; font-style: italic; font-size: 11px; }
 td.out { background: #f3f3f3; }
@@ -94,8 +93,14 @@ def _what(r, local_coaches: bool) -> str:
     return name + (f" <small>({', '.join(bits)})</small>" if bits else "")
 
 
-def _line(label: str, what: str = "", cls: str = "") -> str:
-    return f'<div class="ln{(" " + cls) if cls else ""}"><span class="t">{label}</span><span class="w">{what}</span></div>'
+def _slot(label: str, what: str = "", cls: str = "", two: bool = True) -> str:
+    """One timeslot. two=True: the time on one line and what's booked (or a blank to
+    write on) on the next, using the box's full width. two=False: one line, time left."""
+    c = f' class="sl {cls}"' if cls else ' class="sl"'
+    if two:
+        return (f'<div{c}><div class="ln"><span class="t">{label}</span></div>'
+                f'<div class="ln"><span class="w">{what}</span></div></div>')
+    return f'<div{c}><div class="ln"><span class="t">{label}</span><span class="w">{what}</span></div></div>'
 
 
 def _start(slot: str) -> int:
@@ -110,28 +115,30 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
     by_slot: dict[str, list] = {}
     for _, r in (here.iterrows() if len(here) else []):
         by_slot.setdefault(r["slot"], []).append(_what(r, local_coaches))
+    labels = dict(LABEL)
     if weekend:
         slots = list(WEEKEND_KEYS)
-    else:  # JumpStart hours replace the 3:45 line when they're booked here
+    else:
+        if by_slot.get("3:30") and by_slot.get("3:30") == by_slot.get("4:30"):
+            # the same program both JumpStart hours (the usual case): one 3:30-5:30 slot
+            by_slot["3:30"] = by_slot.pop("4:30")
+            labels["3:30"] = "3:30-5:30"
         early = [s for s in ("3:30", "4:30") if s in by_slot]
         slots = (early if early and "3:45" not in by_slot else ["3:45"]) + ["5:30", "7:20"]
     slots += [s for s in by_slot if s not in slots]  # anything else booked
     items = []  # (minutes, html)
     tn_here = [tn for tn in tourns if tn.kind == "local" and c in tn.courts and tn.covers(d)]
     if tn_here:  # a local tournament takes the court until 7 PM
-        items.append((0, _line("until 7", html.escape(" / ".join(tn.name for tn in tn_here)), "tn")))
+        items.append((0, _slot("until 7 PM", html.escape(" / ".join(tn.name for tn in tn_here)), "tn")))
         slots = [s for s in slots if not blocked_by_local_tournament(s) or s in by_slot]
     for s in slots:
-        what = " / ".join(by_slot.get(s, []))
-        line = _line(LABEL.get(s, s), what)
-        if not what:  # open: a second line, so there's room to write something in each hour
-            line += '<div class="ln cont"><span class="t"></span><span class="w"></span></div>'
-        items.append((_start(s), line))
+        items.append((_start(s), _slot(labels.get(s, s), " / ".join(by_slot.get(s, [])),
+                                       "wk" if weekend else "", two=not weekend)))
     for p in privs:
         if p["date"] == d and p["court"] == c:
             who = html.escape(p["coach"] + (f" · {p['team']}" if p.get("team") else ""))
-            items.append((p["start"] + 0.5, _line(html.escape(p["time"].replace(" ", "").lower()),
-                                                  f"Private · {who}", "pv")))
+            items.append((p["start"] + 0.5, _slot(html.escape(p["time"].replace(" ", "").lower()),
+                                                  f"Private · {who}", "pv", two=False)))
     return "".join(h for _, h in sorted(items, key=lambda x: x[0]))
 
 
