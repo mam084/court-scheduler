@@ -10,7 +10,7 @@ import pytest
 from scheduler import ScheduleInput, clean, simulate, solve
 from scheduler.closures import default_closures
 from scheduler.data import (
-    COLUMNS, parse_courts, parse_date_ranges, parse_days, parse_names, parse_slot, parse_times,
+    COLUMNS, tournament_conflicts, parse_courts, parse_date_ranges, parse_days, parse_names, parse_slot, parse_times,
     parse_weekend_tokens,
 )
 from scheduler.config import slots_overlap
@@ -25,9 +25,16 @@ def _check_hard_rules(inp, r):
     a = r.assignments
     pr = a[a["kind"] == "Practice"]
 
-    # One booking per court per slot (practices and on-site locals together).
+    # One booking per court per slot (practices and on-site locals together),
+    # except pairing: two flagged practices on one court (3 teams on 2 courts).
     dup = a.groupby(["date", "slot", "court"]).size()
-    assert (dup <= 1).all(), dup[dup > 1]
+    for (d, s, c), n in dup[dup > 1].items():
+        here = a[(a["date"] == d) & (a["slot"] == s) & (a["court"] == c)]
+        assert n == 2 and (here["kind"] == "Practice").all(), here
+        assert here["paired"].fillna("").str.startswith("3 teams on").all(), here
+    paired = pr[pr["paired"].fillna("") != ""] if "paired" in pr else pr.iloc[0:0]
+    for (d, s), g in paired.groupby(["date", "slot"]):
+        assert len(g) % 3 == 0 and g["court"].nunique() == 2 * len(g) // 3, g
 
     for _, row in pr.iterrows():
         t, d, s = teams[row["name"]], row["date"], row["slot"]
@@ -297,7 +304,7 @@ def _with_tournaments(inp, rows):
     return inp
 
 
-def test_local_tournament_blocks_its_courts_all_day():
+def test_local_tournament_blocks_its_courts_until_7pm():
     teams = [{"team": f"16-T{i}", "age": 16} for i in range(4)]
     inp = _with_tournaments(_inp(teams), [
         {"name": "Boys 14 Local", "type": "Local", "start_date": "11/18/2026", "end_date": "11/18/2026"},
@@ -305,8 +312,10 @@ def test_local_tournament_blocks_its_courts_all_day():
     r = solve(inp, *NOV, time_limit_s=15)
     _check_hard_rules(inp, r)
     pr = r.assignments[r.assignments["kind"] == "Practice"]
-    assert pr[pr["date"] == date(2026, 11, 18)].empty
-    assert set(pr[pr["date"] == date(2026, 11, 11)]["court"]) <= {6, 7}
+    # Nothing before 7 PM; 7:20 practices still happen.
+    assert set(pr[pr["date"] == date(2026, 11, 18)]["slot"]) <= {"7:20"}
+    early = pr[(pr["date"] == date(2026, 11, 11)) & (pr["slot"] != "7:20")]
+    assert set(early["court"]) <= {6, 7}
     assert {tn.name for tn in r.tournaments} == {"Boys 14 Local", "Girls Mini"}
 
 
@@ -1178,3 +1187,148 @@ def test_import_keeps_programs_and_tournaments():
     new = _inp([{"team": "14-B", "age": 14}], locals_=file_locals)
     keep_programs(new, None)
     assert list(new.locals["program"]) == ["B 14 L"]
+
+
+# ------------------------------------------------- Oct 26 meeting changes --
+
+def _per_week(pr, name):
+    g = pr[pr["name"] == name]
+    return g.groupby(g["date"].map(week_start)).size()
+
+
+def test_pairing_only_when_courts_run_out():
+    # Every team can only make Mon/Wed 5:30. 7 teams fit; 9 need pairing.
+    def club(n):
+        teams = [{"team": f"16-C{i}", "age": 16} for i in range(n)]
+        avail = [{"who": t["team"], "type": "No", "days": "Tue, Thu, Fri"} for t in teams]
+        avail += [{"who": t["team"], "type": "No", "times": "7:20"} for t in teams]
+        return _inp(teams, avail)
+    r7 = solve(club(7), *NOV, time_limit_s=15)
+    assert r7.metrics["paired_slots"] == 0
+    r9 = solve(club(9), *NOV, time_limit_s=20)
+    _check_hard_rules(club(9), r9)
+    pr = r9.assignments[r9.assignments["kind"] == "Practice"]
+    assert r9.metrics["paired_slots"] > 0
+    assert not r9.broken                      # paired rather than breaking anyone's no-dates
+    assert r9.shortfalls.empty
+    assert (r9.issues["issue"].str.startswith("Paired:")).any()
+    one = pr[pr["paired"] != ""].iloc[0]
+    assert one["paired"].startswith("3 teams on Court")
+
+
+def test_team_can_have_three_practices_a_week():
+    teams = [{"team": "18 Black", "club": "Boys", "age": 18, "head_coach": "Al", "practices": "3"},
+             {"team": "16-Bea", "age": 16}]
+    r = solve(_inp(teams), *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    full_weeks = [w for w, g in r.practice_counts.groupby("week_of") if (g["target"] >= 2).all()]
+    counts = _per_week(pr, "18 Black")
+    assert all(counts[w] == 3 for w in full_weeks)
+    assert all(_per_week(pr, "16-Bea")[w] == 2 for w in full_weeks)
+    assert len(r.pattern[r.pattern["team"] == "18 Black"]) == 3
+
+
+def test_extra_practice_goes_on_top():
+    teams = [{"team": "16-Bea", "age": 16}]
+    inp = _inp(teams)
+    inp.overrides = pd.DataFrame([{"team": "16-Bea", "action": "Extra", "date": "11/13/2026", "days": "",
+                                   "time": "7:20", "court": "", "note": ""}], columns=COLUMNS["Overrides"])
+    r = solve(inp, *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    wk = week_start(date(2026, 11, 13))
+    assert _per_week(pr, "16-Bea")[wk] == 3
+    row = pr[(pr["date"] == date(2026, 11, 13))].iloc[0]
+    assert row["extra"] == True and row["pinned"] == True  # noqa: E712
+
+
+def test_flags_coach_at_local_and_travel_tournament():
+    teams = [{"team": "15 Black", "club": "Boys", "age": 15, "head_coach": "Al"},
+             {"team": "16-Bea", "age": 16}]
+    inp = _with_tournaments(_inp(teams), [
+        {"name": "Girls Local", "type": "Local", "start_date": "11/14/2026", "courts": "1-3", "coaches": "Al"},
+        {"name": "Boys Travel", "type": "Travel", "start_date": "11/13/2026", "end_date": "11/15/2026",
+         "teams": "15 Black"}])
+    data = clean(inp, *NOV)
+    conf = tournament_conflicts(data.teams, data.tournaments)
+    assert conf and conf[0]["coach"] == "Al" and conf[0]["start"] == date(2026, 11, 14)
+    r = solve(inp, *NOV, time_limit_s=10)
+    assert r.issues["issue"].str.startswith("Tournament conflict: Al").any()
+
+
+def test_locals_cancel_one_session_and_add_one():
+    teams = [{"team": f"16-T{i}", "age": 16} for i in range(2)]
+    locals_ = [{"program": "Big Clinic", "days": "Tue", "time": "5:30", "courts": "1-7", "skip": "11/10/2026"},
+               {"program": "Big Clinic", "days": "Fri", "time": "5:30", "courts": "1-2", "dates": "11/20/2026"}]
+    r = solve(_inp(teams, locals_=locals_), *NOV, time_limit_s=10)
+    loc = r.assignments[r.assignments["kind"] == "Local"]
+    assert date(2026, 11, 10) not in set(loc["date"])            # cancelled
+    assert date(2026, 11, 17) in set(loc["date"])               # still runs other weeks
+    assert set(loc[loc["date"] == date(2026, 11, 20)]["court"]) == {1, 2}  # the one extra session
+
+
+def test_hs_boys_keep_their_courts_from_530_to_720():
+    teams = [{"team": f"{a} {c}", "club": "Boys", "age": a, "head_coach": f"B{a}{c}"}
+             for a in (15, 16, 17, 18) for c in ("Black", "Green")]
+    teams += [{"team": f"{a}-G{i}", "club": "Girls", "age": a} for a in (15, 16, 17) for i in range(2)]
+    r = solve(_inp(teams), *NOV, time_limit_s=20)
+    a = r.assignments
+    pr = a[a["kind"] == "Practice"]
+    boys = {t["team"] for t in teams if t["club"] == "Boys"}
+    changes = 0
+    for (d, c), g in pr[pr["slot"].isin(["5:30", "7:20"])].groupby(["date", "court"]):
+        kinds = {s: set(g[g["slot"] == s]["name"].isin(boys)) for s in ("5:30", "7:20")}
+        if kinds["5:30"] and kinds["7:20"] and kinds["5:30"] != kinds["7:20"]:
+            changes += 1
+    assert changes == r.metrics["net_changes"]
+    assert changes <= 2
+
+
+def test_coach_stays_on_court_for_back_to_back_teams():
+    # (Girls then HS boys would need a net change, which outranks this.)
+    teams = [{"team": "16-Ana", "club": "Girls", "age": 16, "head_coach": "Ana"},
+             {"team": "18-Ana", "club": "Girls", "age": 18, "head_coach": "Ana"}]
+    wish = [{"team": "16-Ana", "choice": 1, "days": "Mon, Wed", "times": "5:30"},
+            {"team": "18-Ana", "choice": 1, "days": "Mon, Wed", "times": "7:20"}]
+    r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    for d, g in pr.groupby("date"):
+        if set(g["slot"]) == {"5:30", "7:20"}:
+            assert g["court"].nunique() == 1, g
+
+
+def test_privates_conflicts_and_export():
+    from openpyxl import load_workbook
+    from scheduler import privates as pv
+    teams = [{"team": "16-Bea", "age": 16, "head_coach": "Bea"}]
+    r = solve(_inp(teams), *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"].iloc[0]
+    df = pd.DataFrame([
+        {"coach": "Bea", "date": f"{pr['date']:%m/%d/%Y}", "time": "6:00 PM", "court": "P", "type": "Personal"},
+        {"coach": "Cal", "date": f"{pr['date']:%m/%d/%Y}", "time": "6:00 PM", "court": str(int(pr["court"])),
+         "type": "Team", "team": "16-Bea"},
+        {"coach": "Cal", "date": "11/30/2026", "time": "9:00 AM", "court": "", "type": "Personal", "player": "Jo"}],
+        columns=COLUMNS["Privates"])
+    privs, problems = pv.rows(df, 2026)
+    assert not problems and len(privs) == 3 and privs[-1]["court"] == 8
+    flags = pv.conflicts(privs, r.assignments)
+    if pr["slot"] == "5:30":   # practice runs 5:30-7:20, so 6 PM overlaps
+        assert any("coaches 16-Bea" in x for x in flags[0])
+        assert any("has 16-Bea" in x for x in flags[1])
+    assert 2 not in flags
+    wb = load_workbook(io.BytesIO(pv.to_excel(privs, ["Bea", "Cal", "Dee"], flags)))
+    assert {"Coaches", "All privates", "Bea", "Cal"} <= set(wb.sheetnames)
+    names = [row[0].value for row in wb["Coaches"].iter_rows(min_row=2)]
+    assert "Dee" in names                                         # coaches with none are listed too
+    assert pv.parse_start("4pm") == 16 * 60 and pv.parse_start("4:30") == 16 * 60 + 30
+
+
+def test_calendar_lists_local_courts_and_weeks_print():
+    from scheduler.views import month_calendar_html, weeks_print_html
+    teams = [{"team": "16-Bea", "age": 16}]
+    locals_ = [{"program": "G HS L", "days": "Tue", "time": "5:30", "courts": "1-4"}]
+    r = solve(_inp(teams, locals_=locals_), *NOV, time_limit_s=10)
+    cal = month_calendar_html(r.assignments, *NOV, include_locals=True)
+    assert "G HS L · Ct 1-4" in cal
+    page = weeks_print_html(r.assignments, *NOV, title="Test")
+    assert page.count('class="cs-week"') == 5   # Nov 1, 8, 15, 22, 29
+    assert "break-after: page" in page

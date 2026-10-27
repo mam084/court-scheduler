@@ -13,7 +13,10 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from .config import ALL_COURTS, COURTS, DAYS, court_name, court_short, SLOT_KEYS, SLOTS, WEEK_ORDER, WEEKDAY_KEYS, WEEKDAYS, slots_overlap, week_start
+from .config import (
+    ALL_COURTS, COURTS, DAYS, PRACTICE_COURT, SLOT_KEYS, SLOT_TIMES, SLOTS, WEEK_ORDER, WEEKDAY_KEYS, WEEKDAYS,
+    blocked_by_local_tournament, court_name, court_short, slots_overlap, week_start,
+)
 
 # Age group -> (background, text).
 AGE_COLORS = {
@@ -67,6 +70,11 @@ CSS = """
 .cs-open { border: 1px dashed #B7BECB; border-radius: 6px; padding: 2px 6px; margin: 0 0 4px 0; color: #8A93A5;
            font-size: 11.5px; line-height: 1.25; background: transparent; }
 .cs-open .cs-time { font-weight: 600; }
+.cs-tag { display: inline-block; font-size: 10.5px; font-weight: 700; border-radius: 4px; padding: 0 4px;
+          margin-top: 2px; background: #FDE68A; color: #6B4A00; }
+.cs-tag.cs-xtra { background: #E0E7FF; color: #3730A3; }
+.cs-chip.cs-priv { background: #F5EEFF; color: #4C1D95; border-left-color: #8B5CF6; padding: 2px 5px; }
+.cs-chip.cs-priv span { font-size: 11px; }
 .cs-grid tr.cs-pc td { background: #F6F3EC; }
 .cs-grid tr.cs-pc td.cs-daycell { background: #EDE6D6; color: #5A4A2A; border-top: 3px solid #1F2A44; }
 .cs-grid tr.cs-pc td:not(.cs-daycell) { border-top: 3px solid #1F2A44; }
@@ -125,17 +133,71 @@ def _chip(r, stripes, highlight=None, compact=False) -> str:
         name = '<span class="cs-pin" title="set by hand">●</span> ' + name
     coaches = " · ".join(c.strip() for c in str(r.get("coach") or "").split(";") if c.strip())
     style = f"background:{bg};color:{fg};border-left-color:{stripe}"
+    paired = _text(r.get("paired"))
+    extra = r.get("extra") == True  # noqa: E712
     title = f"{r['slot_label']} · {coaches}" + ("" if "cs-moved" not in cls else " · moved from usual time") \
-        + (" · placed by hand" if r.get("pinned") == True else "")  # noqa: E712
+        + (" · placed by hand" if r.get("pinned") == True else "") \
+        + (" · extra practice" if extra else "") + (f" · {paired}" if paired else "")  # noqa: E712
+    tags = ""
+    if paired:
+        tags += f'<span class="cs-tag" title="{html.escape(paired)}">Paired · 3 on 2</span> '
+    if extra:
+        tags += '<span class="cs-tag cs-xtra">Extra</span>'
     if compact:
-        court = f" · Ct {r['court']}" if not is_local else ""
+        if is_local:
+            cts = _text(r.get("courts_text"))
+            court = f" · Ct {html.escape(cts)}" if cts else ""
+        else:
+            court = f" · Ct {court_short(r['court'])}"
+        small = (" · paired" if paired else "") + (" · extra" if extra else "")
         return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
-                f'<span class="cs-time">{r["slot"]}</span> {name}{court}</div>')
+                f'<span class="cs-time">{r["slot"]}</span> {name}{court}{small}</div>')
     if is_local:
         return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
                 f'<span class="cs-time">{r["slot"]}</span> {name}</div>')
     return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
-            f'<b><span class="cs-time">{r["slot"]}</span> {name}</b><span>{html.escape(coaches)}</span></div>')
+            f'<b><span class="cs-time">{r["slot"]}</span> {name}</b><span>{html.escape(coaches)}</span>'
+            + (f"<div>{tags}</div>" if tags else "") + '</div>')
+
+
+def _text(v) -> str:
+    """'' for blank / NaN / None, else the text."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    v = str(v).strip()
+    return "" if v.lower() in ("nan", "none") else v
+
+
+def _minutes(slot: str) -> int:
+    h, m = SLOT_TIMES[slot][0]
+    return h * 60 + m
+
+
+def _minutes_end(slot: str) -> int:
+    h, m = SLOT_TIMES[slot][1]
+    return h * 60 + m
+
+
+def courts_label(courts) -> str:
+    """[1, 2, 3, 8] -> '1-3, P'."""
+    nums = sorted({int(c) for c in courts if pd.notna(c)})
+    parts, run = [], []
+    for c in nums + [None]:
+        if c is not None and c != PRACTICE_COURT and run and c == run[-1] + 1:
+            run.append(c)
+            continue
+        if run:
+            parts.append(court_short(run[0]) if len(run) == 1 else f"{run[0]}-{run[-1]}")
+        run = [c] if c is not None else []
+    return ", ".join(parts)
+
+
+def _private_chip(p) -> str:
+    who = html.escape(str(p["coach"]))
+    what = html.escape(p.get("what") or "")
+    title = f"Private {p['time']}–{p['end_label']} · {p['coach']}" + (f" · {p['what']}" if p.get("what") else "")
+    return (f'<div class="cs-chip cs-priv" title="{html.escape(title)}"><span class="cs-time">{html.escape(p["time"])}</span>'
+            f' Private · {who}' + (f'<br><span>{what}</span>' if what else "") + "</div>")
 
 
 def _tourn_chip(tn, compact=False) -> str:
@@ -143,8 +205,11 @@ def _tourn_chip(tn, compact=False) -> str:
     extra = ""
     if tn.kind == "travel" and not compact:
         extra = f"<span style='font-weight:400'> · {html.escape(', '.join(tn.teams))}</span>"
+    if tn.kind == "local":
+        extra = "<span style='font-weight:400'> · until 7 PM" + ("" if compact else f", Ct {courts_label(tn.courts)}") \
+                + "</span>"
     span = f"{tn.start:%a %-m/%-d}" + ("" if not tn.multi_day else f"–{tn.end:%a %-m/%-d}")
-    title = f"{tn.name} ({'local, ' + ', '.join(court_name(c) for c in tn.courts) if tn.kind == 'local' else 'travel'}) {span}"
+    title = f"{tn.name} ({'local until 7 PM, ' + ', '.join(court_name(c) for c in tn.courts) if tn.kind == 'local' else 'travel'}) {span}"
     return f'<div class="cs-chip {cls}" title="{html.escape(title)}">{html.escape(tn.label())}{extra}</div>'
 
 
@@ -157,13 +222,15 @@ def court_grid_html(
     tournaments: list | None = None,
     weekend_dates=None,
     open_slots: dict | None = None,
+    privates: list | None = None,
 ) -> str:
     """Club layout: courts as rows, days as columns (always Sun–Sat),
     practices listed with their times in each box. `day_dates` is an ordered
     {day: date} for a specific week (date.min = outside the period); None
     shows the recurring weekly template. Weekend days not in `weekend_dates`
     are shown as not open. `open_slots` ({day: {slot: courts}}, from
-    open_slot_map) adds an "Open" box for every free practice time."""
+    open_slot_map) adds an "Open" box for every free practice time.
+    `privates`: rows from privates.display_rows for this week."""
     closures = closures or {}
     stripes = stripes or club_stripes(bookings["club"] if "club" in bookings else [])
     cols = list(day_dates) if day_dates else list(WEEK_ORDER)
@@ -184,9 +251,7 @@ def court_grid_html(
             for tn in tournaments:
                 if not tn.covers(d):
                     continue
-                if tn.kind == "local" and set(COURTS) <= set(tn.courts):
-                    blocked[wd] = html.escape(tn.label())
-                elif tn.kind == "local":
+                if tn.kind == "local":  # until 7 PM: 7:20 practices still show
                     partial.setdefault(wd, []).append(tn)
                 elif tn not in notes:
                     notes.append(tn)
@@ -209,7 +274,7 @@ def court_grid_html(
     for i, c in enumerate(ALL_COURTS):
         pc = c not in COURTS
         out.append(f'<tr{" class=cs-pc" if pc else ""}><td class="cs-daycell">{court_name(c)}'
-                   + ('<br><small style="font-weight:400">programs only</small>' if pc else "") + "</td>")
+                   + ('<br><small style="font-weight:400">programs &amp; privates</small>' if pc else "") + "</td>")
         court_rows = bookings[bookings["court"] == c] if len(bookings) else bookings
         for wd in cols:
             if wd in blocked:
@@ -221,11 +286,15 @@ def court_grid_html(
             chips = "".join(_tourn_chip(tn, compact=True) for tn in tn_here)
             items = []
             if len(cell):
-                items += [(SLOT_KEYS.index(r["slot"]), _chip(r, stripes, highlight)) for _, r in cell.iterrows()]
-            if open_slots and not tn_here:
+                items += [(_minutes(r["slot"]), _chip(r, stripes, highlight)) for _, r in cell.iterrows()]
+            here_pv = [pv for pv in (privates or []) if pv["day"] == wd and pv["court"] == c]
+            for pv in here_pv:
+                items.append((pv["start"] + 0.25, _private_chip(pv)))
+            if open_slots:
                 taken = list(cell["slot"]) if len(cell) else []
                 free = [sl for sl, cs in (open_slots.get(wd) or {}).items()
-                        if c in cs and not any(slots_overlap(sl, x) for x in taken)]
+                        if c in cs and not any(slots_overlap(sl, x) for x in taken)
+                        and not any(pv["start"] < _minutes_end(sl) and _minutes(sl) < pv["end"] for pv in here_pv)]
                 for run in _runs(free):
                     a_, b_ = run[0], run[-1]
                     if len(run) == 1:
@@ -233,7 +302,7 @@ def court_grid_html(
                     else:  # back-to-back weekend blocks read as one span: "9AM–1PM Open"
                         tip = f"{SLOTS[a_].split('–')[0]}–{SLOTS[b_].split('–')[-1]}"
                         txt = f"{a_}–{WEEKEND_ENDS.get(b_, b_)}"
-                    items.append((SLOT_KEYS.index(a_) + 0.5,
+                    items.append((_minutes(a_) + 0.5,
                                   f'<div class="cs-open" title="Court {c} is free {html.escape(tip)}">'
                                   f'<span class="cs-time">{txt}</span> Open</div>'))
             chips += "".join(h for _, h in sorted(items, key=lambda x: x[0]))
@@ -278,12 +347,15 @@ def open_slot_map(day_dates: dict | None, data, closures: dict | None = None) ->
             slots, courts = data.weekends[d].blocks, set(data.weekends[d].courts) & set(COURTS)
         else:
             continue
+        per = {s: set(courts) for s in slots}
         if data is not None:
             for tn in data.tournaments:
-                if tn.kind == "local" and tn.covers(d):
-                    courts -= set(tn.courts)
-        if courts:
-            out[wd] = {s: set(courts) for s in slots}
+                for s in slots:
+                    if tn.kind == "local" and tn.covers(d) and blocked_by_local_tournament(s):
+                        per[s] -= set(tn.courts)
+        per = {s: cs for s, cs in per.items() if cs}
+        if per:
+            out[wd] = per
     return out
 
 
@@ -309,6 +381,7 @@ def legend_html(ages, stripes: dict, show_moved: bool = True) -> str:
                      'Moved / makeup</div>')
     items.append('<div class="cs-chip" style="background:#fff;color:#1F2A44;border-left-color:#fff">'
                  '<span class="cs-pin">●</span> Set by hand</div>')
+    items.append('<span class="cs-tag">Paired · 3 on 2</span><span class="cs-tag cs-xtra">Extra</span>')
     return CSS + '<div class="cs-legend">' + "".join(items) + "</div>"
 
 
@@ -329,7 +402,12 @@ def month_calendar_html(
     stripes = club_stripes(assignments["club"]) if "club" in assignments else {}
     df = assignments if include_locals else assignments[assignments["kind"] == "Practice"]
     if include_locals and len(df):
-        df = df.drop_duplicates(subset=["date", "slot", "name"])  # one chip per local, not per court
+        # One chip per local, not per court, listing the courts it uses.
+        loc = df["kind"] == "Local"
+        if loc.any():
+            cts = df[loc].groupby(["date", "slot", "name"])["court"].agg(courts_label).rename("courts_text")
+            df = df.merge(cts, left_on=["date", "slot", "name"], right_index=True, how="left")
+        df = df.drop_duplicates(subset=["date", "slot", "name"])
     if highlight and len(df):
         df = df[df.apply(lambda r: _hit(r, highlight), axis=1)]
     by_date = {d: g for d, g in df.groupby("date")} if len(df) else {}
@@ -416,9 +494,13 @@ def practice_counts_html(counts: pd.DataFrame, highlight: set[str] | None = None
 .cs-counts td.cs-short2 { background:#F8B4B4; color:#7F1212; text-align:center; font-weight:700; }
 .cs-counts td.cs-none { background:#F4F5F7; color:#8A93A3; text-align:center; }
 .cs-counts td { height: 28px; vertical-align: middle; }
-.cs-counts td.cs-team { text-align:left; font-weight:600; background:#EEF1F6; color:#1F2A44; }
+.cs-counts td.cs-team { text-align:left; font-weight:600; background:#EEF1F6; color:#1F2A44;
+                        position: sticky; left: 0; z-index: 1; }
+.cs-counts-wrap { max-height: 70vh; overflow: auto; border: 1px solid #C9CED8; border-radius: 6px; }
+.cs-counts thead th { position: sticky; top: 0; z-index: 2; }
+.cs-counts thead th:first-child { left: 0; z-index: 3; }
 .cs-counts tr.cs-hl td.cs-team { outline: 2px solid #1F4E99; outline-offset:-2px; }
-</style>""", '<div class="cs-wrap"><table class="cs-grid cs-counts" style="min-width:0"><thead><tr><th class="cs-day" style="width:150px">Team</th>']
+</style>""", '<div class="cs-counts-wrap"><table class="cs-grid cs-counts" style="min-width:0;border-collapse:separate;border-spacing:0"><thead><tr><th class="cs-day" style="width:150px">Team</th>']
     out += [f"<th>Week of {w:%b %-d}</th>" for w in weeks]
     out.append("</tr></thead><tbody>")
     for tm in teams:
@@ -480,4 +562,73 @@ h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 17px; margin: 18px 0
 <div class="cs-sub">Dashed outline = a makeup or a practice off the team's usual day/time.</div>
 <div class="cs-tip">To print or save as PDF: press Ctrl/Cmd + P. Each month prints on its own landscape page.</div>
 {''.join(parts)}
+</body></html>"""
+
+
+def weeks_print_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,
+                     highlight: set[str] | None = None, tournaments: list | None = None, weekend_dates=None,
+                     title: str = "Court schedule", privates: list | None = None, show_moved: bool = False) -> str:
+    """Every week of the court view on one standalone page, each week on
+    its own landscape page when printed (or saved as PDF)."""
+    a = assignments if show_moved else assignments.assign(on_pattern=True)
+    stripes = club_stripes(a["club"]) if "club" in a else {}
+    ages = a.loc[a["kind"] == "Practice", "age"] if len(a) else []
+    parts = []
+    ws = week_start(start)
+    while ws <= end:
+        dd = week_dates(ws, start, end, weekend_dates or [])
+        book = a[a["date"].map(week_start) == ws] if len(a) else a
+        pv = [p for p in (privates or []) if week_start(p["date"]) == ws]
+        parts.append(f'<section class="cs-week"><h2>Week of {ws:%b %-d, %Y}</h2>'
+                     + court_grid_html(book, dd, closures, highlight, stripes, tournaments, weekend_dates,
+                                       privates=pv) + "</section>")
+        ws += timedelta(days=7)
+    who = f" · {html.escape(', '.join(sorted(highlight)))}" if highlight else ""
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(title)}</title>
+<style>
+body {{ font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; color: #1f2a44; background: #fff; }}
+h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 16px; margin: 18px 0 6px; }}
+.cs-sub {{ color: #5b6475; font-size: 13px; margin-bottom: 8px; }}
+.cs-tip {{ background: #eef1f6; border-radius: 6px; padding: 8px 12px; font-size: 13px; }}
+@media print {{
+  body {{ margin: 6mm; }} .cs-tip, .cs-legend-top, .cs-sub {{ display: none; }} h1 {{ font-size: 14px; }}
+  .cs-week {{ break-after: page; }} .cs-week:last-child {{ break-after: auto; }}
+  .cs-week h2 {{ margin-top: 0; }}
+  .cs-grid {{ min-width: 0 !important; font-size: 10px !important; }}
+  .cs-grid td {{ height: auto !important; padding: 2px !important; }}
+  .cs-chip b {{ font-size: 10px !important; }} .cs-chip span, .cs-open {{ font-size: 9px !important; }}
+  .cs-wrap {{ overflow: visible !important; }}
+  * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+  @page {{ size: landscape; }}
+}}
+</style></head><body>
+<h1>{html.escape(title)}</h1>
+<div class="cs-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y}{who}</div>
+<div class="cs-tip">To print or save as PDF: press Ctrl/Cmd + P. Each week prints on its own landscape page.</div>
+<div class="cs-legend-top">{legend_html(ages, stripes, show_moved)}</div>
+{''.join(parts)}
+<script>
+// Shrink any week taller than a landscape page so each week prints on one page.
+function fitWeeks() {{
+  var pageH = 7.6 * 96, pageW = 10.3 * 96;
+  document.querySelectorAll('.cs-week').forEach(function (s, i) {{
+    s.style.zoom = 1; s.style.width = pageW + 'px';
+    var top = i === 0 && window.matchMedia('print').matches ? s.offsetTop : 0;
+    var z = 1;
+    for (var k = 0; k < 4; k++) {{  // a shrunk week gets wider (fewer wrapped lines), then re-fits
+      s.style.width = (pageW / z) + 'px';
+      z = Math.min(1, (pageH - top) / s.scrollHeight);
+    }}
+    s.style.width = (pageW / z) + 'px';
+    s.style.zoom = z.toFixed(3);
+  }});
+}}
+window.addEventListener('load', fitWeeks);
+window.addEventListener('beforeprint', fitWeeks);
+window.addEventListener('afterprint', function () {{
+  document.querySelectorAll('.cs-week').forEach(function (s) {{ s.style.zoom = 1; s.style.width = ''; }});
+}});
+</script>
 </body></html>"""

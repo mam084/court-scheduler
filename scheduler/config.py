@@ -131,7 +131,44 @@ SLOT_TIMES = {
     "7PM": ((19, 0), (21, 0)),
 }
 
-PRACTICES_PER_WEEK = 2
+PRACTICES_PER_WEEK = 2   # default; a team can ask for more (Teams `practices` column)
+MAX_PRACTICES_PER_WEEK = 5
+
+# Local tournaments hosted here run until 7 PM: they take their courts (and
+# their coaches) only for timeslots that start before then, so 7:20 practices
+# and the 7-9 PM weekend block still happen.
+LOCAL_TOURNAMENT_END = (19, 0)
+
+
+def blocked_by_local_tournament(slot: str) -> bool:
+    return SLOT_TIMES[slot][0] < LOCAL_TOURNAMENT_END
+
+
+def back_to_back(a: str, b: str) -> bool:
+    """Slot b starts right when slot a ends (5:30 -> 7:20, JumpStart 4:30 -> 5:30, 9AM -> 11AM)."""
+    return SLOT_TIMES[a][1] == SLOT_TIMES[b][0]
+
+
+# High school boys (15s-18s): their nets are higher, so a court that has HS
+# boys at 5:30 ideally has HS boys at 7:20 too (no net change).
+HS_BOYS_MIN_AGE = 15
+
+
+def is_boys_club(club) -> bool:
+    low = str(club or "").lower()
+    return "boy" in low or "seaside" in low
+
+
+def is_hs_boys(club, age) -> bool:
+    try:
+        return is_boys_club(club) and int(age) >= HS_BOYS_MIN_AGE
+    except (TypeError, ValueError):
+        return False
+
+
+# Privates: 1-hour sessions, starting on the half hour.
+PRIVATE_MINUTES = 60
+PRIVATE_STARTS = [f"{h % 12 or 12}:{m:02d} {'AM' if h < 12 else 'PM'}" for h in range(6, 22) for m in (0, 30)]
 
 # ---------------------------------------------------------------------------
 # Hard age rules
@@ -170,6 +207,9 @@ WEIGHTS = {
     #    losing a team's 2nd practice of a week costs 4x more, so shortfalls
     #    get spread.
     "missed_practice": 150000,
+    # A team's 3rd (4th...) practice of a week, for teams that asked for more
+    # than 2: given whenever there's room without breaking rules 2-6.
+    "missed_extra": 3000,
     # (Required weekends are a note for coaches, not a rule.)
     "weekend_required": 0,
     # 2. No practice the day before / after a travel tournament; a late one
@@ -190,6 +230,10 @@ WEIGHTS = {
     #    An assistant on two teams at once costs the same.
     "locals_sub": 4000,
     "assistant_conflict": 4000,
+    # 6b. Pairing: 3 teams sharing 2 courts, per extra team. Only when it's
+    #    that or breaking a no-date / missing a practice; a weekend practice,
+    #    an open court or a sub for a program all come first.
+    "pairing": 6000,
     # 7. Weekday before weekend: a weekend practice only when the weekdays
     #    can't take it (two weekday practices, even doubled up, win).
     "weekend": 1500,
@@ -226,6 +270,14 @@ WEIGHTS = {
     # stability: reward for keeping a practice where the last published (or
     # last built) schedule had it, and its court
     "keep_previous": 15,
+    # HS boys (15s-18s) at 5:30 and 7:20 on the same courts, so no net change
+    # is needed. Stage 1 (days/times): per net change that can't be avoided
+    # by courts alone. Stage 2 (courts): per court whose net has to change.
+    "net_change": 14,
+    "net_change_court": 80,
+    # Stage 2: a coach with back-to-back sessions (two teams, or a program
+    # then a team) stays on the same court. Less important than nets.
+    "coach_stay": 25,
     "keep_court": 4,
     # each weekend 2-hour block opened (teams share blocks)
     "weekend_block": 7,

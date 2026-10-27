@@ -2,7 +2,7 @@
 
 Auto-schedules a volleyball club's team practices across 7 courts for any date range (say Nov 3 – Dec 4), shows the result in the club's own court layout, and saves each schedule so the club can come back to it.
 
-Each team practices twice a week on one of courts 1–7 (the club's practice court is for programs and privates only, never team practices): weekdays in one of three timeslots (3:45–5:30, 5:30–7:20, 7:20–9:10), or on open weekend days in 2-hour blocks (9 AM–9 PM). Locals programs are blocked off first, no-dates are respected, coaches running two teams get them back-to-back, and the schedule stays the same week to week wherever possible. It handles a girls side and a boys side sharing the same courts and coaches, local and travel tournaments, and a court quality ranking.
+Each team practices twice a week (or as many times as it asks for) on one of courts 1–7 (the club's practice court is for programs and privates only, never team practices): weekdays in one of three timeslots (3:45–5:30, 5:30–7:20, 7:20–9:10), or on open weekend days in 2-hour blocks (9 AM–9 PM). Locals programs are blocked off first, no-dates are respected, coaches running two teams get them back-to-back, and the schedule stays the same week to week wherever possible. It handles a girls side and a boys side sharing the same courts and coaches, local and travel tournaments, and a court quality ranking.
 
 ![Court view](docs/court_view.png)
 
@@ -18,35 +18,36 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 **Hard rules (never broken)**
 
 - On-site locals block their courts; off-site programs block only their coaches
-- One team per court per timeslot
-- A head coach is never on two teams at once, or on a team during a local tournament they run
+- One team per court per timeslot, except pairing (3 teams on 2 courts), which is a last resort (below)
+- A head coach is never on two teams at once, or on a team during a local tournament they work
 - Nothing on closure days, before a team's season start, or where a practice was removed by hand
-- At most two practices a week per team
+- At most the team's weekly number of practices (2 unless it asked for more), plus any extra practices added by hand
 - Only 14s and under practice at 3:45, and 14s and under never practice at 7:20 (unless the team is marked `late_ok`, and then only when needed)
 - Weekends: only open dates and blocks, only a team's allowed weekend options, and never one team alone in a block
-- Local tournaments take their courts (all by default) for the whole day, plus the coaches of their locals program
+- Local tournaments take their courts (all by default) until 7 PM, plus the coaches working them (listed, and their locals program's). 7:20 practices and the 7–9 PM weekend block still happen
 - Teams at a travel tournament don't practice on tournament days
-- At most one practice per team per day, and two per week (weeks run Sunday–Saturday)
+- At most one practice per team per day (weeks run Sunday–Saturday)
 - JumpStart programs (3:30–4:30, 4:30–5:30) block 3:45 practices on their courts and for their coaches
 - The weekly template obeys the same rules, so it can be read as a real week
 
 **The club's rule order** (weights in [`scheduler/config.py`](scheduler/config.py); each rule outweighs several breaks of the one below it)
 
-1. **Every team gets its 2 practices a week.** Older teams win if courts run out, and shortfalls are spread so teams keep at least 1.
+1. **Every team gets its 2 practices a week.** Older teams win if courts run out, and shortfalls are spread so teams keep at least 1. A team that asked for more (Teams `practices` column, or **Practices per week** in Edit practices) gets its 3rd+ wherever there's room without breaking rules 2–6.
 2. **No practice the day before or after a travel tournament** (a late one the night before is worse). The week leading in gets priority for 2 practices.
 3. **The team's own no-dates.**
 4. **The head coach's no-dates/times** (worse when no assistant is free to run practice).
 5. **An assistant's no-dates/times** (the head coach runs practice). Put the assistant's own name in the Availability `who` column; a team row whose note names an assistant gets a reminder.
 6. **A coach who works a locals program then** (head or assistant): the practice can still happen, flagged *Needs a sub: possible if Matthew gets a sub for B 14 L*, so a sub is asked for before any no-date is broken. An assistant on two teams at once costs the same.
+   - **Pairing** (3 teams sharing 2 courts) comes right after: only when every court is taken and the alternative is breaking a no-date or missing a practice. A weekend practice, an open court or a sub for a program all come first. Paired practices are flagged at the top of the page and in Review, and tagged *Paired · 3 on 2* on the court view.
 7. **Weekdays before weekends.** Two weekday practices, even doubled up, beat a weekend plus a weekday.
 8. **Preferred days** (wishlist days, days marked not preferred).
 9. **Preferred times** (wishlist times, times marked not preferred, 3:45 a bit more; weekend AM/PM).
 10. **No Saturday then Sunday** (always flagged).
 11. **One weekend practice per team per week.**
 12. **No back-to-back days** (days a team asked for, e.g. Tue/Wed, are fine).
-13. **Everything else:** age/timeslot fit and sharing 3:45 around, the 14s 7:20 exception, the same weekly schedule, keeping the published schedule, weekend teams sharing blocks, coach double-ups, courts.
+13. **Everything else:** age/timeslot fit and sharing 3:45 around, the 14s 7:20 exception, the same weekly schedule, keeping the published schedule, weekend teams sharing blocks, coach double-ups, courts. When possible, **HS boys (15s–18s) at 5:30 and 7:20 share courts** so no net change is needed, and (less important) **a coach with back-to-back sessions stays on the same court**.
 
-Every broken no-date, needed sub and Sat→Sun is flagged at the top of the page and in the Review tab. Required weekends on the Weekends sheet are a note for coaches, not a rule.
+Every broken no-date, needed sub, pairing and Sat→Sun is flagged at the top of the page and in the Review tab, and so is any coach booked to work a local tournament while coaching a team at a travel tournament. Required weekends on the Weekends sheet are a note for coaches, not a rule.
 
 | Detail | Notes |
 |---|---|
@@ -73,17 +74,18 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 - **Try it:** the landing page has a one-click simulated club (10 teams, 4 programs, no-dates, wishlists, a travel tournament and a pecking order) so the whole app can be explored without real data.
 - **Saved schedules:** create a schedule (name, dates, then upload the club spreadsheet or try the simulated club). Everything saves automatically: inputs, programs and tournaments you add, edits, dates, and the latest solved schedule. Refreshing or reopening the page's link (`?project=…`) picks up where you left off, and the **Schedule** menu lists every saved schedule.
 
-- **Court view:** courts as rows and days as columns (Sunday–Saturday), with each practice, its time and its coaches in the box, and a dashed **Open** box for every free court time. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
+- **Court view:** courts as rows and days as columns (Sunday–Saturday), with each practice, its time and its coaches in the box, privates, and a dashed **Open** box for every free court time. **Printable weeks** downloads every week on one page, each week printing on its own landscape page. Colors show age group, and a stripe shows the club. You can view the recurring weekly template or any specific week, including open weekends, makeups and closures. You can also highlight a club, team or coach.
 - **Suggest a preference:** in Edit practices, tell the scheduler what a team would rather have ("Tue 7:20, 1st choice") or rather not have ("not Tue 3:45"). It's added to the Wishlist or as a "Not preferred" row and weighed against everyone else's requests, so it's kept when it fits. Each team's preferences are listed there and can be removed.
-- **Edit practices:** move, remove or add a single practice, or set a team's usual days. Removing one can find a makeup or cancel it outright. Hand-set practices show a ● (set by hand) and are kept on every rebuild, with everything else fitted around them. If changes can't all happen (court taken, coach double-booked), the app says why and undoes the change. The full list is in the **Overrides** sheet and can be undone there.
-- **Calendar:** a month view, filterable by club, team or coach. Download what's shown as a **Google Calendar file** (.ics, for one team, coach, club or everyone), a **printable calendar** (one month per landscape page; print or save as PDF), or an **Excel calendar** in the club's own layout (a block per week, each day with time · what · courts, courts kept as text so `5-7` never turns into a date). The full Excel export includes the calendar too.
-- **Tournaments:** add a local tournament (dates, courts, locals program) or a travel tournament (dates, club, age groups, then trim the list of teams going). It shows on the court view, calendar and Excel export, and the schedule is rebuilt around it.
-- **Programs:** add or edit a program (name, Girls/Boys side, days, every week or start/end dates, timeslots including JumpStart 3:30–4:30 and 4:30–5:30, courts, coaches, on/off-site). Editing lets you drop a single court when sign-ups are low. It's blocked off on the courts and calendar right away, with the practice schedule rebuilt around it. Girls programs show in blue, boys programs in green.
+- **Edit practices:** move, remove or add a single practice (an added one can be an **extra**, on top of the week's practices), set a team's usual days, or change how many practices a week it gets. Removing one can find a makeup or cancel it outright. Hand-set practices show a ● (set by hand) and are kept on every rebuild, with everything else fitted around them. If changes can't all happen (court taken, coach double-booked), the app says why and undoes the change. The full list is in the **Overrides** sheet and can be undone there.
+- **Calendar:** a month view, filterable by club, team or coach. Programs list the courts they use (*G HS L · Ct 1-4*). Download what's shown as a **Google Calendar file** (.ics, for one team, coach, club or everyone), a **printable calendar** (one month per landscape page; print or save as PDF), or an **Excel calendar** in the club's own layout (a block per week, each day with time · what · courts, courts kept as text so `5-7` never turns into a date). The full Excel export includes the calendar too.
+- **Tournaments:** add a local tournament (dates, courts, locals program, coaches working it; it runs until 7 PM) or a travel tournament (dates, club, age groups, then trim the list of teams going). It shows on the court view, calendar and Excel export, and the schedule is rebuilt around it.
+- **Programs:** add or edit a program (name, Girls/Boys side, days, every week or start/end dates, timeslots including JumpStart 3:30–4:30 and 4:30–5:30, courts, coaches, on/off-site). Editing lets you drop a single court when sign-ups are low, and **Add or cancel one session** adds a single extra session or cancels one date (and brings it back) without touching the rest of the program. It's blocked off on the courts and calendar right away, with the practice schedule rebuilt around it. Girls programs show in blue, boys programs in green.
 - **Pecking order:** the club's team ranking (`16-3` = third 16s team; boys and girls can share a rank), shown top to bottom and editable in place. **Import** it from any spreadsheet with a Rank and a Team column: teams are matched by name (`18-Black` = `18 Black`) or by age + head coach (`16-D&D` → `16-Danielle & Darci`), ranks Excel turned into dates (`12-1` → Dec 1) are read back, mismatches can be fixed in a dropdown, and the sheet's assistant coaches can update the app's (TBA = nobody). Downloadable as Excel.
-- **Coaches:** each coach's head and assistant teams, locals, no-dates and full schedule, plus an `.ics` download for Google Calendar. Coaches who aren't on a team yet (e.g. ones who only work programs) can be added to the roster here.
-- **Importing a spreadsheet** (new schedule or *Replace data*) keeps the locals programs and tournaments you already have, so they don't need to be in every spreadsheet. A new schedule takes them from a saved schedule you pick (the newest by default); *Replace data* keeps the open schedule's unless you tick *Also replace programs and tournaments*. An empty or missing sheet never wipes them.
+- **Privates:** book 1-hour private lessons (coach, date, start time, court: the practice court by default), toggled **Team** (for one of the club's teams) or **Personal**. Each is checked against the schedule, so a court or coach that's busy then is flagged before and after booking. Privates show on the weekly court view. **Download every coach's privates** gives a spreadsheet with every coach and their team / personal counts, one list of all privates, and a sheet per coach.
+- **Coaches:** each coach's head and assistant teams, locals, no-dates, privates and full schedule, plus an `.ics` download for Google Calendar. Coaches who aren't on a team yet (e.g. ones who only work programs) can be added to the roster here.
+- **Importing a spreadsheet** (new schedule or *Replace data*) keeps the locals programs, tournaments and privates you already have, so they don't need to be in every spreadsheet. A new schedule takes them from a saved schedule you pick (the newest by default); *Replace data* keeps the open schedule's unless you tick *Also replace programs and tournaments*. An empty or missing sheet never wipes them.
 - **Publish:** mark the schedule as sent to coaches. Rebuilds then keep practices where they were, and this page lists every practice that moved, appeared, disappeared or changed court since a published version, with the reason (a new no-date, a program on the court, a tournament…). Downloadable as CSV. **Restore this version** makes an older version the current schedule again, rebuilt around the current inputs: anything that can't happen any more is left out with a note, and restored practices that now break a rule are flagged on Review.
-- **Review:** everything that differs from the ideal schedule, with the reason, plus a per-team count of the less-wanted spots (Court 2, 3:45, weekends, makeups, back-to-back days) for this schedule or every published version.
+- **Review:** the practices-per-week grid (its title row stays put while you scroll), everything that differs from the ideal schedule, with the reason, plus a per-team count of the less-wanted spots (Court 2, 3:45, weekends, makeups, back-to-back days) for this schedule or every published version.
 - **Inputs:** edit any table in place and re-run.
 - **Exports:** an Excel workbook in the club's grid layout (template, one sheet per week, all bookings, review).
 
@@ -108,15 +110,16 @@ One `.xlsx` with these sheets. Download a filled-in example from the app's sideb
 
 | Sheet | Columns |
 |---|---|
-| Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`), `late_ok` (`Yes` lets a 14s-and-under team practice at 7:20 when needed), `rank` (pecking order within the age group: `16-3` or `3`; blank = from the name, "Black" 1 and "Green" 2; files using the older `level` column still work) |
+| Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`), `late_ok` (`Yes` lets a 14s-and-under team practice at 7:20 when needed), `rank` (pecking order within the age group: `16-3` or `3`; blank = from the name, "Black" 1 and "Green" 2; files using the older `level` column still work), `practices` (a week; blank = 2) |
 | Availability | one row per rule: `who` (team or coach), `type` (`No` or `Not preferred`), `days` (`Mon`, `Weekdays`), `dates` (`11/10-11/16`), `times` (`5:30`, `3:45`), `note` |
 | Wishlist | `team`, `choice` (1 or 2), `days` (`Tue, Thu`; blank = any), `times` (`5:30, 7:20`) |
-| Locals | `program`, `side` (`Girls` / `Boys`; blank = guessed from a name like "G HS L"), `days` (`Tue, Thu`), `time` (`5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend `9AM-1PM`), `courts` (`1-4`, `P` = practice court; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional, e.g. `11/02/2026-12/18/2026`) |
+| Locals | `program`, `side` (`Girls` / `Boys`; blank = guessed from a name like "G HS L"), `days` (`Tue, Thu`), `time` (`5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend `9AM-1PM`), `courts` (`1-4`, `P` = practice court; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional, e.g. `11/02/2026-12/18/2026`), `skip` (single dates it doesn't run, e.g. `11/12; 11/26`). A one-off extra session is its own row with one date |
 | Coaches | `coach`, `email`, `phone`, `note`: roster for coaches who aren't on a team yet |
 | Weekends | `date`, `open` (`9AM-9PM`), `courts`, `group` + `required` (days in a required group: at least one gets used) |
 | Closures | `date`, `reason` |
-| Overrides | hand edits: `team`, `action` (`Add`, `Remove`, `Cancel`, `Usual`), `date`, `days` (Usual: `Tue, Thu`), `time`, `court` (optional) |
-| Tournaments | `name`, `type` (`Local` or `Travel`), `start_date`, `end_date`, `club`, `ages` (`15-16`, `14U`), `teams` (optional: overrides club + ages), `program` (local: its coaches are busy), `courts` (local; blank = all) |
+| Overrides | hand edits: `team`, `action` (`Add`, `Extra`, `Remove`, `Cancel`, `Usual`), `date`, `days` (Usual: `Tue, Thu`), `time`, `court` (optional) |
+| Tournaments | `name`, `type` (`Local` or `Travel`), `start_date`, `end_date`, `club`, `ages` (`15-16`, `14U`), `teams` (optional: overrides club + ages), `program` (local: its coaches are busy), `courts` (local; blank = all), `coaches` (local: who's working it) |
+| Privates | `coach`, `date`, `time` (start, e.g. `4:00 PM`; 1-hour sessions), `court` (`P` = practice court, the default, or 1–7), `type` (`Team` / `Personal`), `team`, `player`, `note` |
 
 Every field is forgiving: `Tuesdays and Thursdays`, `Tue/Thu`, `530pm` and `Nov 15-16` all work.
 
@@ -147,6 +150,7 @@ scheduler/
   storage.py            saved schedules (SQLite or Postgres via DATABASE_URL)
   changes.py            published versions, what changed, per-team burden counts
   pecking.py            read a pecking-order sheet and match it to the teams
+  privates.py           private lessons: reading, conflict checks, per-coach spreadsheet
 tests/                  hard-rule and parsing tests
 ```
 

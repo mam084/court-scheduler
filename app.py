@@ -22,11 +22,15 @@ for _mod in [m for m in list(sys.modules) if m == "scheduler" or m.startswith("s
     del sys.modules[_mod]
 
 from scheduler import ScheduleInput, clean, month_range, simulate, solve
-from scheduler.config import ALL_COURTS, COURTS, DAYS, court_name, court_short, PROGRAM_KEYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS
+from scheduler.config import (
+    ALL_COURTS, COURTS, DAYS, MAX_PRACTICES_PER_WEEK, PRACTICE_COURT, PRACTICES_PER_WEEK, PRIVATE_STARTS, PROGRAM_KEYS,
+    SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS, court_name, court_short,
+)
 from scheduler.data import (
     ATTRS, COLUMNS, blank, empty, keep_programs, parse_courts, parse_date_ranges, parse_days, parse_names, parse_rank,
-    parse_times, program_side,
+    parse_times, program_side, span_text, tournament_conflicts,
 )
+from scheduler import privates as pv
 from scheduler import pecking as pk
 from scheduler.export import calendar_excel, calendar_ics, to_excel, to_ics
 from scheduler.solver import week_start
@@ -34,7 +38,7 @@ from scheduler.changes import add_version, burden, diff, pattern_of, practices_o
 from scheduler.storage import Store, database_url, make_payload, new_id, read_payload, read_published
 from scheduler.views import (
     calendar_print_html, club_stripes, court_grid_html, legend_html, month_calendar_html, open_slot_map, practice_counts_html,
-    range_label, short_list_text, week_dates,
+    range_label, short_list_text, week_dates, weeks_print_html,
 )
 
 st.set_page_config(page_title="Court Scheduler", layout="wide")
@@ -332,11 +336,18 @@ if st.session_state.get("project_id") is None:
     st.stop()
 
 inp: ScheduleInput = st.session_state.inp
-for _sheet, _attr in (("Tournaments", "tournaments"), ("Coaches", "coaches"), ("Overrides", "overrides")):
+for _sheet, _attr in (("Tournaments", "tournaments"), ("Coaches", "coaches"), ("Overrides", "overrides"),
+                      ("Privates", "privates")):
     if not isinstance(getattr(inp, _attr, None), pd.DataFrame):  # schedules saved before these sheets existed
         setattr(inp, _attr, empty(_sheet))
-if "side" not in inp.locals.columns:
-    inp.locals["side"] = ""
+for _sheet, _attr in (("Locals", "locals"), ("Teams", "teams"), ("Tournaments", "tournaments"),
+                      ("Privates", "privates")):
+    _df = getattr(inp, _attr)
+    for _c in COLUMNS[_sheet]:  # columns added since a schedule was saved; text, so edits can write into them
+        if _c not in _df.columns:
+            _df[_c] = ""
+        elif _df[_c].dtype != object:
+            _df[_c] = _df[_c].astype(object)
 st.session_state.setdefault("keep_prev", True)
 st.session_state.setdefault("show_moved", False)
 st.session_state.setdefault("published", [])
@@ -405,6 +416,12 @@ try:
 except ValueError as e:
     st.error(str(e))
     cleaned, closures = None, {}
+privs, priv_problems = pv.rows(inp.privates, start.year)
+t_conflicts = tournament_conflicts(cleaned.teams, cleaned.tournaments) if cleaned else []
+if t_conflicts:
+    st.error("**Tournament conflict:** " + "; ".join(
+        f"{c['coach']} is working {c['local']} and coaching {', '.join(c['teams'])} at {c['travel']} "
+        f"({span_text(c['start'], c['end'])})" for c in t_conflicts), icon="🚩")
 
 if result is None:
     st.info("Press **Auto-schedule** in the sidebar to build the schedule for these dates. "
@@ -442,6 +459,12 @@ else:
         lines = [f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}" for r in satsun.itertuples()]
         st.warning(f"**{plural(len(satsun), 'team')} practice{'s' if len(satsun) == 1 else ''} Saturday then Sunday**, the only way to avoid a missed "
                    "practice or a head coach's no-date:\n" + "\n".join(lines), icon="⚠️")
+    pair = iss[iss["issue"].astype(str).str.startswith("Paired:")] if len(iss) else iss
+    if len(pair):
+        pair = pair.assign(_o=pair["issue"].map(lambda x: x.split(": ", 1)[-1])).sort_values(["week_of", "_o"])
+        lines = [f"- **{r.issue.split(': ', 1)[-1]}** · {r.detail.split(';')[0]}: {r.team}" for r in pair.itertuples()]
+        st.warning(f"**{plural(len(pair), 'timeslot')} had to pair teams (3 teams on 2 courts)**, the only way to keep "
+                   "those practices without breaking a no-date:\n" + "\n".join(lines), icon="⚠️")
     asst = iss[iss["issue"].astype(str).str.startswith("Assistant no-date broken")] if len(iss) else iss
     if len(asst):
         with st.expander(f"{plural(len(asst), 'practice')} without an assistant who marked a no-date"):
@@ -464,12 +487,13 @@ if "flash" in st.session_state:
 # Navigation. Only the chosen section is built on each click (tabs would
 # build every section every time), and the choice is remembered, so saving a
 # program or removing something keeps you where you were.
-VIEWS = ["Court view", "Calendar", "Edit practices", "Programs", "Tournaments",
+VIEWS = ["Court view", "Calendar", "Edit practices", "Programs", "Tournaments", "Privates",
          "Coaches", "Pecking order", "Publish", "Review", "Inputs"]
 if st.session_state.get("nav") not in VIEWS:
     st.session_state.nav = VIEWS[0]
 VIEW = st.radio("Section", VIEWS, key="nav", horizontal=True, label_visibility="collapsed")
-TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_COACH, TAB_PECK, TAB_PUB, TAB_REVIEW, TAB_INPUTS = VIEWS
+(TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_PRIV, TAB_COACH, TAB_PECK, TAB_PUB, TAB_REVIEW,
+ TAB_INPUTS) = VIEWS
 
 
 def template_locals(a: pd.DataFrame) -> pd.DataFrame:
@@ -506,11 +530,16 @@ if VIEW == TAB_COURT:
                             help="The template is each team's usual weekday slot; weeks show the actual dates, "
                                  "including weekends, makeups and closures.")
         hl = set(c2.multiselect("Highlight a club, team or coach", people_options(a)))
-        t1, t2 = st.columns(2)
+        t1, t2, t3 = st.columns(3)
         show_open = t1.toggle("Show open court times", value=True, key="show_open",
                               help="A dashed “Open” box marks every free practice time on each court.")
         show_moved = t2.toggle("Outline moved practices", key="show_moved",
                                help="Outline makeups and practices that aren't on the team's usual day or time.")
+        show_priv = t3.toggle("Show privates", value=True, key="show_priv",
+                              help="Private lessons booked in the Privates tab (weeks only).")
+        week_privs = privs if show_priv else []
+        if hl and week_privs:
+            week_privs = [p for p in week_privs if p["coach"] in hl or p["team"] in hl]
         if not show_moved:
             a = a.assign(on_pattern=True)
         if published:
@@ -538,10 +567,21 @@ if VIEW == TAB_COURT:
             book = a[a["date"].map(week_start) == ws]
             st.markdown(court_grid_html(book, dd, closures, hl or None, stripes, result.tournaments,
                                         result.weekend_dates,
-                                        open_slots=open_slot_map(dd, cleaned) if show_open else None),
+                                        open_slots=open_slot_map(dd, cleaned) if show_open else None,
+                                        privates=[p for p in week_privs if week_start(p["date"]) == ws]),
                         unsafe_allow_html=True)
 
-        st.download_button("Download schedule (Excel)", lambda: to_excel(result, closures), f"schedule_{start:%Y%m%d}-{end:%Y%m%d}.xlsx")
+        d1, d2 = st.columns(2)
+        d1.download_button("Download schedule (Excel)", lambda: to_excel(result, closures),
+                           f"schedule_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", width="stretch")
+        d2.download_button("Printable weeks (every week)",
+                           lambda: weeks_print_html(a, start, end, closures, hl or None, result.tournaments,
+                                                    result.weekend_dates,
+                                                    f"{st.session_state.get('project_name') or 'Court schedule'}",
+                                                    week_privs, show_moved).encode(),
+                           f"court_weeks_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html", width="stretch",
+                           help="Every week's court view in one page, each week on its own landscape page. "
+                                "Open it in your browser, then print or save as PDF.")
 
 # ------------------------------------------------------------ calendar --
 if VIEW == TAB_CAL:
@@ -591,7 +631,7 @@ def without_pin(ov: pd.DataFrame, team: str, d: date, slot: str) -> pd.DataFrame
     if ov.empty:
         return ov
     ds = pd.to_datetime(ov["date"].astype(str), errors="coerce").dt.date
-    hit = ((ov["team"] == team) & ov["action"].astype(str).str.strip().str.lower().eq("add")
+    hit = ((ov["team"] == team) & ov["action"].astype(str).str.strip().str.lower().isin(["add", "extra"])
            & (ds == d) & (ov["time"].astype(str).str.strip() == slot))
     return ov[~hit].reset_index(drop=True)
 
@@ -617,6 +657,7 @@ if VIEW == TAB_EDIT:
                     "and fits everything else around them. Practices you place are marked “set by hand”.")
         team_names = [t.name for t in cleaned.teams]
         e_team = st.selectbox("Team", team_names, key="ed_team")
+        e_per_week = next((t.per_week for t in cleaned.teams if t.name == e_team), PRACTICES_PER_WEEK)
         a = result.assignments
         tp = a[(a["kind"] == "Practice") & (a["name"] == e_team)].copy()
         if len(tp):
@@ -626,22 +667,26 @@ if VIEW == TAB_EDIT:
         usual_txt = ", ".join(f"{r.day} {r.slot}" for r in usual_rows.itertuples()) or "none"
         _hc = "home_court" if "home_court" in usual_rows.columns else "court"  # schedules saved before home_court
         home = f" · home Court {usual_rows[_hc].iloc[0]}" if len(usual_rows) else ""
-        st.caption(f"Usual days: **{usual_txt}**{home}")
+        st.caption(f"Usual days: **{usual_txt}**{home} · **{plural(e_per_week, 'practice')} a week**")
 
         c_left, c_right = st.columns([3, 2])
         with c_left:
             st.markdown("**Practices**")
             if len(tp):
+                _flag = lambda col: (tp[col] if col in tp else pd.Series(False, index=tp.index)).map(  # noqa: E731
+                    lambda v: "Yes" if v == True else "")  # noqa: E712
                 st.dataframe(pd.DataFrame({
                     "Date": tp["date"].map(lambda d: f"{d:%a %b %-d}"), "Time": tp["slot_label"],
-                    "Court": tp["court"], "Set by hand": tp.get("pinned", False).map(lambda v: "Yes" if v == True else ""),  # noqa: E712
+                    "Court": tp["court"], "Set by hand": _flag("pinned"), "Extra": _flag("extra"),
+                    "Paired": (tp["paired"] if "paired" in tp else pd.Series("", index=tp.index)).fillna(""),
                 }), hide_index=True, width="stretch", height=min(420, 38 + 35 * len(tp)))
             else:
                 st.caption("No practices in this schedule.")
 
         with c_right:
             mode = st.radio("What do you want to do?", ["Suggest a preference", "Move a practice", "Remove a practice",
-                                                        "Add a practice", "Set usual days"], key="ed_mode",
+                                                        "Add a practice", "Set usual days", "Practices per week"],
+                            key="ed_mode",
                             help="A preference is weighed against everyone else's and kept when possible. "
                                  "The other options pin a practice exactly where you put it.")
             labels = [f"{r.date:%a %b %-d} · {r.slot_label} · Court {r.court}" for r in tp.itertuples()]
@@ -745,14 +790,36 @@ if VIEW == TAB_EDIT:
                 as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1, key="ed_as")
                 ac = st.selectbox("Court", ["Any"] + COURTS, key="ed_ac",
                                   format_func=lambda c: "Any open court" if c == "Any" else f"Court {c}")
-                st.caption("A team gets at most 2 practices a week, so the scheduler may drop another one that week.")
+                how_add = st.radio("This practice is", [f"Extra (on top of the week's {e_per_week})",
+                                                        "Instead of one of the week's practices"], key="ed_add_how",
+                                   help="Extra: the team keeps its usual practices and gets this one too. "
+                                        "Instead: the scheduler drops another practice that week to make room.")
+                extra = how_add.startswith("Extra")
                 if st.button("Add it", type="primary", width="stretch"):
-                    apply_overrides([{"team": e_team, "action": "Add", "date": f"{ad:%m/%d/%Y}", "days": "",
-                                      "time": as_, "court": "" if ac == "Any" else str(ac), "note": "added by hand"}],
-                                    f"Added a practice for {e_team} on {ad:%a %b %-d} at {as_}.")
+                    apply_overrides([{"team": e_team, "action": "Extra" if extra else "Add", "date": f"{ad:%m/%d/%Y}",
+                                      "days": "", "time": as_, "court": "" if ac == "Any" else str(ac),
+                                      "note": "extra practice" if extra else "added by hand"}],
+                                    f"Added {'an extra' if extra else 'a'} practice for {e_team} on {ad:%a %b %-d} at {as_}.")
+            elif mode == "Practices per week":
+                st.caption("For a team that wants more (or fewer) practices every week. The scheduler gives the "
+                           "first two the usual priority; a 3rd or more is added wherever there's room without "
+                           "breaking anyone's no-dates. For a single extra practice, use **Add a practice**.")
+                n_pw = st.number_input("Practices a week", 1, MAX_PRACTICES_PER_WEEK, value=e_per_week,
+                                       key=f"ed_pw_{e_team}")
+                if st.button("Save", type="primary", width="stretch", disabled=n_pw == e_per_week):
+                    t = inp.teams.copy()
+                    t["practices"] = t["practices"].astype(object) if "practices" in t.columns else ""
+                    t.loc[t["team"].astype(str).str.strip() == e_team, "practices"] = (
+                        "" if n_pw == PRACTICES_PER_WEEK else str(int(n_pw)))
+                    inp.teams = t
+                    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+                    st.session_state.resolve = True
+                    st.session_state.flash = f"{e_team} now has {plural(int(n_pw), 'practice')} a week. Schedule rebuilt."
+                    st.rerun()
             else:
-                ud = st.multiselect("Days (pick 2)", WEEKDAYS, max_selections=2, key=f"ed_ud_{e_team}",
-                                    default=[r.day for r in usual_rows.itertuples()][:2])
+                n_ud = min(e_per_week, len(WEEKDAYS))
+                ud = st.multiselect(f"Days (pick {n_ud})", WEEKDAYS, max_selections=n_ud, key=f"ed_ud_{e_team}",
+                                    default=[r.day for r in usual_rows.itertuples()][:n_ud])
                 us = st.selectbox("Time", WEEKDAY_KEYS, format_func=lambda k: SLOTS[k], key=f"ed_us_{e_team}",
                                   index=WEEKDAY_KEYS.index(usual_rows["slot"].iloc[0])
                                   if len(usual_rows) and usual_rows["slot"].iloc[0] in WEEKDAY_KEYS else 1)
@@ -957,6 +1024,72 @@ if VIEW == TAB_PROG:
                         st.session_state.flash = done_msg(f"Updated {new_row['program']}")
                         st.rerun()
 
+    # ---- one session more or less
+    if not inp.locals.empty and cleaned is not None:
+        st.subheader("Add or cancel one session")
+        st.caption("For a single week: cancel one session (e.g. a holiday or low sign-ups) or add one extra. "
+                   "The rest of the program stays as it is.")
+        prog_names = list(dict.fromkeys(str(n).strip() for n in inp.locals["program"] if not blank(n)))
+        c1, c2 = st.columns([2, 1])
+        one_prog = c1.selectbox("Program", prog_names, key=f"one_prog_{ver}")
+        one_mode = c2.radio("Change", ["Cancel one session", "Add one session"], key=f"one_mode_{ver}",
+                            horizontal=True)
+        rows_of = inp.locals.index[inp.locals["program"].astype(str).str.strip() == one_prog].tolist()
+        lps = [lp for lp in cleaned.locals if lp.name == one_prog]
+        if one_mode == "Cancel one session":
+            run_dates = sorted({d for d in pd.date_range(start, end).date for lp in lps if lp.runs_on(d)
+                                and d not in closures})
+            if not run_dates:
+                st.caption(f"{one_prog} has no sessions left in these dates.")
+            else:
+                c_day = st.selectbox("Session", run_dates, format_func=lambda d: f"{d:%a %b %-d}", key=f"one_cancel_{ver}")
+                if st.button("Cancel this session", type="primary", key=f"one_cancel_btn_{ver}"):
+                    nl = inp.locals.copy()
+                    nl["skip"] = nl["skip"].astype(object) if "skip" in nl.columns else ""
+                    for i in rows_of:
+                        if DAYS[c_day.weekday()] in parse_days(nl.at[i, "days"]):
+                            old = "" if blank(nl.at[i, "skip"]) else str(nl.at[i, "skip"]).strip()
+                            nl.at[i, "skip"] = "; ".join(x for x in (old, f"{c_day:%m/%d/%Y}") if x)
+                    if try_locals(nl, "cancel that session"):
+                        st.session_state.flash = done_msg(f"Cancelled {one_prog} on {c_day:%a %b %-d}")
+                        st.rerun()
+        else:
+            dv = program_defaults(inp.locals.fillna("").loc[rows_of[0]].to_dict()) if rows_of else program_defaults(None)
+            c1, c2, c3 = st.columns(3)
+            a_day = c1.date_input("Date", value=start, min_value=start, max_value=end, format="MM/DD/YYYY",
+                                  key=f"one_add_day_{ver}")
+            wkend = a_day.weekday() >= 5
+            t_opts = [t for t in SLOT_CHOICES if (t in WEEKEND_KEYS) == wkend]
+            a_times = c2.multiselect("Time", t_opts, default=[t for t in dv["times"] if t in t_opts],
+                                     format_func=slot_label, key=f"one_add_t_{ver}_{wkend}")
+            a_courts = c3.multiselect("Courts", ALL_COURTS, default=[c for c in dv["courts"] if c in ALL_COURTS],
+                                      format_func=court_name, key=f"one_add_c_{ver}")
+            if st.button("Add this session", type="primary", disabled=not a_times, key=f"one_add_btn_{ver}"):
+                base = inp.locals.fillna("").loc[rows_of[0]].to_dict() if rows_of else {}
+                row = {c: base.get(c, "") for c in COLUMNS["Locals"]}
+                row.update({"days": DAYS[a_day.weekday()], "time": ", ".join(sorted(a_times, key=SLOT_KEYS.index)),
+                            "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(a_courts)) or "TBD",
+                            "dates": f"{a_day:%m/%d/%Y}", "skip": ""})
+                if try_locals(pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True), "add that session"):
+                    st.session_state.flash = done_msg(f"Added a {one_prog} session on {a_day:%a %b %-d}")
+                    st.rerun()
+        skipped = [(i, d) for i in rows_of if "skip" in inp.locals.columns and not blank(inp.locals.at[i, "skip"])
+                   for d in str(inp.locals.at[i, "skip"]).split(";") if d.strip()]
+        if skipped:
+            labels_sk = {f"{i}|{d.strip()}": f"{d.strip()} ({inp.locals.at[i, 'days']})" for i, d in skipped}
+            undo_sk = st.multiselect(f"Cancelled {one_prog} sessions · pick any to bring back", list(labels_sk),
+                                     format_func=lambda k: labels_sk[k], key=f"one_undo_{ver}")
+            if st.button("Bring back", disabled=not undo_sk, key=f"one_undo_btn_{ver}"):
+                nl = inp.locals.copy()
+                for k in undo_sk:
+                    i, d = k.split("|", 1)
+                    i = int(i)
+                    nl.at[i, "skip"] = "; ".join(x.strip() for x in str(nl.at[i, "skip"]).split(";")
+                                                 if x.strip() and x.strip() != d)
+                if try_locals(nl, "bring those sessions back"):
+                    st.session_state.flash = done_msg(f"Brought back {plural(len(undo_sk), 'session')} of {one_prog}")
+                    st.rerun()
+
     # ---- add a program
     st.subheader("Add a program")
     clicked, v = program_form("add_program", program_defaults(None), ["Add program"])
@@ -979,12 +1112,13 @@ if VIEW == TAB_PROG:
         view["side"] = [program_side(s, n) or "Other" for s, n in zip(view["side"], view["program"])]
         st.dataframe(view.rename(columns={"program": "Program", "side": "Side", "days": "Days", "time": "Time",
                                           "courts": "Courts", "coaches": "Coaches", "on_site": "On site",
-                                          "dates": "Dates"}),
+                                          "dates": "Dates", "skip": "Cancelled"}),
                      hide_index=True, width="stretch")
 
 # --------------------------------------------------------- tournaments --
 if VIEW == TAB_TOURN:
-    st.markdown("**Local** tournaments are hosted here and take over courts for the whole day. "
+    st.markdown("**Local** tournaments are hosted here and take over their courts until 7 PM (7:20 practices still "
+                "happen), along with the coaches working them. "
                 "**Travel** tournaments don't use our courts, but the teams going can't practice those days, "
                 "avoid the days right before and after, and get priority for their two practices that week.")
     team_list = cleaned.teams if cleaned else []
@@ -1005,6 +1139,13 @@ if VIEW == TAB_TOURN:
                                   help="Its coaches are blocked for the day.")
             t_courts = c2.multiselect("Courts used", ALL_COURTS, default=COURTS, key="t_courts",
                                       format_func=court_name)
+            prog_coaches = sorted({c for lp in (cleaned.locals if cleaned else []) if lp.name == t_prog
+                                   for c in lp.coaches})
+            t_coaches = st.multiselect("Coaches working it", cleaned.coaches if cleaned else [],
+                                       default=[c for c in prog_coaches if cleaned and c in cleaned.coaches],
+                                       key=f"t_coaches_{t_prog}",
+                                       help="Busy until 7 PM that day. A coach also going to a travel tournament "
+                                            "then gets flagged.")
             t_club, t_ages, t_teams = "", [], []
         else:
             c1, c2 = st.columns(2)
@@ -1015,7 +1156,7 @@ if VIEW == TAB_TOURN:
             t_teams = st.multiselect("Teams going", [t.name for t in team_list], default=match,
                                      key=f"t_teams_{t_club}_{'-'.join(map(str, t_ages))}",
                                      help="Filled in from the club and ages; remove teams that aren't going.")
-            t_prog, t_courts = "(none)", []
+            t_prog, t_courts, t_coaches = "(none)", [], []
         add_t = st.button("Add tournament", type="primary")
 
     if add_t:
@@ -1037,7 +1178,7 @@ if VIEW == TAB_TOURN:
                    "ages": ", ".join(map(str, t_ages)), "teams": ", ".join(t_teams),
                    "program": "" if t_prog == "(none)" else t_prog,
                    "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(t_courts))
-                   if t_kind == "Local" else "", "note": ""}
+                   if t_kind == "Local" else "", "coaches": "; ".join(t_coaches), "note": ""}
             inp.tournaments = pd.concat([inp.tournaments, pd.DataFrame([row])], ignore_index=True)
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
             st.session_state.resolve = True
@@ -1047,12 +1188,17 @@ if VIEW == TAB_TOURN:
             st.rerun()
 
     st.subheader("Tournaments")
+    if t_conflicts:
+        for c in t_conflicts:
+            st.error(f"🚩 **{c['coach']}** is working **{c['local']}** (local) and coaching "
+                     f"**{', '.join(c['teams'])}** at **{c['travel']}** (travel), {span_text(c['start'], c['end'])}. "
+                     "Find another coach for one of them.")
     if inp.tournaments.empty:
         st.caption("None yet.")
     else:
         tv = inp.tournaments.copy().fillna("")
         tv.index = [f"{r['name']} · {r['type']} · {r['start_date']}" for _, r in tv.iterrows()]
-        st.dataframe(tv[["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts"]]
+        st.dataframe(tv[["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts", "coaches"]]
                      .rename(columns=lambda c: c.replace("_", " ").title()), hide_index=True, width="stretch")
         c1, c2 = st.columns([3, 1])
         drop_t = c1.multiselect("Remove tournaments", list(tv.index), placeholder="Choose tournaments to remove")
@@ -1063,6 +1209,90 @@ if VIEW == TAB_TOURN:
             st.session_state.resolve = True
             st.session_state.flash = f"Removed {plural(len(drop_t), 'tournament')}. Schedule rebuilt."
             st.rerun()
+
+# ------------------------------------------------------------ privates --
+if VIEW == TAB_PRIV:
+    st.markdown("Book **private lessons** as 1-hour sessions. Each one is checked against the schedule, so a court "
+                "or coach that's already busy then is flagged. Privates show on the weekly court view.")
+    coach_opts = cleaned.coaches if cleaned else sorted({p["coach"] for p in privs})
+    a_now = result.assignments if result is not None else None
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([2, 1, 1])
+        p_coach = c1.selectbox("Coach", coach_opts + ["Someone else…"], key="pv_coach",
+                               index=None, placeholder="Choose a coach")
+        if p_coach == "Someone else…":
+            p_coach = c1.text_input("Coach name", key="pv_coach_new").strip() or None
+        p_date = c2.date_input("Date", value=start, format="MM/DD/YYYY", key="pv_date")
+        p_time = c3.selectbox("Start", PRIVATE_STARTS, index=PRIVATE_STARTS.index("4:00 PM"), key="pv_time",
+                              help="Privates are 1 hour.")
+        p_start = pv.parse_start(p_time)
+        free = pv.free_courts(p_date, p_start, a_now, privs, ALL_COURTS)
+        c1, c2, c3 = st.columns([1, 1, 2])
+        p_team_private = c1.toggle("Team private", key="pv_is_team",
+                                   help="On: a private for one of the club's teams. Off: a personal (non-team) private.")
+        court_opts = [PRACTICE_COURT] + [c for c in COURTS]
+        p_court = c2.selectbox("Court", court_opts, key="pv_court",
+                               format_func=lambda c: court_name(c) + ("" if c in free else " (taken)"))
+        my_teams = [t.name for t in cleaned.teams if p_coach in t.staff] if cleaned and p_coach else []
+        all_teams = [t.name for t in cleaned.teams] if cleaned else []
+        if p_team_private:
+            p_team = c3.selectbox("Team", my_teams + [t for t in all_teams if t not in my_teams], key="pv_team")
+        else:
+            p_team = ""
+            c3.caption("Personal private (not for a team).")
+        c1, c2 = st.columns(2)
+        p_player = c1.text_input("Player(s) (optional)", key="pv_player")
+        p_note = c2.text_input("Note (optional)", key="pv_note")
+        trial = {"row": -1, "coach": p_coach or "", "date": p_date, "day": DAYS[p_date.weekday()], "start": p_start,
+                 "end": p_start + 60, "time": p_time, "end_label": pv.clock(p_start + 60), "court": p_court,
+                 "type": "Team" if p_team_private else "Personal", "team": p_team, "player": p_player, "note": p_note,
+                 "what": ""}
+        clash = pv.conflicts(privs + [trial], a_now, closures).get(-1, []) if p_coach else []
+        if clash:
+            st.warning("Heads up: " + "; ".join(clash) + ".")
+        if st.button("Book private", type="primary", disabled=not p_coach):
+            row = {"coach": p_coach, "date": f"{p_date:%m/%d/%Y}", "time": p_time, "court": court_short(p_court),
+                   "type": trial["type"], "team": p_team, "player": p_player.strip(), "note": p_note.strip()}
+            inp.privates = pd.concat([inp.privates, pd.DataFrame([row])], ignore_index=True)
+            st.session_state.flash = (f"Booked a {trial['type'].lower()} private: {p_coach}, {p_date:%a %b %-d} "
+                                      f"{p_time}, {court_name(p_court)}" + (" (flagged: " + "; ".join(clash) + ")" if clash else "") + ".")
+            st.rerun()
+
+    for msg in priv_problems:
+        st.error(msg)
+    st.subheader("Privates")
+    if not privs:
+        st.caption("None booked yet.")
+    else:
+        flags = pv.conflicts(privs, a_now, closures)
+        c1, c2, c3 = st.columns([2, 1, 1])
+        who = c1.multiselect("Only show these coaches", sorted({p["coach"] for p in privs}), key="pv_filter")
+        kind = c2.radio("Type", ["All", "Team", "Personal"], horizontal=True, key="pv_kind")
+        only_flag = c3.toggle("Only conflicts", key="pv_only_flag", disabled=not flags)
+        shown = [p for p in privs if (not who or p["coach"] in who) and (kind == "All" or p["type"] == kind)
+                 and (not only_flag or p["row"] in flags)]
+        if flags:
+            st.warning(f"{plural(len(flags), 'private')} {'clashes' if len(flags) == 1 else 'clash'} with the "
+                       "schedule or another private (see the Conflict column).")
+        st.dataframe(pd.DataFrame([{
+            "Coach": p["coach"], "Date": f"{p['date']:%a %b %-d}", "Time": f"{p['time']}–{p['end_label']}",
+            "Court": court_name(p["court"]), "Type": p["type"], "Team": p["team"], "Player": p["player"],
+            "Note": p["note"], "Conflict": "; ".join(flags.get(p["row"], []))} for p in shown]),
+            hide_index=True, width="stretch")
+        lab = {p["row"]: f"{p['coach']} · {p['date']:%a %b %-d} {p['time']} · {court_name(p['court'])}" for p in shown}
+        c1, c2 = st.columns([3, 1])
+        drop = c1.multiselect("Remove privates", list(lab), format_func=lambda i: lab[i], key="pv_drop")
+        if c2.button("Remove", disabled=not drop, width="stretch", key="pv_drop_btn"):
+            inp.privates = inp.privates.reset_index(drop=True).drop(index=drop).reset_index(drop=True)
+            st.session_state.flash = f"Removed {plural(len(drop), 'private')}."
+            st.rerun()
+        n_team = sum(p["type"] == "Team" for p in privs)
+        st.caption(f"{plural(len(privs), 'private')} booked · {n_team} team, {len(privs) - n_team} personal")
+    st.download_button("Download every coach's privates (Excel)",
+                       lambda: pv.to_excel(privs, coach_opts, pv.conflicts(privs, a_now, closures)),
+                       f"privates_{start:%Y%m%d}.xlsx",
+                       help="A Coaches sheet with every coach and their team / personal private counts, one list of "
+                            "all privates, and a sheet per coach.")
 
 # ------------------------------------------------------------- coaches --
 if VIEW == TAB_COACH:
@@ -1126,6 +1356,13 @@ if VIEW == TAB_COACH:
                         "date": "Date", "slot_label": "Time", "court": "Court", "kind": "Type",
                         "name": "Team / Program", "role": "Role"}),
                     hide_index=True, width="stretch")
+                mine_p = [p for p in privs if p["coach"] == coach]
+                if mine_p:
+                    st.markdown(f"**{coach}'s privates** · {plural(len(mine_p), 'session')}")
+                    st.dataframe(pd.DataFrame([{"Date": f"{p['date']:%a %b %-d}", "Time": f"{p['time']}–{p['end_label']}",
+                                                "Court": court_name(p["court"]), "Type": p["type"], "Team": p["team"],
+                                                "Player": p["player"]} for p in mine_p]),
+                                 hide_index=True, width="stretch")
                 st.download_button(f"Add {coach}'s schedule to Google Calendar (.ics)",
                                    lambda: to_ics(result, coach), f"{coach.replace(' ', '_')}_{start:%Y%m%d}-{end:%Y%m%d}.ics",
                                    mime="text/calendar",
@@ -1357,22 +1594,27 @@ if VIEW == TAB_INPUTS:
                  "rank = pecking order within the age group, like `16-3` (easier: the Pecking order tab). "
                  "start_date = first day the team can practice. weekend_only limits weekends to listed options "
                  "(`11/1 AM; 11/8 3PM`); weekend_pref is a soft preference (`AM`, `Sat AM; Sun PM`). "
-                 "late_ok = Yes lets a 14s-and-under team practice at 7:20 (avoided unless needed).",
+                 "late_ok = Yes lets a 14s-and-under team practice at 7:20 (avoided unless needed). "
+                 "practices = practices a week (blank = 2).",
         "Availability": "One row per rule. who = team or coach. type = No (hard) or Not preferred. "
                         "days like `Mon` / `Weekdays`, dates like `11/10-11/16`, times like `5:30` or `3:45` "
                         "(blank = any).",
         "Wishlist": "Ranked day/time wishes. choice 1 or 2. Blank days = any day.",
         "Locals": "Programs. side = Girls / Boys (colors). on_site = No for programs elsewhere (blocks the coach "
                   "only). Times like `5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend `9AM-1PM`. "
-                  "Courts like `1-4`, `P` for the practice court; blank/TBD until known. Easier: use the Programs tab.",
+                  "Courts like `1-4`, `P` for the practice court; blank/TBD until known. skip = single dates it doesn't "
+                  "run (`11/12; 11/26`). Easier: use the Programs tab.",
         "Weekends": "Open weekend days. open like `9AM-9PM`. Days sharing a group with required = Yes mean "
                     "'at least one of these must be used'.",
         "Closures": "Club closed all day.",
         "Coaches": "Coach roster: anyone not on a team yet (e.g. coaches who only work programs), plus contact info.",
         "Overrides": "Manual changes the scheduler always keeps (easier from the Edit practices tab). action = Add "
-                     "(date + time, optional court), Remove (date, optional time; a makeup is found), Cancel "
+                     "(date + time, optional court), Extra (same, on top of the week's practices), Remove (date, optional time; a makeup is found), Cancel "
                      "(no makeup) or Usual (weekdays + time, optional court).",
-        "Tournaments": "type = Local (hosted here: blocks its courts all day; blank courts = all) or Travel "
+        "Privates": "1-hour private lessons (easier: the Privates tab). time = start, like 4:00 PM. court = P "
+                    "(practice court) or 1-7. type = Team or Personal; team = which team, for team privates.",
+        "Tournaments": "type = Local (hosted here: blocks its courts and coaches until 7 PM; blank courts = all; "
+                       "coaches = who's working it) or Travel "
                        "(away: the teams matching club + ages, or the listed teams, can't practice those days "
                        "and avoid the days right before and after). Ages like `15-16` or `14U`.",
     }

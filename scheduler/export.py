@@ -35,8 +35,14 @@ def _cell_text(rows: pd.DataFrame) -> str:
         weekday = r.get("day") in WEEKDAYS
         mark = " *" if r["kind"] == "Practice" and weekday and not r.get("on_pattern", True) else ""
         who = f" ({str(r['coach']).replace('; ', ', ')})" if r["coach"] else ""
-        lines.append(f"{r['slot']} {r['name']}{who}{mark}")
+        tag = " [paired]" if _txt(r.get("paired")) else ""
+        tag += " [extra]" if r.get("extra") == True else ""  # noqa: E712
+        lines.append(f"{r['slot']} {r['name']}{who}{mark}{tag}")
     return "\n".join(lines)
+
+
+def _txt(v) -> str:
+    return "" if v is None or (isinstance(v, float) and pd.isna(v)) or str(v) in ("nan", "None") else str(v)
 
 
 def _grid_sheet(wb, title, bookings, day_labels, closed=None, cols=None):
@@ -96,30 +102,30 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
                 continue
             cols.append(wd)
             labels[wd] = f"{wd}\n{d:%b %-d}"
-            full = [tn for tn in result.tournaments
-                    if tn.kind == "local" and tn.covers(d) and set(COURTS) <= set(tn.courts)]
             if d in closures:
                 closed[wd] = f"Closed: {closures[d]}"
             elif not (result.start <= d <= result.end):
                 closed[wd] = "Outside this schedule period"
-            elif full:
-                closed[wd] = f"Local tournament: {full[0].name}"
             else:
-                trav = [tn.name for tn in result.tournaments if tn.covers(d)]
-                if trav:
-                    labels[wd] += "\n" + "; ".join(trav)
+                here = [tn.name + (" (local, until 7 PM)" if tn.kind == "local" else "")
+                        for tn in result.tournaments if tn.covers(d)]
+                if here:
+                    labels[wd] += "\n" + "; ".join(here)
         _grid_sheet(wb, f"Week of {ws_date:%b %-d}", g, labels, closed, cols)
 
     flat = a.copy()
     flat["date"] = pd.to_datetime(flat["date"]).dt.strftime("%Y-%m-%d")
     flat["court"] = flat["court"].map(court_name)
-    flat = flat[["date", "day", "slot_label", "court", "kind", "name", "club", "coach", "on_pattern"]]
-    flat.columns = ["Date", "Day", "Time", "Court", "Type", "Team / Program", "Club", "Coach(es)", "On usual schedule"]
+    flat["note"] = [("Extra practice. " if e == True else "") + _txt(p)  # noqa: E712
+                    for e, p in zip(flat.get("extra", [None] * len(flat)), flat.get("paired", [None] * len(flat)))]
+    flat = flat[["date", "day", "slot_label", "court", "kind", "name", "club", "coach", "on_pattern", "note"]]
+    flat.columns = ["Date", "Day", "Time", "Court", "Type", "Team / Program", "Club", "Coach(es)", "On usual schedule",
+                    "Note"]
     sh = wb.create_sheet("All Bookings")
     sh.append(list(flat.columns))
     for row in flat.itertuples(index=False):
         sh.append(list(row))
-    for j, w in enumerate([12, 6, 14, 7, 9, 22, 10, 24, 18], start=1):
+    for j, w in enumerate([12, 6, 14, 7, 9, 22, 10, 24, 18, 50], start=1):
         sh.column_dimensions[get_column_letter(j)].width = w
     for c in sh[1]:
         c.font, c.fill = Font(bold=True, color="FFFFFF"), _head
@@ -292,7 +298,7 @@ def _calendar_sheet(wb, result: ScheduleResult, closures: dict, highlight=None, 
                 for tn in result.tournaments:
                     if tn.covers(d) and (not highlight or tn.kind == "local" or set(tn.teams) & set(highlight)):
                         where = _courts_text(tn.courts) if tn.kind == "local" else "away"
-                        items.append(("", tn.name, where, tourn_fill))
+                        items.append(("until 7 PM" if tn.kind == "local" else "", tn.name, where, tourn_fill))
                 if d.weekday() >= 5 and d not in weekend_open and d not in by_date and not items:
                     items.append(("", "Closed", "", _closed))
                 g = by_date.get(d)

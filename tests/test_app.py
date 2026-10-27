@@ -259,3 +259,60 @@ def test_replacing_inputs_keeps_programs(db, tmp_path):
     new.locals = new.locals.iloc[0:0]
     keep_programs(new, at.session_state["inp"])
     assert len(new.locals) == len(before.locals)
+
+
+def _open(db, name, seed):
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, name, seed)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    assert not at.exception
+    return at, pid
+
+
+def test_book_a_private_and_it_saves(db):
+    at, pid = _open(db, "Privates", 10)
+    at.radio(key="nav").set_value("Privates").run()
+    coach = at.selectbox(key="pv_coach").options[0]
+    at.selectbox(key="pv_coach").set_value(coach).run()
+    at.toggle(key="pv_is_team").set_value(True).run()
+    next(b for b in at.button if b.label == "Book private").click().run()
+    assert not at.exception
+    pr = at.session_state["inp"].privates
+    assert len(pr) == 1 and pr.iloc[0]["coach"] == coach and pr.iloc[0]["type"] == "Team"
+    assert pr.iloc[0]["court"] == "P" and pr.iloc[0]["time"] == "4:00 PM"
+    assert len(db.get(pid)["payload"]["inputs"]["Privates"]) == 1
+    assert any("privates" in d.label.lower() for d in at.get("download_button"))
+
+
+def test_add_extra_practice_and_three_a_week(db):
+    at, _ = _open(db, "Extras", 11)
+    at.radio(key="nav").set_value("Edit practices").run()
+    team = at.selectbox(key="ed_team").value
+    at.radio(key="ed_mode").set_value("Add a practice").run()
+    at.date_input(key="ed_ad").set_value(date(2026, 11, 4)).run()   # a Wednesday
+    next(b for b in at.button if b.label == "Add it").click().run()
+    assert not at.exception, at.exception
+    ov = at.session_state["inp"].overrides
+    assert ov.iloc[-1]["action"] == "Extra" and ov.iloc[-1]["team"] == team
+    assert at.session_state["result"].assignments["extra"].fillna(False).any()
+    at.radio(key="ed_mode").set_value("Practices per week").run()
+    at.number_input(key=f"ed_pw_{team}").set_value(3).run()
+    next(b for b in at.button if b.label == "Save").click().run()
+    assert not at.exception
+    t = at.session_state["inp"].teams
+    assert t.loc[t["team"] == team, "practices"].iloc[0] == "3"
+
+
+def test_cancel_one_program_session(db):
+    at, _ = _open(db, "One session", 12)
+    at.radio(key="nav").set_value("Programs").run()
+    prog = next(s for s in at.selectbox if s.key and s.key.startswith("one_prog_")).value
+    d = next(s for s in at.selectbox if s.key and s.key.startswith("one_cancel_")).options[0]
+    next(b for b in at.button if b.label == "Cancel this session").click().run()
+    assert not at.exception, at.exception
+    loc = at.session_state["inp"].locals
+    assert loc[loc["program"] == prog]["skip"].astype(str).str.len().max() > 0
+    a = at.session_state["result"].assignments
+    assert not ((a["kind"] == "Local") & (a["name"] == prog) & (a["date"].map(lambda x: f"{x:%a %b %-d}") == d)).any()

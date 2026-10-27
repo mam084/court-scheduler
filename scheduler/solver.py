@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter, defaultdict
+from itertools import permutations
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -38,9 +39,9 @@ from ortools.sat.python import cp_model
 from .config import week_start as _week_start, day_in_week, slots_overlap
 from .config import (
     COURT_COST, COURT_RANK, COURTS, DAYS, PRACTICES_PER_WEEK, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS,
-    WEIGHTS, is_late_exception, pecking_weights, slot_cost, team_court_weight,
+    WEIGHTS, back_to_back, court_name, is_hs_boys, is_late_exception, pecking_weights, slot_cost, team_court_weight,
 )
-from .data import CleanInput, ScheduleInput, clean
+from .data import CleanInput, ScheduleInput, clean, span_text, tournament_conflicts
 
 
 @dataclass
@@ -119,7 +120,7 @@ def solve(
     def courts_on(d, s):
         base = COURTS if d.weekday() < 5 else [c for c in data.weekends[d].courts if c in COURTS]
         blocked = {c for lp in locals_at(d, s) if lp.on_site for c in lp.courts}
-        blocked |= {c for tn in local_tourn if tn.covers(d) for c in tn.courts}
+        blocked |= {c for tn in local_tourn if tn.blocks(d, s) for c in tn.courts}
         return [c for c in base if c not in blocked]
 
     # Travel tournaments: days a team is away, and the days right around them.
@@ -140,8 +141,8 @@ def solve(
     for d in open_dates:
         weeks[week_start(d)].append(d)
 
-    def week_target(ws):
-        """Practices each team should get that week. A week cut off by the
+    def week_target(ws, per_week=PRACTICES_PER_WEEK):
+        """Practices a team should get that week. A week cut off by the
         schedule's start or end is prorated: 3+ weekdays inside the range
         still count as a full week, 2 weekdays get 1 practice, and a single
         day just follows the usual pattern."""
@@ -149,7 +150,7 @@ def solve(
         inside = sum(start <= d <= end for d in span)
         if not makeup_closures and any(d in data.closures for d in span):
             return 0
-        return PRACTICES_PER_WEEK if inside >= 3 else (1 if inside == 2 else 0)
+        return per_week if inside >= 3 else (min(1, per_week) if inside == 2 else 0)
 
     coach_local = defaultdict(set)  # (d, s) -> coaches working a local then
     coach_prog = defaultdict(set)   # ... a locals program (could get a sub)
@@ -158,8 +159,8 @@ def solve(
         for s in slots_on(d):
             for lp in locals_at(d, s):
                 coach_prog[d, s].update(lp.coaches)
-            for tn in local_tourn:  # running a local tournament: busy all day
-                if tn.covers(d):
+            for tn in local_tourn:  # running a local tournament: busy until 7 PM
+                if tn.blocks(d, s):
                     coach_tourn[d, s].update(tn.coaches)
             coach_local[d, s] = coach_prog[d, s] | coach_tourn[d, s]
 
@@ -209,17 +210,25 @@ def solve(
         heads = [h for t, _ in lst for h in teams[t].heads]
         for h in {h for h in heads if heads.count(h) > 1}:
             problems.append(f"{d:%a %-m/%-d} at {s}: {h} would be coaching two teams at once")
+    # Extras ("Extra" overrides) sit on top of the team's weekly number, so a
+    # coach can add a 3rd practice without losing one of the usual two.
+    extra_keys = {(idx[pn.team], pn.day, pn.slot) for pn in data.pins if pn.extra}
+    extras = defaultdict(int)  # (t, week) -> extra practices placed by hand
     per_week = defaultdict(int)
     for (t, d, s) in pinned:
-        per_week[t, week_start(d)] += 1
+        if (t, d, s) in extra_keys:
+            extras[t, week_start(d)] += 1
+        else:
+            per_week[t, week_start(d)] += 1
     for (t, ws), n in per_week.items():
-        if n > PRACTICES_PER_WEEK:
-            problems.append(f"{teams[t].name}: {n} practices placed by hand in the week of {ws:%b %-d} (max 2)")
+        if n > teams[t].per_week:
+            problems.append(f"{teams[t].name}: {n} practices placed by hand in the week of {ws:%b %-d} (it has "
+                            f"{teams[t].per_week} a week); add the others as extra practices instead")
     if problems:
         raise ValueError("These manual changes can't all happen:\n- " + "\n- ".join(problems))
 
     restored, restore_notes = _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on,
-                                            coach_tourn, rules_for, away)
+                                            coach_tourn, rules_for, away, extras)
 
     # ---------------------------------------------- decision variables --
     # Teams whose 1st-choice wishlist asks for 3:45: no 3:45 cost for them.
@@ -330,13 +339,19 @@ def solve(
         return sum(ys(t, d, s) for s in slots_on(d))
 
     # ---------------------------------------------------- hard rules --
+    pair_vars = {}  # (d, s) -> teams over the court count (each one pairs 3 teams on 2 courts)
     for d in open_dates:
         for s in slots_on(d):
             vs = [y[t, d, s] for t in T if (t, d, s) in y]
             open_courts = courts_on(d, s)
             cap = len(open_courts)
             if len(vs) > cap:
-                m.Add(sum(vs) <= cap)
+                # Pairing: 3 teams can share 2 courts, at most one extra team
+                # per 2 courts, and only as a last resort (WEIGHTS["pairing"]).
+                ext = m.NewIntVar(0, min(cap // 2, len(vs) - cap), f"pair_{d}_{s}")
+                m.Add(sum(vs) <= cap + ext)
+                pair_vars[d, s] = ext
+                obj.append(WEIGHTS["pairing"] * ext)
             # Court quality: the k-th team in a timeslot gets the k-th best open
             # court, so crowding a slot onto bad courts (Court 2) costs more
             # than moving a team to a time with a better court free.
@@ -345,7 +360,8 @@ def solve(
                 cum = [0]
                 for c_ in costs:
                     cum.append(cum[-1] + c_)
-                n = m.NewIntVar(0, len(costs), f"n_{d}_{s}")
+                cum += [cum[-1]] * (len(vs) - len(costs))  # paired teams: the pairing cost covers them
+                n = m.NewIntVar(0, len(vs), f"n_{d}_{s}")
                 m.Add(n == sum(vs))
                 cv = m.NewIntVar(0, cum[-1], f"cc_{d}_{s}")
                 m.AddElement(n, cum, cv)
@@ -380,7 +396,7 @@ def solve(
             if len(vs) > 1:
                 m.AddAtMostOne(vs)
         for ws, wdates in weeks.items():
-            m.Add(sum(y_day(t, d) for d in wdates) <= PRACTICES_PER_WEEK)
+            m.Add(sum(y_day(t, d) for d in wdates) <= teams[t].per_week + extras[t, ws])
 
     # Share of the period's weekdays each team is actually playing (season
     # start dates), used to weigh the weekly template.
@@ -394,8 +410,9 @@ def solve(
          if teams[t].allowed(s)}
     for t in T:
         # Soft so a team with no valid recurring slot can't make the model infeasible.
-        pat_short = m.NewIntVar(0, PRACTICES_PER_WEEK, f"patshort_{t}")
-        m.Add(sum(v for (tt, _, _), v in p.items() if tt == t) + pat_short == PRACTICES_PER_WEEK)
+        n_usual = min(teams[t].per_week, len(WEEKDAYS))
+        pat_short = m.NewIntVar(0, n_usual, f"patshort_{t}")
+        m.Add(sum(v for (tt, _, _), v in p.items() if tt == t) + pat_short == n_usual)
         # A team that only starts at the very end of the range barely uses
         # the template this period, so a short template costs it less than
         # it would cost a team playing all month to lose its usual days.
@@ -518,7 +535,7 @@ def solve(
     for t in T:
         team = teams[t]
         for ws, wdates in weeks.items():
-            week_goal = week_target(ws)
+            week_goal = week_target(ws, team.per_week)
             if not week_goal:
                 continue
             if team.start and team.start > ws + timedelta(days=6):
@@ -526,7 +543,7 @@ def solve(
             # A team whose season starts mid-week still gets the full two
             # practices, as long as at least two open days are left that week.
             days_left = sum(1 for d in wdates if not team.start or d >= team.start)
-            start_cap = min(PRACTICES_PER_WEEK, days_left)
+            start_cap = min(team.per_week, days_left)
             if not any((t, d, s) in y for d in wdates for s in slots_on(d)):
                 if start_cap:
                     no_slot_weeks.append((t, ws, min(week_goal, start_cap)))
@@ -539,15 +556,19 @@ def solve(
             w = WEIGHTS["missed_practice"] * team.priority
             if ws in lead_in_weeks[team.name]:  # get both practices in before a tournament
                 w = int(w * 1.5)
-            s1 = m.NewBoolVar(f"short1_{t}_{ws}")
-            terms = [s1]
-            obj.append(w * s1)
-            if target == 2:
-                s2 = m.NewBoolVar(f"short2_{t}_{ws}")
-                m.Add(s2 <= s1)
-                terms.append(s2)
-                obj.append(4 * w * s2)
-            m.Add(sum(terms) >= target - sum(y_day(t, d) for d in wdates))
+            # short_k = k or more practices missed. Missing the 1st practice of
+            # a week costs 4x missing the 2nd, so shortfalls get spread; a 3rd+
+            # practice (a team that asked for more) is a bonus.
+            terms = []
+            for k in range(1, target + 1):
+                sk = m.NewBoolVar(f"short{k}_{t}_{ws}")
+                if terms:
+                    m.Add(sk <= terms[-1])
+                terms.append(sk)
+                lost = target - k + 1  # which practice of the week this one is
+                obj.append((WEIGHTS["missed_extra"] if lost > 2 else w if (lost == 2 or target == 1) else 4 * w) * sk)
+            # Extra practices placed by hand sit on top: they don't count toward the target.
+            m.Add(sum(terms) >= target - (sum(y_day(t, d) for d in wdates) - extras[t, ws]))
             short_vars[t, ws] = (terms, target)
 
         for d in open_dates:
@@ -644,6 +665,30 @@ def solve(
                         doubles.append(bv)
                         obj.append(-WEIGHTS["double_up"] * bv)
 
+    # High school boys at 5:30 and 7:20 on the same courts (no net change).
+    # Courts are picked in stage 2; here, only the net changes no court
+    # arrangement could avoid are priced: e.g. 3 HS boys teams at 5:30 and
+    # one at 7:20 with every other court full of girls teams means 2 changes.
+    hs_boys = {t for t in T if is_hs_boys(teams[t].club, teams[t].age)}
+    net_vars = []
+    if hs_boys:
+        for d in open_dates:
+            if d.weekday() >= 5:
+                continue
+            ys_a = [(t, y[t, d, "5:30"]) for t in T if (t, d, "5:30") in y]
+            ys_b = [(t, y[t, d, "7:20"]) for t in T if (t, d, "7:20") in y]
+            if not any(t in hs_boys for t, _ in ys_a + ys_b) or not ys_a or not ys_b:
+                continue
+            B_a = sum(v for t, v in ys_a if t in hs_boys)
+            B_b = sum(v for t, v in ys_b if t in hs_boys)
+            N_a, N_b = sum(v for _, v in ys_a), sum(v for _, v in ys_b)
+            cap_a, cap_b = len(courts_on(d, "5:30")), len(courts_on(d, "7:20"))
+            nc = m.NewIntVar(0, len(COURTS), f"net_{d}")
+            m.Add(nc >= B_a - B_b - (cap_b - N_b))
+            m.Add(nc >= B_b - B_a - (cap_a - N_a))
+            net_vars.append(nc)
+            obj.append(WEIGHTS["net_change"] * nc)
+
     # ------------------------------------------- stability (previous) --
     prev_keys, prev_court = set(), {}
     if previous is not None and len(previous):
@@ -682,9 +727,34 @@ def solve(
     pw = pecking_weights(teams)
     weights = {t: pw[teams[t].name] for t in T}
     fixed_home = {idx[n]: c for n, c in data.usual_court.items()}
-    home_court, court_of = _assign_courts(booked, T, courts_on, weights, seed,
-                                          fixed_courts={k: c for k, c in pinned.items() if c is not None},
-                                          fixed_home=fixed_home, prev_court=prev_court)
+    # A coach with back-to-back sessions stays on one court where possible:
+    # two of their teams in a row, or a program they work then a team.
+    booked_at = defaultdict(list)
+    for (t, d, s) in booked:
+        booked_at[d, s].append(t)
+    coach_links, local_links = [], []
+    for (d, s_a), ts_a in booked_at.items():
+        for s_b in slots_on(d):
+            if not back_to_back(s_a, s_b) or (d, s_b) not in booked_at:
+                continue
+            for t1 in ts_a:
+                for t2 in booked_at[d, s_b]:
+                    if t1 != t2 and set(teams[t1].staff) & set(teams[t2].staff):
+                        coach_links.append(((t1, d, s_a), (t2, d, s_b)))
+    for (t, d, s) in booked:
+        for lp in data.locals:
+            if not (lp.on_site and lp.runs_on(d) and set(lp.coaches) & set(teams[t].staff)):
+                continue
+            if back_to_back(lp.slot, s) or back_to_back(s, lp.slot):
+                cs = [c for c in lp.courts if c in COURTS]
+                if cs:
+                    local_links.append(((t, d, s), cs))
+    home_court, court_of, doubled = _assign_courts(
+        booked, T, courts_on, weights, seed,
+        fixed_courts={k: c for k, c in pinned.items() if c is not None},
+        fixed_home=fixed_home, prev_court=prev_court, hs_boys=hs_boys,
+        coach_links=coach_links, local_links=local_links)
+    paired = _pair_groups(booked, court_of, doubled, courts_on, teams)
     elapsed = time.time() - t0
 
     rows = []
@@ -700,6 +770,8 @@ def solve(
             "age": team.age, "coach": "; ".join(team.staff), "head": "; ".join(team.heads),
             "on_pattern": on_pattern,
             "pinned": (t, d, s) in pinned and (t, d, s) not in restored,
+            "extra": (t, d, s) in extra_keys,
+            "paired": paired.get((t, d, s), ""),
         })
     # Locals show on every date they run (even weekend days not open for
     # practices), so the calendar fills in as soon as a program is added.
@@ -777,6 +849,8 @@ def solve(
         "practices_at_3_45": int((practices["slot"] == "3:45").sum()) if len(practices) else 0,
         "double_ups": int(sum(solver.Value(v) for v in doubles)),
         "assistant_conflicts": int(sum(solver.Value(v) for v in asst_conflicts.values())),
+        "paired_slots": len({(d, s, lab) for (_, d, s), lab in paired.items()}),
+        "net_changes": _count_net_changes(booked, court_of, hs_boys),
         "objective": solver.ObjectiveValue(),
         "moved_from_previous": (len(prev_keys - set(booked)) if prev_keys else None),
     }
@@ -818,12 +892,31 @@ def solve(
             "issue": f"Needs a sub: {d:%a %-m/%-d} {s}",
             "detail": "Possible if " + " and ".join(f"{c} gets a sub for {' / '.join(ps)}" for c, ps in need)}]),
             issues], ignore_index=True)
+    seen_pairs = set()
+    for (t, d, s), label in sorted(paired.items(), key=lambda kv: (kv[0][1], SLOT_KEYS.index(kv[0][2]), kv[1]),
+                                   reverse=True):  # prepended one by one, so they end up in date order
+        if (d, s, label) in seen_pairs:
+            continue
+        seen_pairs.add((d, s, label))
+        names = label.split(": ", 1)[-1]
+        issues = pd.concat([pd.DataFrame([{
+            "severity": "High", "team": names, "week_of": week_start(d),
+            "issue": f"Paired: {d:%a %-m/%-d} {s}",
+            "detail": label.split(": ", 1)[0] + "; every court was taken, and this was the only way to keep these "
+                      "practices without breaking a no-date"}]), issues], ignore_index=True)
+    for c in tournament_conflicts(teams, data.tournaments):
+        issues = pd.concat([pd.DataFrame([{
+            "severity": "High", "team": ", ".join(c["teams"]), "week_of": week_start(c["start"]),
+            "issue": f"Tournament conflict: {c['coach']} {span_text(c['start'], c['end'])}",
+            "detail": f"{c['coach']} is working {c['local']} (local) and coaching {', '.join(c['teams'])} at "
+                      f"{c['travel']} (travel) at the same time"}]), issues], ignore_index=True)
     warnings = list(data.warnings) + [n["text"] for n in restore_notes if not n["kept"]]
     return ScheduleResult(status_name, assignments, pattern, issues, metrics, warnings, start, end,
                           shown_weekends, data.tournaments, practice_counts, broken_rows)
 
 
-def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on, coach_busy, rules_for, away):
+def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on, coach_busy, rules_for, away,
+                  extras=None):
     """Adds a published version's practices to `pinned` (in place).
 
     Hand-placed practices win. A practice that can't happen now is dropped
@@ -853,6 +946,9 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
         notes.append({"kept": False, "team": name, "date": d, "slot": s,
                       "text": f"Not restored: {name} on {d:%a %-m/%-d} at {s}, because {why}"})
 
+    # A version with extra practices (a 3rd that week) brings them back too.
+    in_version = Counter((str(r.name), week_start(r.date)) for r in rv.itertuples())
+    extras = extras if extras is not None else defaultdict(int)
     order = sorted(rv.itertuples(), key=lambda r: (r.date, SLOT_KEYS.index(r.slot) if r.slot in SLOT_KEYS else 99))
     for r in order:
         name, d, s = str(r.name), r.date, r.slot
@@ -873,8 +969,8 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
             drop(name, d, s, "that time isn't open")
         elif (t, d) in team_days:
             drop(name, d, s, "the team already has a practice placed by hand that day")
-        elif per_week[t, week_start(d)] >= PRACTICES_PER_WEEK:
-            drop(name, d, s, "the team already has 2 practices placed that week")
+        elif per_week[t, week_start(d)] >= max(team.per_week, in_version[name, week_start(d)]) + extras[t, week_start(d)]:
+            drop(name, d, s, f"the team already has {per_week[t, week_start(d)]} practices placed that week")
         elif count[d, s] >= len(courts_on(d, s)):
             drop(name, d, s, "every court is taken then")
         elif busy := sorted(set(team.heads) & (heads_at[d, s] | coach_busy[d, s])):
@@ -912,6 +1008,19 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
         notes.append({"kept": False, "team": name, "date": start, "slot": "",
                       "text": f"Not restored: {name}'s practices, because {name} isn't on the Teams sheet any more"})
     return restored, notes
+
+
+def _count_net_changes(booked, court_of, hs_boys) -> int:
+    """Courts that switch between HS boys and anyone else from 5:30 to 7:20."""
+    at = defaultdict(set)  # (d, c, slot) -> {is HS boys}
+    for (t, d, s) in booked:
+        if s in ("5:30", "7:20"):
+            at[d, court_of[t, d, s], s].add(t in hs_boys)
+    n = 0
+    for (d, c, s), kinds in at.items():
+        if s == "5:30" and (d, c, "7:20") in at and kinds != at[d, c, "7:20"] and True in kinds | at[d, c, "7:20"]:
+            n += 1
+    return n
 
 
 def _wish_cost(wishes, wd: str, s: str) -> int:
@@ -960,10 +1069,17 @@ def _broken_who(b: dict) -> str:
 
 
 def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fixed_courts=None, fixed_home=None,
-                   prev_court=None):
+                   prev_court=None, hs_boys=(), coach_links=(), local_links=()):
     """Stage 2: put each booked practice on an open court. Better courts go
-    to older and 1s teams (court quality x team weight), and teams stay on a
-    home court where they can. Returns (home_court, court_of)."""
+    to older and 1s teams (court quality x team weight), teams stay on a
+    home court where they can, HS boys at 5:30 and 7:20 share courts (no
+    net change), and a coach with back-to-back sessions stays put.
+
+    A timeslot with more teams than courts (pairing, only when stage 1 had
+    to) puts two teams on some courts; each of those is later grouped with
+    a neighboring court as "3 teams on 2 courts".
+    Returns (home_court, court_of, doubled) where doubled is the set of
+    (d, s, c) holding two teams."""
     m = cp_model.CpModel()
     x, home = {}, {}
     for t in T:
@@ -973,6 +1089,7 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fix
         if fixed_home and t in fixed_home:
             m.Add(home[t, fixed_home[t]] == 1)
     by_slot = defaultdict(list)
+    n_at = Counter((d, s) for (_, d, s) in booked)
     changes = []
     for (t, d, s) in booked:
         opts = courts_on(d, s)
@@ -992,9 +1109,50 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fix
                 m.AddHint(x[t, d, s, c], 1 if c == pc else 0)
         if fixed_courts and (t, d, s) in fixed_courts and (t, d, s, fixed_courts[t, d, s]) in x:
             m.Add(x[t, d, s, fixed_courts[t, d, s]] == 1)
-    for vs in by_slot.values():
-        if len(vs) > 1:
-            m.AddAtMostOne(vs)
+    dbl = {}
+    for (d, s), n in n_at.items():
+        cap = len(courts_on(d, s))
+        extra = n - cap
+        for c in courts_on(d, s):
+            vs = by_slot.get((d, s, c), [])
+            if extra > 0:
+                dbl[d, s, c] = m.NewBoolVar(f"dbl_{d}_{s}_{c}")
+                m.Add(sum(vs) <= 1 + dbl[d, s, c])
+            elif len(vs) > 1:
+                m.AddAtMostOne(vs)
+        if extra > 0:
+            m.Add(sum(dbl[d, s, c] for c in courts_on(d, s)) == extra)
+
+    # HS boys at 5:30 and 7:20 on the same court: a court with HS boys in one
+    # slot and anyone else in the other needs its net changed.
+    if hs_boys:
+        for d in sorted({d for (_, d, _) in booked if d.weekday() < 5}):
+            for c in COURTS:
+                a_b = [x[t, d, "5:30", c] for t in T if (t, d, "5:30", c) in x and t in hs_boys]
+                a_o = [x[t, d, "5:30", c] for t in T if (t, d, "5:30", c) in x and t not in hs_boys]
+                b_b = [x[t, d, "7:20", c] for t in T if (t, d, "7:20", c) in x and t in hs_boys]
+                b_o = [x[t, d, "7:20", c] for t in T if (t, d, "7:20", c) in x and t not in hs_boys]
+                for p_, q_ in ((a_b, b_o), (b_b, a_o)):
+                    if p_ and q_:
+                        mm = m.NewIntVar(0, 3, f"net_{d}_{c}_{len(changes)}")
+                        m.Add(mm >= sum(p_) + sum(q_) - 1)
+                        changes.append(WEIGHTS["net_change_court"] * mm)
+
+    # A coach's back-to-back sessions on the same court.
+    for (k1, k2) in coach_links:
+        for c in COURTS:
+            if (*k1, c) in x and (*k2, c) in x:
+                same = m.NewBoolVar(f"stay_{len(changes)}")
+                m.Add(same <= x[(*k1, c)])
+                m.Add(same <= x[(*k2, c)])
+                changes.append(-WEIGHTS["coach_stay"] * same)
+    for k, cs in local_links:
+        on = [x[(*k, c)] for c in cs if (*k, c) in x]
+        if on:
+            stay = m.NewBoolVar(f"lstay_{len(changes)}")
+            m.Add(stay <= sum(on))
+            changes.append(-WEIGHTS["coach_stay"] * stay)
+
     m.Minimize(sum(changes))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_s
@@ -1005,7 +1163,35 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fix
         raise RuntimeError("Court assignment failed, which shouldn't happen if stage 1 respected capacity.")
     home_court = {t: next(c for c in COURTS if solver.Value(home[t, c])) for t in T}
     court_of = {(t, d, s): c for (t, d, s, c), v in x.items() if solver.Value(v)}
-    return home_court, court_of
+    doubled = {k for k, v in dbl.items() if solver.Value(v)}
+    return home_court, court_of, doubled
+
+
+def _pair_groups(booked, court_of, doubled, courts_on, teams) -> dict:
+    """Groups each court holding two teams with its nearest single-team
+    court: 3 teams on 2 courts. Returns {(t, d, s): label}."""
+    out = {}
+    by = defaultdict(lambda: defaultdict(list))  # (d, s) -> court -> [t]
+    for (t, d, s) in booked:
+        by[d, s][court_of[t, d, s]].append(t)
+    for (d, s), courts in by.items():
+        two = sorted(c for c in courts if (d, s, c) in doubled)
+        if not two:
+            continue
+        free = sorted(c for c in courts if len(courts[c]) == 1)
+        # Partner courts as close as possible overall (5 & 4, 7 & 6 beats 5 & 4, 7 & ... 2).
+        best = min(permutations(free, len(two)), key=lambda ps: (sum(abs(p - c) for p, c in zip(ps, two)), ps),
+                   default=None) if len(free) >= len(two) else None
+        for i, c in enumerate(two):
+            partner = best[i] if best else None
+            group = [c] if partner is None else sorted([c, partner])
+            names = [teams[t].name for g in group for t in courts[g]]
+            label = (f"3 teams on {' & '.join(court_name(g) for g in group)}: " if len(group) == 2
+                     else f"2 teams on {court_name(c)}: ") + ", ".join(names)
+            for g in group:
+                for t in courts[g]:
+                    out[t, d, s] = label
+    return out
 
 
 def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflicts, group_unused,
@@ -1028,7 +1214,8 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
                 reasons.append(f"usual {wd} {sl} falls on {data.closures[d] or 'a closure'} ({d:%-m/%-d})")
                 continue
             tn_here = [tn for tn in data.tournaments if tn.covers(d) and
-                       ((tn.kind == "travel" and team.name in tn.teams) or (tn.kind == "local" and len(tn.courts) == len(COURTS)))]
+                       ((tn.kind == "travel" and team.name in tn.teams)
+                        or (tn.kind == "local" and set(COURTS) <= set(tn.courts) and tn.blocks(d, sl)))]
             if tn_here:
                 tn = tn_here[0]
                 reasons.append(f"{'away at' if tn.kind == 'travel' else 'courts taken by'} {tn.name} on usual {wd} {d:%-m/%-d}")
