@@ -51,7 +51,7 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .ln.cont { border-bottom-style: solid; border-bottom-color: #d5d8de; }
 .ln .t { flex: 0 0 auto; width: 49px; color: #6b7280; font-size: 10px; font-variant-numeric: tabular-nums;
          white-space: nowrap; }
-.ln .w { flex: 1 1 0; min-width: 0; font-weight: 600; font-size: 11px; text-align: left;
+.ln .w { flex: 1 1 0; min-width: 0; font-weight: 600; font-size: 11px; text-align: right;
          overflow-wrap: break-word; hyphens: none; }
 .ln .w small { font-weight: 400; color: #555; }
 .ln.pv .w { font-weight: 500; font-style: italic; }
