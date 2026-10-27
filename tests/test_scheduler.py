@@ -1427,3 +1427,17 @@ def test_printed_weeks_have_open_courts_to_write_in_and_program_coaches():
     assert 'class="cs-write"' in h and "Kai" in h
     plain = weeks_print_html(r.assignments, *NOV, data.closures, None, r.tournaments, r.weekend_dates)
     assert 'class="cs-write"' not in plain
+
+
+def test_paper_print_has_every_slot_as_a_line():
+    from scheduler.paper import paper_weeks_html
+    teams = [{"team": "16-Bea", "age": 16}]
+    inp = _with_tournaments(_inp(teams), [{"name": "Boys Local", "type": "Local", "start_date": "11/18/2026",
+                                           "courts": "1-4"}])
+    r = solve(inp, *NOV, time_limit_s=10)
+    data = clean(inp, *NOV)
+    h = paper_weeks_html(r.assignments, *NOV, data.closures, data.tournaments, "T", [], r.practice_counts)
+    weeks = len({week_start(d) for d in pd.date_range(*NOV).date})
+    assert h.count('<section class="cs-week">') == 2 * weeks
+    assert "7:20-9:10" in h and "9-11" in h and "Boys Local" in h and "needed" in h
+    assert "16-Bea" in h

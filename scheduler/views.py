@@ -603,6 +603,37 @@ h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 17px; margin: 18px 0
 </body></html>"""
 
 
+# Shrinks a printed week that would spill onto an extra page (shared by the print views).
+FIT_SCRIPT = """<script>
+// Only a page that's still too tall (a very busy week) gets shrunk to fit.
+// The box is sized for the smaller of US Letter and A4 landscape inside the
+// 0.35in margins, minus a safety buffer, so nothing spills onto an extra page.
+function fitWeeks() {
+  var pageH = 7.25 * 96, pageW = 10.1 * 96;
+  document.querySelectorAll('.cs-week').forEach(function (s) {
+    s.style.zoom = 1; s.style.width = pageW + 'px';
+    var z = 1;
+    for (var k = 0; k < 4; k++) {  // a shrunk page gets wider (fewer wrapped lines), then re-fits
+      s.style.width = (pageW / z) + 'px';
+      z = Math.min(1, pageH / s.scrollHeight);
+    }
+    s.style.width = (pageW / z) + 'px';
+    s.style.zoom = z.toFixed(3);
+  });
+}
+window.addEventListener('load', fitWeeks);
+window.addEventListener('beforeprint', fitWeeks);
+if (window.matchMedia) {  // re-measure once the print layout is actually applied
+  var mq = window.matchMedia('print');
+  (mq.addEventListener ? mq.addEventListener.bind(mq, 'change') : mq.addListener.bind(mq))(function (e) {
+    if (e.matches) fitWeeks();
+  });
+}
+window.addEventListener('afterprint', function () {
+  document.querySelectorAll('.cs-week').forEach(function (s) { s.style.zoom = 1; s.style.width = ''; });
+});
+</script>"""
+
 PRINT_HALVES = [([1, 2, 3, 4], "Courts 1–4"), ([5, 6, 7, PRACTICE_COURT], "Courts 5–7 & practice court")]
 
 
@@ -664,33 +695,5 @@ h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 16px; margin: 18px 0
 courts 1–4, then courts 5–7 and the practice court.</div>
 <div class="cs-legend-top">{legend_html(ages, stripes, show_moved)}</div>
 {''.join(parts)}
-<script>
-// Only a page that's still too tall (a very busy week) gets shrunk to fit.
-// The box is sized for the smaller of US Letter and A4 landscape inside the
-// 0.35in margins, minus a safety buffer, so nothing spills onto an extra page.
-function fitWeeks() {{
-  var pageH = 7.25 * 96, pageW = 10.1 * 96;
-  document.querySelectorAll('.cs-week').forEach(function (s) {{
-    s.style.zoom = 1; s.style.width = pageW + 'px';
-    var z = 1;
-    for (var k = 0; k < 4; k++) {{  // a shrunk page gets wider (fewer wrapped lines), then re-fits
-      s.style.width = (pageW / z) + 'px';
-      z = Math.min(1, pageH / s.scrollHeight);
-    }}
-    s.style.width = (pageW / z) + 'px';
-    s.style.zoom = z.toFixed(3);
-  }});
-}}
-window.addEventListener('load', fitWeeks);
-window.addEventListener('beforeprint', fitWeeks);
-if (window.matchMedia) {{  // re-measure once the print layout is actually applied
-  var mq = window.matchMedia('print');
-  (mq.addEventListener ? mq.addEventListener.bind(mq, 'change') : mq.addListener.bind(mq))(function (e) {{
-    if (e.matches) fitWeeks();
-  }});
-}}
-window.addEventListener('afterprint', function () {{
-  document.querySelectorAll('.cs-week').forEach(function (s) {{ s.style.zoom = 1; s.style.width = ''; }});
-}});
-</script>
+{FIT_SCRIPT}
 </body></html>"""

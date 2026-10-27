@@ -37,6 +37,7 @@ from scheduler import access
 from scheduler import gcal
 from scheduler import pecking as pk
 from scheduler.export import calendar_excel, calendar_ics, to_excel, to_ics
+from scheduler.paper import paper_weeks_html
 from scheduler.solver import week_start
 from scheduler.changes import add_version, burden, diff, pattern_of, practices_of, published_at, snapshot
 from scheduler.storage import Store, database_url, make_payload, new_id, read_payload, read_published
@@ -757,10 +758,19 @@ if VIEW == TAB_COURT:
                                         local_coaches=show_lc),
                         unsafe_allow_html=True)
 
-        d1, d2 = st.columns(2)
+        d0, d1, d2 = st.columns(3)
+        d0.download_button("Printable weeks · paper style", type="primary", width="stretch",
+                           data=lambda: paper_weeks_html(result.assignments, start, end, closures, result.tournaments,
+                                                         f"{st.session_state.get('project_name') or 'Court schedule'}",
+                                                         privs, result.practice_counts, show_lc).encode(),
+                           file_name=f"court_sheets_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html",
+                           help="Like the sheets on the board: every timeslot on every court is a line, filled in "
+                                "where something's booked and blank where it's open, so privates and changes can "
+                                "be written in. Two landscape pages a week, with each day's practice count and the "
+                                "week's total at the bottom. Open it in your browser, then print or save as PDF.")
         d1.download_button("Download schedule (Excel)", lambda: to_excel(result, closures),
                            f"schedule_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", width="stretch")
-        d2.download_button("Printable weeks (every week)",
+        d2.download_button("Printable weeks · color",
                            lambda: weeks_print_html(a, start, end, closures, hl or None, result.tournaments,
                                                     result.weekend_dates,
                                                     f"{st.session_state.get('project_name') or 'Court schedule'}",
