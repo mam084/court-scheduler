@@ -30,7 +30,7 @@ from scheduler.config import (
 )
 from scheduler.data import (
     ATTRS, COLUMNS, blank, empty, keep_programs, parse_courts, parse_date_ranges, parse_days, parse_names, parse_rank,
-    parse_times, program_side, span_text, tournament_conflicts,
+    parse_times, program_coach_conflicts, program_side, span_text, tournament_conflicts,
 )
 from scheduler import privates as pv
 from scheduler import access
@@ -40,11 +40,17 @@ from scheduler.solver import week_start
 from scheduler.changes import add_version, burden, diff, pattern_of, practices_of, published_at, snapshot
 from scheduler.storage import Store, database_url, make_payload, new_id, read_payload, read_published
 from scheduler.views import (
-    calendar_print_html, club_stripes, court_grid_html, legend_html, month_calendar_html, open_slot_map, practice_counts_html,
+    DARK_CSS, calendar_print_html, club_stripes, court_grid_html, legend_html, month_calendar_html, open_slot_map, practice_counts_html,
     range_label, short_list_text, week_dates, weeks_print_html,
 )
 
 st.set_page_config(page_title="Court Scheduler", layout="wide")
+try:
+    DARK = st.context.theme.type == "dark"
+except Exception:  # noqa: BLE001
+    DARK = False
+if DARK:  # the court grid, calendar and counts follow the app's theme (⋮ → Settings)
+    st.markdown(DARK_CSS, unsafe_allow_html=True)
 
 
 def next_month(today: date) -> tuple[date, date]:
@@ -221,6 +227,19 @@ if qp and st.session_state.get("project_id") != qp:
         st.session_state.flash_warn = "That saved schedule wasn't found (it may have been deleted)."
 
 # ---------------------------------------------------------------- sidebar --
+def bound(widget, label: str, key: str, **kw):
+    """A widget whose value lives in session_state[key] even on runs where the
+    widget isn't drawn (Streamlit throws away a widget's own state then, which
+    lost the schedule dates when an admin viewed the app as a coach)."""
+    wk = f"w_{key}"
+    if key in st.session_state:
+        st.session_state[wk] = st.session_state[key]
+
+    def _copy():
+        st.session_state[key] = st.session_state[wk]
+    return widget(label, key=wk, on_change=_copy, **kw)
+
+
 def _coach_names() -> list[str]:
     """Coach names in the open schedule (for linking logins and "View as")."""
     i = st.session_state.get("inp")
@@ -252,6 +271,7 @@ with st.sidebar:
         if AUTH_ON:
             st.button("Sign out", on_click=st.logout, key="signout")
     VIEWER = access.Viewer(ME, acting)
+    st.caption("🌙 Dark mode: **⋮** (top right) → **Settings** → theme.")
     CAN = VIEWER.can_schedule
     saved = _saved_list(database_url(), st.session_state.get("saved_ver", 0))
     if st.session_state.get("project_id") and not any(p["id"] == st.session_state.project_id for p in saved):
@@ -348,8 +368,8 @@ with st.sidebar:
                        "You can change your teams' preferences in **Edit practices**; other changes go through "
                        "the scheduling admins.")
     if current is not None and CAN:
-        st.date_input("From", key="range_start", format="MM/DD/YYYY")
-        st.date_input("To", key="range_end", format="MM/DD/YYYY")
+        bound(st.date_input, "From", "range_start", format="MM/DD/YYYY")
+        bound(st.date_input, "To", "range_end", format="MM/DD/YYYY")
         with st.expander("Replace data with a spreadsheet"):
             rep = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"], key=f"replace_{current}")
             use_file = st.checkbox("Also replace programs and tournaments", key=f"replace_kept_{current}",
@@ -372,11 +392,11 @@ with st.sidebar:
                 except Exception as e:  # noqa: BLE001
                     st.error(f"Couldn't read that file: {e}")
         with st.expander("Solver settings", expanded=False):
-            st.slider("Time limit (seconds)", 5, 120, key="time_limit")
-            st.checkbox("Make up practices lost to closures", key="makeup",
+            bound(st.slider, "Time limit (seconds)", "time_limit", min_value=5, max_value=120)
+            bound(st.checkbox, "Make up practices lost to closures", "makeup",
                         help="If on, a team whose usual day is a closure gets a makeup that week "
                              "(on another weekday or an open weekend).")
-            st.checkbox("Keep practices where they are when rebuilding", key="keep_prev",
+            bound(st.checkbox, "Keep practices where they are when rebuilding", "keep_prev",
                         help="Rebuilding moves only the practices that have to move, starting from the last "
                              "published schedule (or the version you restored, or the current one if nothing's "
                              "published). Turn off to "
@@ -534,10 +554,28 @@ def mine(team_text) -> bool:
 t_conflicts = tournament_conflicts(cleaned.teams, cleaned.tournaments) if cleaned else []
 if COACH_VIEW:
     t_conflicts = [c for c in t_conflicts if (MY_COACH and c["coach"] == MY_COACH) or set(c["teams"]) & MY_TEAMS]
+p_conflicts = program_coach_conflicts(cleaned.locals, start, end, closures) if cleaned else []
+if COACH_VIEW:
+    p_conflicts = [c for c in p_conflicts if MY_COACH and c["coach"] == MY_COACH]
+
+
+def p_conflict_text(c: dict) -> str:
+    ds = c["dates"]
+    when = ", ".join(f"{d:%-m/%-d}" for d in ds[:4]) + (f" (+{len(ds) - 4} more)" if len(ds) > 4 else "")
+    (pa, pb), (sa, sb) = c["programs"], c["slots"]
+    return f"**{c['coach']}** is on **{pa}** ({sa}) and **{pb}** ({sb}) at the same time: {when}"
+
+
+# Everything that needs a look goes in one collapsible box: (st.error | st.warning, markdown).
+alerts: list[tuple] = []
 if t_conflicts:
-    st.error("**Tournament conflict:** " + "; ".join(
+    alerts.append((st.error, "🚩 **Tournament conflict:** " + "; ".join(
         f"{c['coach']} is working {c['local']} and coaching {', '.join(c['teams'])} at {c['travel']} "
-        f"({span_text(c['start'], c['end'])})" for c in t_conflicts), icon="🚩")
+        f"({span_text(c['start'], c['end'])})" for c in t_conflicts)))
+if p_conflicts:
+    alerts.append((st.error, f"🚩 **{plural(len(p_conflicts), 'coach is', 'coaches are')} double-booked in "
+                             "programs.** Find a sub or take them off one:\n"
+                   + "\n".join(f"- {p_conflict_text(c)}" for c in p_conflicts)))
 
 if result is None:
     st.info("Press **Auto-schedule** in the sidebar to build the schedule for these dates. "
@@ -561,36 +599,40 @@ else:
         short = short[short["team"].map(mine)]
     if len(short):
         n_teams, n_missed = short["team"].nunique(), int(short["short"].sum())
-        lines = []
-        for ws, g in short.groupby("week_of"):
-            lines.append(f"- **Week of {ws:%b %-d}:** {short_list_text(g)}")
-        st.error(f"**{plural(n_teams, 'team')} {'is' if n_teams == 1 else 'are'} short {plural(n_missed, 'practice')}:**\n" + "\n".join(lines) +
-                 "\n\nWhy each one happened is in the **Review** tab, and the full week-by-week counts are there too.",
-                 icon="⚠️")
+        lines = [f"- **Week of {ws:%b %-d}:** {short_list_text(g)}" for ws, g in short.groupby("week_of")]
+        alerts.append((st.error, f"**{plural(n_teams, 'team')} {'is' if n_teams == 1 else 'are'} short "
+                                 f"{plural(n_missed, 'practice')}:**\n" + "\n".join(lines)
+                       + "\n\nWhy each one happened is in the **Review** tab, and the full week-by-week counts "
+                         "are there too."))
     my_broken = [b for b in result.broken if mine(b["team"])]
     if my_broken:
         lines = [f"- **{b['team']}** · {b['date']:%a %b %-d} {b['slot_label']}: {b['who']}" for b in my_broken]
-        st.warning(f"**{plural(len(my_broken), 'practice')} had to go on a no-date** so the team still gets 2 "
-                   "practices that week:\n" + "\n".join(lines), icon="⚠️")
+        alerts.append((st.warning, f"**{plural(len(my_broken), 'practice')} had to go on a no-date** so the team "
+                                   "still gets 2 practices that week:\n" + "\n".join(lines)))
     iss = result.issues if result.issues is not None else pd.DataFrame(columns=["issue"])
     if COACH_VIEW and len(iss):
         iss = iss[iss["team"].map(mine)]
     satsun = iss[iss["issue"].astype(str).str.startswith("Saturday then Sunday")] if len(iss) else iss
     if len(satsun):
         lines = [f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}" for r in satsun.itertuples()]
-        st.warning(f"**{plural(len(satsun), 'team')} practice{'s' if len(satsun) == 1 else ''} Saturday then Sunday**, the only way to avoid a missed "
-                   "practice or a head coach's no-date:\n" + "\n".join(lines), icon="⚠️")
+        alerts.append((st.warning, f"**{plural(len(satsun), 'team')} practice{'s' if len(satsun) == 1 else ''} "
+                                   "Saturday then Sunday**, the only way to avoid a missed practice or a head "
+                                   "coach's no-date:\n" + "\n".join(lines)))
     pair = iss[iss["issue"].astype(str).str.startswith("Paired:")] if len(iss) else iss
     if len(pair):
         pair = pair.assign(_o=pair["issue"].map(lambda x: x.split(": ", 1)[-1])).sort_values(["week_of", "_o"])
         lines = [f"- **{r.issue.split(': ', 1)[-1]}** · {r.detail.split(';')[0]}: {r.team}" for r in pair.itertuples()]
-        st.warning(f"**{plural(len(pair), 'timeslot')} had to pair teams (3 teams on 2 courts)**, the only way to keep "
-                   "those practices without breaking a no-date:\n" + "\n".join(lines), icon="⚠️")
+        alerts.append((st.warning, f"**{plural(len(pair), 'timeslot')} had to pair teams (3 teams on 2 courts)**, "
+                                   "the only way to keep those practices without breaking a no-date:\n"
+                       + "\n".join(lines)))
     asst = iss[iss["issue"].astype(str).str.startswith("Assistant no-date broken")] if len(iss) else iss
     if len(asst):
-        with st.expander(f"{plural(len(asst), 'practice')} without an assistant who marked a no-date"):
-            for r in asst.itertuples():
-                st.markdown(f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}: {r.detail}")
+        alerts.append((st.warning, f"**{plural(len(asst), 'practice')} without an assistant who marked a "
+                                   "no-date:**\n" + "\n".join(f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}: "
+                                                               f"{r.detail}" for r in asst.itertuples())))
+    if result.warnings and CAN:
+        alerts.append((st.warning, f"**{plural(len(result.warnings), 'note')} about the input:**\n"
+                       + "\n".join(f"- {w}" for w in result.warnings)))
     if m.get("status") == "FEASIBLE" and CAN:
         st.caption(f"The solver hit its {time_limit}-second limit, so this is a good schedule but maybe not "
                    "the best one. Raise the time limit in **Solver settings** for a better one.")
@@ -602,10 +644,13 @@ else:
     if CAN and st.session_state.get("pending_rebuild"):
         st.info(f"**{st.session_state.pending_rebuild}** since the last build. Press **Auto-schedule** "
                 "when you're done making changes.")
-    if result.warnings and CAN:
-        with st.expander(f"⚠️ {plural(len(result.warnings), 'note')} about the input"):
-            for w in result.warnings:
-                st.markdown(f"- {w}")
+
+if alerts:
+    n_red = sum(f is st.error for f, _ in alerts)
+    with st.expander(f"{plural(len(alerts), 'warning')}" + (f" · {n_red} to fix" if n_red else ""),
+                     expanded=True, key="warnings_box", icon="🚩" if n_red else "⚠️"):
+        for show, text in alerts:
+            show(text)
 
 if "flash" in st.session_state:
     st.success(st.session_state.pop("flash"))
@@ -659,7 +704,7 @@ if VIEW == TAB_COURT:
                             help="The template is each team's usual weekday slot; weeks show the actual dates, "
                                  "including weekends, makeups and closures.")
         hl = set(c2.multiselect("Highlight a club, team or coach", people_options(a)))
-        tcols = iter(st.columns(4 if MY_COACH else 3))
+        tcols = iter(st.columns(5 if MY_COACH else 4))
         if MY_COACH:
             if next(tcols).toggle("Highlight my practices", key="hl_mine",
                                   help="Your teams' practices and the programs you work."):
@@ -671,6 +716,8 @@ if VIEW == TAB_COURT:
                                              "or time.") if CAN else False
         show_priv = next(tcols).toggle("Show privates", value=True, key="show_priv",
                                        help="Private lessons booked in the Privates tab (weeks only).")
+        show_lc = next(tcols).toggle("Show program coaches", key="show_lc",
+                                     help="List the coaches working each locals program on its box.")
         week_privs = privs if show_priv else []
         if hl and week_privs:
             week_privs = [p for p in week_privs if p["coach"] in hl or p["team"] in hl]
@@ -689,7 +736,8 @@ if VIEW == TAB_COURT:
             book = pd.concat([tmpl, loc[[c for c in list(tmpl.columns) + ["side"] if c in loc.columns]]],
                              ignore_index=True)
             st.markdown(court_grid_html(book, None, closures, hl or None, stripes,
-                                        open_slots=open_slot_map(None, cleaned) if show_open else None),
+                                        open_slots=open_slot_map(None, cleaned) if show_open else None,
+                                        local_coaches=show_lc),
                         unsafe_allow_html=True)
             st.caption("Courts are ranked 1 → 7 → 6 → 5 → 3 → 4 → 2; older and 1s teams get the better courts.")
         else:
@@ -704,7 +752,8 @@ if VIEW == TAB_COURT:
             st.markdown(court_grid_html(book, dd, closures, hl or None, stripes, result.tournaments,
                                         result.weekend_dates,
                                         open_slots=open_slot_map(dd, cleaned) if show_open else None,
-                                        privates=[p for p in week_privs if week_start(p["date"]) == ws]),
+                                        privates=[p for p in week_privs if week_start(p["date"]) == ws],
+                                        local_coaches=show_lc),
                         unsafe_allow_html=True)
 
         d1, d2 = st.columns(2)
@@ -714,10 +763,13 @@ if VIEW == TAB_COURT:
                            lambda: weeks_print_html(a, start, end, closures, hl or None, result.tournaments,
                                                     result.weekend_dates,
                                                     f"{st.session_state.get('project_name') or 'Court schedule'}",
-                                                    week_privs, show_moved).encode(),
+                                                    week_privs, show_moved,
+                                                    (lambda dd: open_slot_map(dd, cleaned)) if show_open else None,
+                                                    show_lc).encode(),
                            f"court_weeks_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html", width="stretch",
                            help="Every week's court view in one page; each week prints on two landscape pages (courts 1-4, then 5-7 and the practice court). "
-                                "Open it in your browser, then print or save as PDF.")
+                                "With **Show open court times** on, every open court time prints with a line to "
+                                "write a name in. Open it in your browser, then print or save as PDF.")
 
 # ------------------------------------------------------------ calendar --
 if VIEW == TAB_CAL:
@@ -731,11 +783,13 @@ if VIEW == TAB_CAL:
                                   help="Your teams' practices and the programs you work."):
             hl |= {MY_COACH} | MY_TEAMS
         show_locals = c2.toggle("Include locals programs", value=True)
+        cal_lc = c2.toggle("Show program coaches", key="cal_lc", disabled=not show_locals,
+                           help="List the coaches working each locals program.") and show_locals
         show_moved = c2.toggle("Outline moved practices", key="show_moved",
                                help="Outline makeups and practices that aren't on the team's usual day "
                                     "or time.") if CAN else False
         st.markdown(month_calendar_html(a if show_moved else a.assign(on_pattern=True), start, end, closures, hl or None, show_locals, result.weekend_dates,
-                                        result.tournaments), unsafe_allow_html=True)
+                                        result.tournaments, cal_lc), unsafe_allow_html=True)
 
         who = ("_" + "_".join(sorted(hl))) if hl else ""
         fname = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"calendar{who}_{start:%Y%m%d}-{end:%Y%m%d}")
@@ -749,7 +803,8 @@ if VIEW == TAB_CAL:
                                 "calendar (e.g. 'Club practices') so it's easy to remove and re-import after changes.")
         d2.download_button("Printable calendar",
                            lambda: calendar_print_html(a, start, end, closures, hl or None, show_locals,
-                                                       result.weekend_dates, result.tournaments, title).encode(),
+                                                       result.weekend_dates, result.tournaments, title,
+                                                       cal_lc).encode(),
                            f"{fname}.html", mime="text/html", width="stretch",
                            help="Opens in your browser; print it or save it as a PDF. One month per page.")
         d3.download_button("Calendar (Excel)", lambda: calendar_excel(result, closures, hl or None, show_locals),
@@ -1274,6 +1329,8 @@ def done_msg(what: str) -> str:
 if VIEW == TAB_PROG:
     st.markdown("Programs (locals, JumpStart, leagues…) are blocked off on their courts, and the practice "
                 "schedule is rebuilt around them when you save.")
+    for c in p_conflicts:
+        st.error("🚩 " + p_conflict_text(c), icon=None)
     st.toggle("Rebuild the schedule each time I save a program", value=True, key="prog_autobuild",
               help="Turn off to change several programs in a row, then press Auto-schedule once at the end.")
     ver = st.session_state.get("locals_ver", 0)
@@ -1520,20 +1577,16 @@ if VIEW == TAB_PRIV:
         st.info("To book a private, ask a scheduling admin for now. Booking requests in the app are coming next.")
     if CAN:
         with st.container(border=True):
-            c1, c2, c3 = st.columns([2, 1, 1])
+            c1, c2, h1, h2, h3 = st.columns([2.2, 1.3, 0.9, 0.9, 1.2], vertical_alignment="bottom")
             p_coach = c1.selectbox("Coach", coach_opts + ["Someone else…"], key="pv_coach",
                                    index=None, placeholder="Choose a coach")
-            if p_coach == "Someone else…":
-                p_coach = c1.text_input("Coach name", key="pv_coach_new").strip() or None
             p_date = c2.date_input("Date", value=start, format="MM/DD/YYYY", key="pv_date")
-            with c3:
-                h1, h2, h3 = st.columns([1, 1, 1.3], vertical_alignment="bottom")
-                p_hr = h1.selectbox("Start", list(range(1, 13)), index=3, key="pv_hour",
-                                    help="Any start time; privates are always 1 hour.")
-                p_mn = h2.selectbox("min", list(range(0, 60, 5)), format_func=lambda x: f":{x:02d}", key="pv_min",
-                                    label_visibility="hidden")
-                p_ap = h3.radio("AM/PM", ["AM", "PM"], index=1, horizontal=True, key="pv_ampm",
-                                label_visibility="hidden")
+            p_hr = h1.selectbox("Start hour", list(range(1, 13)), index=3, key="pv_hour",
+                                help="Any start time; privates are always 1 hour.")
+            p_mn = h2.selectbox("Minutes", list(range(0, 60, 5)), format_func=lambda x: f":{x:02d}", key="pv_min")
+            p_ap = h3.radio("AM / PM", ["AM", "PM"], index=1, horizontal=True, key="pv_ampm")
+            if p_coach == "Someone else…":
+                p_coach = st.text_input("Coach name", key="pv_coach_new").strip() or None
             p_start = (p_hr % 12 + (12 if p_ap == "PM" else 0)) * 60 + p_mn
             p_time = pv.clock(p_start)
             free = pv.free_courts(p_date, p_start, a_now, privs, ALL_COURTS)
@@ -1915,7 +1968,8 @@ if VIEW == TAB_REVIEW:
                    "range, or before the team's season starts).")
         if len(result.practice_counts):
             hl_r = set(st.multiselect("Highlight teams", sorted(result.practice_counts["team"].unique()),
-                                      key="counts_hl"))
+                                      default=sorted(MY_TEAMS & set(result.practice_counts["team"])),
+                                      key=f"counts_hl_{MY_COACH}"))
             st.markdown(practice_counts_html(result.practice_counts, hl_r or None), unsafe_allow_html=True)
         else:
             st.caption("Rebuild the schedule to see practice counts.")
@@ -1949,6 +2003,9 @@ if VIEW == TAB_REVIEW:
             st.markdown("Everything that differs from the ideal schedule, most important first.")
             sev = st.multiselect("Severity", ["High", "Medium", "Low"], default=["High", "Medium", "Low"])
             iss = result.issues[result.issues["severity"].isin(sev)]
+            if COACH_VIEW:
+                st.caption("Showing your teams only.")
+                iss = iss[iss["team"].map(mine)]
             st.dataframe(iss.rename(columns={"severity": "Severity", "team": "Team", "week_of": "Week of",
                                              "issue": "Issue", "detail": "Why"}),
                          hide_index=True, width="stretch")

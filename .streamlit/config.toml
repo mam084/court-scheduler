@@ -1,7 +1,3 @@
-[theme]
-primaryColor = "#1F2A44"
-base = "light"
-
 [server]
 headless = true
 
