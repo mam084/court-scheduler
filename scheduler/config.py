@@ -166,9 +166,8 @@ def is_hs_boys(club, age) -> bool:
         return False
 
 
-# Privates: 1-hour sessions, starting on the half hour.
+# Privates: 1-hour sessions, starting at any time.
 PRIVATE_MINUTES = 60
-PRIVATE_STARTS = [f"{h % 12 or 12}:{m:02d} {'AM' if h < 12 else 'PM'}" for h in range(6, 22) for m in (0, 30)]
 
 # ---------------------------------------------------------------------------
 # Hard age rules
@@ -230,10 +229,12 @@ WEIGHTS = {
     #    An assistant on two teams at once costs the same.
     "locals_sub": 4000,
     "assistant_conflict": 4000,
-    # 6b. Pairing: 3 teams sharing 2 courts, per extra team. Only when it's
-    #    that or breaking a no-date / missing a practice; a weekend practice,
-    #    an open court or a sub for a program all come first.
-    "pairing": 6000,
+    # Pairing: 3 teams sharing 2 courts, per extra team. The absolute last
+    #    option: only when there's no court space left and the alternative is
+    #    a team missing one of its 2 practices. Breaking no-dates, practicing
+    #    next to a tournament, weekends and subs all come first (this costs
+    #    more than all of them together), and it's never used for a 3rd practice.
+    "pairing": 120000,
     # 7. Weekday before weekend: a weekend practice only when the weekdays
     #    can't take it (two weekday practices, even doubled up, win).
     "weekend": 1500,

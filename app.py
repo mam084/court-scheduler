@@ -10,7 +10,7 @@ import io
 import json
 import re
 import sys
-from datetime import date
+from datetime import date, time
 
 import pandas as pd
 import streamlit as st
@@ -23,7 +23,7 @@ for _mod in [m for m in list(sys.modules) if m == "scheduler" or m.startswith("s
 
 from scheduler import ScheduleInput, clean, month_range, simulate, solve
 from scheduler.config import (
-    ALL_COURTS, COURTS, DAYS, MAX_PRACTICES_PER_WEEK, PRACTICE_COURT, PRACTICES_PER_WEEK, PRIVATE_STARTS, PROGRAM_KEYS,
+    ALL_COURTS, COURTS, DAYS, MAX_PRACTICES_PER_WEEK, PRACTICE_COURT, PRACTICES_PER_WEEK, PROGRAM_KEYS,
     SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS, court_name, court_short,
 )
 from scheduler.data import (
@@ -580,7 +580,7 @@ if VIEW == TAB_COURT:
                                                     f"{st.session_state.get('project_name') or 'Court schedule'}",
                                                     week_privs, show_moved).encode(),
                            f"court_weeks_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html", width="stretch",
-                           help="Every week's court view in one page, each week on its own landscape page. "
+                           help="Every week's court view in one page; each week prints on two landscape pages (courts 1-4, then 5-7 and the practice court). "
                                 "Open it in your browser, then print or save as PDF.")
 
 # ------------------------------------------------------------ calendar --
@@ -1223,9 +1223,10 @@ if VIEW == TAB_PRIV:
         if p_coach == "Someone else…":
             p_coach = c1.text_input("Coach name", key="pv_coach_new").strip() or None
         p_date = c2.date_input("Date", value=start, format="MM/DD/YYYY", key="pv_date")
-        p_time = c3.selectbox("Start", PRIVATE_STARTS, index=PRIVATE_STARTS.index("4:00 PM"), key="pv_time",
-                              help="Privates are 1 hour.")
-        p_start = pv.parse_start(p_time)
+        p_t = c3.time_input("Start", value=time(16, 0), step=300, key="pv_time",
+                            help="Any start time; privates are always 1 hour.")
+        p_start = p_t.hour * 60 + p_t.minute
+        p_time = pv.clock(p_start)
         free = pv.free_courts(p_date, p_start, a_now, privs, ALL_COURTS)
         c1, c2, c3 = st.columns([1, 1, 2])
         p_team_private = c1.toggle("Team private", key="pv_is_team",

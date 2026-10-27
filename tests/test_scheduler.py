@@ -1196,24 +1196,28 @@ def _per_week(pr, name):
     return g.groupby(g["date"].map(week_start)).size()
 
 
-def test_pairing_only_when_courts_run_out():
-    # Every team can only make Mon/Wed 5:30. 7 teams fit; 9 need pairing.
-    def club(n):
-        teams = [{"team": f"16-C{i}", "age": 16} for i in range(n)]
-        avail = [{"who": t["team"], "type": "No", "days": "Tue, Thu, Fri"} for t in teams]
-        avail += [{"who": t["team"], "type": "No", "times": "7:20"} for t in teams]
-        return _inp(teams, avail)
-    r7 = solve(club(7), *NOV, time_limit_s=15)
+def test_pairing_is_the_last_resort():
+    teams = [{"team": f"16-C{i}", "age": 16} for i in range(9)]
+    # Only Mon/Wed 5:30 suit everyone, but the other times are just no-dates:
+    # those get broken (and flagged) before anyone is paired.
+    avail = [{"who": t["team"], "type": "No", "days": "Tue, Thu, Fri"} for t in teams]
+    avail += [{"who": t["team"], "type": "No", "times": "7:20"} for t in teams]
+    r = solve(_inp(teams, avail), *NOV, time_limit_s=20)
+    assert r.metrics["paired_slots"] == 0 and r.broken
+    # Programs fill every court at every other time: no court space left, so
+    # pairing beats a team missing a practice.
+    locals_ = [{"program": "Clinic A", "days": "Tue, Thu, Fri", "time": "5:30-9:10", "courts": "1-7"},
+               {"program": "Clinic B", "days": "Mon, Wed", "time": "7:20", "courts": "1-7"}]
+    inp = _inp(teams, locals_=locals_)
+    r = solve(inp, *NOV, time_limit_s=20)
+    _check_hard_rules(inp, r)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert r.metrics["paired_slots"] > 0 and r.shortfalls.empty
+    assert (r.issues["issue"].str.startswith("Paired:")).any()
+    assert pr[pr["paired"] != ""].iloc[0]["paired"].startswith("3 teams on Court")
+    # With 7 teams it all fits, so nobody is paired.
+    r7 = solve(_inp(teams[:7], locals_=locals_), *NOV, time_limit_s=15)
     assert r7.metrics["paired_slots"] == 0
-    r9 = solve(club(9), *NOV, time_limit_s=20)
-    _check_hard_rules(club(9), r9)
-    pr = r9.assignments[r9.assignments["kind"] == "Practice"]
-    assert r9.metrics["paired_slots"] > 0
-    assert not r9.broken                      # paired rather than breaking anyone's no-dates
-    assert r9.shortfalls.empty
-    assert (r9.issues["issue"].str.startswith("Paired:")).any()
-    one = pr[pr["paired"] != ""].iloc[0]
-    assert one["paired"].startswith("3 teams on Court")
 
 
 def test_team_can_have_three_practices_a_week():
@@ -1330,5 +1334,6 @@ def test_calendar_lists_local_courts_and_weeks_print():
     cal = month_calendar_html(r.assignments, *NOV, include_locals=True)
     assert "G HS L · Ct 1-4" in cal
     page = weeks_print_html(r.assignments, *NOV, title="Test")
-    assert page.count('class="cs-week"') == 5   # Nov 1, 8, 15, 22, 29
+    assert page.count('class="cs-week"') == 10   # Nov 1, 8, 15, 22, 29, two pages each
+    assert "Courts 5–7 & practice court" in page
     assert "break-after: page" in page

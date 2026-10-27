@@ -223,6 +223,7 @@ def court_grid_html(
     weekend_dates=None,
     open_slots: dict | None = None,
     privates: list | None = None,
+    courts: list | None = None,
 ) -> str:
     """Club layout: courts as rows, days as columns (always Sun–Sat),
     practices listed with their times in each box. `day_dates` is an ordered
@@ -271,7 +272,8 @@ def court_grid_html(
         cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
         out.append(f"<th{cls}>{wd}{sub}</th>")
     out.append("</tr></thead><tbody>")
-    for i, c in enumerate(ALL_COURTS):
+    rows_ = list(courts) if courts else list(ALL_COURTS)  # a subset, for a printed half-week
+    for i, c in enumerate(rows_):
         pc = c not in COURTS
         out.append(f'<tr{" class=cs-pc" if pc else ""}><td class="cs-daycell">{court_name(c)}'
                    + ('<br><small style="font-weight:400">programs &amp; privates</small>' if pc else "") + "</td>")
@@ -279,7 +281,7 @@ def court_grid_html(
         for wd in cols:
             if wd in blocked:
                 if i == 0:
-                    out.append(f'<td class="cs-closed" rowspan="{len(ALL_COURTS)}">{blocked[wd]}</td>')
+                    out.append(f'<td class="cs-closed" rowspan="{len(rows_)}">{blocked[wd]}</td>')
                 continue
             cell = court_rows[court_rows["day"] == wd].copy() if len(court_rows) else court_rows
             tn_here = [tn for tn in partial.get(wd, []) if c in tn.courts]
@@ -565,11 +567,15 @@ h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 17px; margin: 18px 0
 </body></html>"""
 
 
+PRINT_HALVES = [([1, 2, 3, 4], "Courts 1–4"), ([5, 6, 7, PRACTICE_COURT], "Courts 5–7 & practice court")]
+
+
 def weeks_print_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,
                      highlight: set[str] | None = None, tournaments: list | None = None, weekend_dates=None,
                      title: str = "Court schedule", privates: list | None = None, show_moved: bool = False) -> str:
-    """Every week of the court view on one standalone page, each week on
-    its own landscape page when printed (or saved as PDF)."""
+    """Every week of the court view on one standalone page. Printed (or
+    saved as PDF), each week takes two landscape pages: courts 1-4, then
+    courts 5-7 and the practice court."""
     a = assignments if show_moved else assignments.assign(on_pattern=True)
     stripes = club_stripes(a["club"]) if "club" in a else {}
     ages = a.loc[a["kind"] == "Practice", "age"] if len(a) else []
@@ -579,9 +585,11 @@ def weeks_print_html(assignments: pd.DataFrame, start: date, end: date, closures
         dd = week_dates(ws, start, end, weekend_dates or [])
         book = a[a["date"].map(week_start) == ws] if len(a) else a
         pv = [p for p in (privates or []) if week_start(p["date"]) == ws]
-        parts.append(f'<section class="cs-week"><h2>Week of {ws:%b %-d, %Y}</h2>'
-                     + court_grid_html(book, dd, closures, highlight, stripes, tournaments, weekend_dates,
-                                       privates=pv) + "</section>")
+        for courts, label in PRINT_HALVES:
+            parts.append(f'<section class="cs-week"><h2>Week of {ws:%b %-d, %Y} · {label}'
+                         f'<span class="cs-ttl"> · {html.escape(title)}</span></h2>'
+                         + court_grid_html(book, dd, closures, highlight, stripes, tournaments, weekend_dates,
+                                           privates=pv, courts=courts) + "</section>")
         ws += timedelta(days=7)
     who = f" · {html.escape(', '.join(sorted(highlight)))}" if highlight else ""
     return f"""<!doctype html><html><head><meta charset="utf-8">
@@ -590,36 +598,38 @@ def weeks_print_html(assignments: pd.DataFrame, start: date, end: date, closures
 <style>
 body {{ font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; color: #1f2a44; background: #fff; }}
 h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 16px; margin: 18px 0 6px; }}
+.cs-ttl {{ font-weight: 400; color: #5b6475; font-size: 13px; }}
 .cs-sub {{ color: #5b6475; font-size: 13px; margin-bottom: 8px; }}
 .cs-tip {{ background: #eef1f6; border-radius: 6px; padding: 8px 12px; font-size: 13px; }}
 @media print {{
-  body {{ margin: 6mm; }} .cs-tip, .cs-legend-top, .cs-sub {{ display: none; }} h1 {{ font-size: 14px; }}
+  body {{ margin: 6mm; }} h1, .cs-tip, .cs-legend-top, .cs-sub {{ display: none; }}
   .cs-week {{ break-after: page; }} .cs-week:last-child {{ break-after: auto; }}
   .cs-week h2 {{ margin-top: 0; }}
-  .cs-grid {{ min-width: 0 !important; font-size: 10px !important; }}
-  .cs-grid td {{ height: auto !important; padding: 2px !important; }}
-  .cs-chip b {{ font-size: 10px !important; }} .cs-chip span, .cs-open {{ font-size: 9px !important; }}
+  .cs-grid {{ min-width: 0 !important; font-size: 13px !important; }}
+  .cs-grid th {{ font-size: 14px; }}
+  .cs-grid td {{ height: auto !important; }}
+  .cs-chip b {{ font-size: 13.5px !important; }} .cs-chip span {{ font-size: 12px !important; }}
   .cs-wrap {{ overflow: visible !important; }}
   * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
-  @page {{ size: landscape; }}
+  @page {{ size: letter landscape; }}
 }}
 </style></head><body>
 <h1>{html.escape(title)}</h1>
 <div class="cs-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y}{who}</div>
-<div class="cs-tip">To print or save as PDF: press Ctrl/Cmd + P. Each week prints on its own landscape page.</div>
+<div class="cs-tip">To print or save as PDF: press Ctrl/Cmd + P. Each week prints on two landscape pages:
+courts 1–4, then courts 5–7 and the practice court.</div>
 <div class="cs-legend-top">{legend_html(ages, stripes, show_moved)}</div>
 {''.join(parts)}
 <script>
-// Shrink any week taller than a landscape page so each week prints on one page.
+// Only a page that's still too tall (a very busy week) gets shrunk to fit.
 function fitWeeks() {{
-  var pageH = 7.6 * 96, pageW = 10.3 * 96;
-  document.querySelectorAll('.cs-week').forEach(function (s, i) {{
+  var pageH = 7.75 * 96, pageW = 10.3 * 96;
+  document.querySelectorAll('.cs-week').forEach(function (s) {{
     s.style.zoom = 1; s.style.width = pageW + 'px';
-    var top = i === 0 && window.matchMedia('print').matches ? s.offsetTop : 0;
     var z = 1;
-    for (var k = 0; k < 4; k++) {{  // a shrunk week gets wider (fewer wrapped lines), then re-fits
+    for (var k = 0; k < 4; k++) {{  // a shrunk page gets wider (fewer wrapped lines), then re-fits
       s.style.width = (pageW / z) + 'px';
-      z = Math.min(1, (pageH - top) / s.scrollHeight);
+      z = Math.min(1, pageH / s.scrollHeight);
     }}
     s.style.width = (pageW / z) + 'px';
     s.style.zoom = z.toFixed(3);
