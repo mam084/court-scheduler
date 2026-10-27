@@ -661,6 +661,32 @@ def tournament_conflicts(teams: list["Team"], tournaments: list["Tournament"]) -
     return out
 
 
+def program_coach_conflicts(locals_: list["LocalProgram"], start: date, end: date,
+                            closures: dict | None = None) -> list[dict]:
+    """Coaches listed on two programs that run at the same time (overlapping
+    timeslots on the same date). One dict per coach and pair of programs:
+    coach, programs (a, b), when ('Tue 5:30 / 5:30'), dates."""
+    closures = closures or {}
+    hits: dict[tuple, dict] = {}
+    d = start
+    while d <= end:
+        if d not in closures:
+            running = [lp for lp in locals_ if lp.runs_on(d)]
+            for i, a in enumerate(running):
+                for b in running[i + 1:]:
+                    if a.name == b.name or not slots_overlap(a.slot, b.slot):
+                        continue
+                    for c in sorted(set(a.coaches) & set(b.coaches)):
+                        x, y = sorted([(a.name, a.slot), (b.name, b.slot)])
+                        k = (c, x, y)
+                        h = hits.setdefault(k, {"coach": c, "programs": (x[0], y[0]),
+                                                "slots": (x[1], y[1]), "dates": []})
+                        if d not in h["dates"]:
+                            h["dates"].append(d)
+        d += timedelta(days=1)
+    return sorted(hits.values(), key=lambda h: (h["dates"][0], h["coach"]))
+
+
 def span_text(a: date, b: date) -> str:
     return f"{a:%a %-m/%-d}" + ("" if a == b else f"–{b:%a %-m/%-d}")
 

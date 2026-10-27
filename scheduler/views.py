@@ -69,6 +69,7 @@ CSS = """
 .cs-open { border: 1px dashed #B7BECB; border-radius: 6px; padding: 2px 6px; margin: 0 0 4px 0; color: #8A93A5;
            font-size: 11.5px; line-height: 1.25; background: transparent; }
 .cs-open .cs-time { font-weight: 600; }
+.cs-open .cs-write { display: none; }
 .cs-tag { display: inline-block; font-size: 10.5px; font-weight: 700; border-radius: 4px; padding: 0 4px;
           margin-top: 2px; background: #FDE68A; color: #6B4A00; }
 .cs-tag.cs-xtra { background: #E0E7FF; color: #3730A3; }
@@ -82,6 +83,32 @@ CSS = """
 .cs-grid tr.cs-pc td:not(.cs-daycell) { border-top: 3px solid #1F2A44; }
 </style>
 """
+
+
+# Dark theme: the grids, calendar and counts on a dark page. Chips keep their
+# own colors. "body" in front makes these win over CSS above.
+DARK_CSS = """<style>
+body .cs-grid th { background: #0E1422; color: #E8ECF3; }
+body .cs-grid th.cs-wkend { background: #1B2438; }
+body .cs-grid td { background: #1B2130; border-color: #394155; color: #E3E7EE; }
+body .cs-grid td.cs-wkend { background: #20283A; }
+body .cs-grid td.cs-daycell { background: #283044; color: #E8ECF3; }
+body .cs-grid td.cs-closed { background: repeating-linear-gradient(45deg,#232833,#232833 8px,#2B313D 8px,#2B313D 16px);
+                             color: #A3AAB8; }
+body .cs-grid tr.cs-pc td { background: #26241C; }
+body .cs-grid tr.cs-pc td.cs-daycell { background: #343024; color: #EADFC4; border-top-color: #8A93A8; }
+body .cs-grid tr.cs-pc td:not(.cs-daycell) { border-top-color: #8A93A8; }
+body .cs-open { border-color: #566079; color: #A0A9BC; }
+body .cs-cal .cs-datenum { color: #E8ECF3; }
+body .cs-cal td.cs-out { background: #161A24; }
+body .cs-legend .cs-lbl { color: #A3AAB8; }
+body .cs-counts td.cs-ok { background: #1D3A25; color: #A6E3B0; }
+body .cs-counts td.cs-short1 { background: #4A1F24; color: #F6B8B8; }
+body .cs-counts td.cs-short2 { background: #6E2329; color: #FFD3D3; }
+body .cs-counts td.cs-none { background: #20252F; color: #808A9C; }
+body .cs-counts td.cs-team { background: #283044; color: #E8ECF3; }
+body .cs-counts-wrap { border-color: #394155; }
+</style>"""
 
 
 def club_stripes(clubs) -> dict[str, str]:
@@ -115,7 +142,7 @@ def _hit(r, highlight) -> bool:
     return r["name"] in highlight or r.get("club") in highlight or any(c in highlight for c in coaches)
 
 
-def _chip(r, stripes, highlight=None, compact=False) -> str:
+def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str:
     is_local = r["kind"] == "Local"
     bg, fg = _colors(r)
     if is_local:
@@ -149,11 +176,13 @@ def _chip(r, stripes, highlight=None, compact=False) -> str:
         else:
             court = f" · Ct {court_short(r['court'])}"
         small = (" · paired" if paired else "") + (" · extra" if extra else "")
+        lc = f' · {html.escape(coaches)}' if is_local and local_coaches and coaches else ""
         return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
-                f'<span class="cs-time">{r["slot"]}</span> {name}{court}{small}</div>')
+                f'<span class="cs-time">{r["slot"]}</span> {name}{court}{small}{lc}</div>')
+    who = f'<br><span>{html.escape(coaches)}</span>' if local_coaches and coaches else ""
     if is_local:
         return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
-                f'<span class="cs-time">{r["slot"]}</span> {name}</div>')
+                f'<span class="cs-time">{r["slot"]}</span> {name}{who}</div>')
     return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
             f'<b><span class="cs-time">{r["slot"]}</span> {name}</b><span>{html.escape(coaches)}</span>'
             + (f"<div>{tags}</div>" if tags else "") + '</div>')
@@ -236,6 +265,7 @@ def court_grid_html(
     open_slots: dict | None = None,
     privates: list | None = None,
     courts: list | None = None,
+    local_coaches: bool = False,
 ) -> str:
     """Club layout: courts as rows, days as columns (always Sun–Sat),
     practices listed with their times in each box. `day_dates` is an ordered
@@ -293,7 +323,8 @@ def court_grid_html(
             chips = "".join(_tourn_chip(tn, compact=True) for tn in tn_here)
             items = []
             if len(cell):
-                items += [(_minutes(r["slot"]), _chip(r, stripes, highlight)) for _, r in cell.iterrows()]
+                items += [(_minutes(r["slot"]), _chip(r, stripes, highlight, local_coaches=local_coaches))
+                          for _, r in cell.iterrows()]
             here_pv = [pv for pv in (privates or []) if pv["day"] == wd and pv["court"] == c]
             for pv in here_pv:
                 items.append((pv["start"] + 0.25, _private_chip(pv)))
@@ -311,7 +342,7 @@ def court_grid_html(
                         txt = f"{a_}–{WEEKEND_ENDS.get(b_, b_)}"
                     items.append((_minutes(a_) + 0.5,
                                   f'<div class="cs-open" title="Court {c} is free {html.escape(tip)}">'
-                                  f'<span class="cs-time">{txt}</span> Open</div>'))
+                                  f'<span class="cs-time">{txt}</span> Open<span class="cs-write"></span></div>'))
             chips += "".join(h for _, h in sorted(items, key=lambda x: x[0]))
             cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
             out.append(f"<td{cls}>{chips}</td>")
@@ -399,6 +430,7 @@ def month_calendar_html(
     include_locals: bool = False,
     weekend_dates: list[date] | None = None,
     tournaments: list | None = None,
+    local_coaches: bool = False,
 ) -> str:
     """Sun–Sat calendar; each day lists its practices (time, team, court).
     Weekend days that aren't open are greyed out."""
@@ -441,7 +473,8 @@ def month_calendar_html(
                             and (not highlight or tn.kind == "local" or set(tn.teams) & set(highlight)))
             if g is not None:
                 g = g.assign(o=g["slot"].map(SLOT_KEYS.index)).sort_values(["o", "court"])
-                chips += "".join(_chip(r, stripes, None, compact=True) for _, r in g.iterrows())
+                chips += "".join(_chip(r, stripes, None, compact=True, local_coaches=local_coaches)
+                                 for _, r in g.iterrows())
             cls = ' class="cs-wkend"' if d.weekday() >= 5 else ""
             out.append(f'<td{cls}><div class="cs-datenum">{_daynum(d, start)}</div>{chips}</td>')
         out.append("</tr>")
@@ -534,7 +567,7 @@ def short_list_text(short: pd.DataFrame) -> str:
 def calendar_print_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,
                         highlight: set[str] | None = None, include_locals: bool = False,
                         weekend_dates: list[date] | None = None, tournaments: list | None = None,
-                        title: str = "Practice calendar") -> str:
+                        title: str = "Practice calendar", local_coaches: bool = False) -> str:
     """A standalone page of the calendar, one month per printed page
     (open it and print, or save as PDF from the print dialog)."""
     parts = []
@@ -544,7 +577,7 @@ def calendar_print_html(assignments: pd.DataFrame, start: date, end: date, closu
         a, b = max(d, start), min(last, end)
         parts.append(f'<section class="cs-month"><h2>{d:%B %Y}</h2>'
                      + month_calendar_html(assignments, a, b, closures, highlight, include_locals,
-                                           weekend_dates, tournaments) + "</section>")
+                                           weekend_dates, tournaments, local_coaches) + "</section>")
         d = last + timedelta(days=1)
     who = f" · {html.escape(', '.join(sorted(highlight)))}" if highlight else ""
     return f"""<!doctype html><html><head><meta charset="utf-8">
@@ -575,10 +608,12 @@ PRINT_HALVES = [([1, 2, 3, 4], "Courts 1–4"), ([5, 6, 7, PRACTICE_COURT], "Cou
 
 def weeks_print_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,
                      highlight: set[str] | None = None, tournaments: list | None = None, weekend_dates=None,
-                     title: str = "Court schedule", privates: list | None = None, show_moved: bool = False) -> str:
+                     title: str = "Court schedule", privates: list | None = None, show_moved: bool = False,
+                     open_for=None, local_coaches: bool = False) -> str:
     """Every week of the court view on one standalone page. Printed (or
     saved as PDF), each week takes two landscape pages: courts 1-4, then
-    courts 5-7 and the practice court."""
+    courts 5-7 and the practice court. open_for(day_dates) -> open slots
+    adds the "Open" boxes, with room to write a name in on paper."""
     a = assignments if show_moved else assignments.assign(on_pattern=True)
     stripes = club_stripes(a["club"]) if "club" in a else {}
     ages = a.loc[a["kind"] == "Practice", "age"] if len(a) else []
@@ -592,7 +627,8 @@ def weeks_print_html(assignments: pd.DataFrame, start: date, end: date, closures
             parts.append(f'<section class="cs-week"><h2>Week of {ws:%b %-d, %Y} · {label}'
                          f'<span class="cs-ttl"> · {html.escape(title)}</span></h2>'
                          + court_grid_html(book, dd, closures, highlight, stripes, tournaments, weekend_dates,
-                                           privates=pv, courts=courts) + "</section>")
+                                           open_slots=open_for(dd) if open_for else None,
+                                           privates=pv, courts=courts, local_coaches=local_coaches) + "</section>")
         ws += timedelta(days=7)
     who = f" · {html.escape(', '.join(sorted(highlight)))}" if highlight else ""
     return f"""<!doctype html><html><head><meta charset="utf-8">
@@ -612,6 +648,8 @@ h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 16px; margin: 18px 0
 .cs-week .cs-grid td {{ height: auto !important; }}
 .cs-week .cs-chip b {{ font-size: 13.5px !important; }} .cs-week .cs-chip span {{ font-size: 12px !important; }}
 .cs-week .cs-wrap {{ overflow: visible !important; }}
+.cs-week .cs-open {{ min-height: 34px; color: #7A8396; }}
+.cs-week .cs-open .cs-write {{ display: block; border-bottom: 1px solid #B7BECB; height: 16px; margin: 0 2px 2px; }}
 @page {{ size: landscape; margin: 0.35in; }}
 @media print {{
   body {{ margin: 0; }} h1, .cs-tip, .cs-legend-top, .cs-sub {{ display: none; }}

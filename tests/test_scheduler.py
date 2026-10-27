@@ -1398,3 +1398,32 @@ def test_weekend_with_local_tournament_isnt_greyed_out_and_shows_under_the_day()
     assert h.count("weekend not open") == 1   # Sunday the 1st only; Saturday the 7th shows its tournaments
     head = h.split("</thead>")[0]
     assert "Girls Local A" in head and "Girls Local B" in head
+
+
+def test_coach_on_two_programs_at_once_is_flagged():
+    from scheduler.data import program_coach_conflicts
+    teams = [{"team": "16-Bea", "age": 16}]
+    inp = _inp(teams, locals_=[
+        {"program": "G League", "days": "Tue", "time": "5:30", "courts": "1-2", "coaches": "Kai"},
+        {"program": "JumpStart", "days": "Tue", "time": "4:30", "courts": "P", "coaches": "Kai; Lu"},
+        {"program": "B League", "days": "Tue", "time": "3:45", "courts": "3", "coaches": "Lu"},
+        {"program": "Late", "days": "Tue", "time": "7:20", "courts": "4", "coaches": "Kai"}])
+    data = clean(inp, *NOV)
+    conf = program_coach_conflicts(data.locals, *NOV, data.closures)
+    pairs = {(c["coach"], c["programs"]) for c in conf}
+    assert pairs == {("Lu", ("B League", "JumpStart"))}   # 4:30 JumpStart overlaps 3:45; 5:30 and 7:20 don't
+    assert all(d.weekday() == 1 for c in conf for d in c["dates"])
+
+
+def test_printed_weeks_have_open_courts_to_write_in_and_program_coaches():
+    from scheduler.views import open_slot_map, weeks_print_html
+    teams = [{"team": "16-Bea", "age": 16}]
+    inp = _inp(teams, locals_=[{"program": "G League", "days": "Tue", "time": "5:30", "courts": "1-2",
+                                "coaches": "Kai"}])
+    r = solve(inp, *NOV, time_limit_s=10)
+    data = clean(inp, *NOV)
+    h = weeks_print_html(r.assignments, *NOV, data.closures, None, r.tournaments, r.weekend_dates,
+                         open_for=lambda dd: open_slot_map(dd, data), local_coaches=True)
+    assert 'class="cs-write"' in h and "Kai" in h
+    plain = weeks_print_html(r.assignments, *NOV, data.closures, None, r.tournaments, r.weekend_dates)
+    assert 'class="cs-write"' not in plain
