@@ -77,10 +77,12 @@ COLUMNS = {
     "Tournaments": ["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts", "coaches",
                     "note"],
     "Privates": ["coach", "date", "time", "court", "type", "team", "player", "note"],
+    "Calendars": ["kind", "name", "calendar_id"],
 }
 ATTRS = {"Teams": "teams", "Availability": "availability", "Wishlist": "wishlist",
          "Locals": "locals", "Weekends": "weekends", "Closures": "closures", "Tournaments": "tournaments",
-         "Coaches": "coaches", "Overrides": "overrides", "Privates": "privates"}
+         "Coaches": "coaches", "Overrides": "overrides", "Privates": "privates",
+         "Calendars": "calendars"}
 
 
 def empty(sheet: str) -> pd.DataFrame:
@@ -113,6 +115,7 @@ class ScheduleInput:
     coaches: pd.DataFrame = field(default_factory=lambda: empty("Coaches"))
     overrides: pd.DataFrame = field(default_factory=lambda: empty("Overrides"))
     privates: pd.DataFrame = field(default_factory=lambda: empty("Privates"))
+    calendars: pd.DataFrame = field(default_factory=lambda: empty("Calendars"))
 
     def sheets(self) -> dict[str, pd.DataFrame]:
         out = {}
@@ -182,8 +185,9 @@ class ScheduleInput:
 
 # Tables that belong to the club rather than to one spreadsheet: importing a
 # spreadsheet keeps them, and a new schedule starts with them.
-KEPT_TABLES = {"Locals": "locals", "Tournaments": "tournaments", "Privates": "privates"}
-_KEPT_LABEL = {"Locals": "programs", "Tournaments": "tournaments", "Privates": "privates"}
+KEPT_TABLES = {"Locals": "locals", "Tournaments": "tournaments", "Privates": "privates", "Calendars": "calendars"}
+_KEPT_LABEL = {"Locals": "programs", "Tournaments": "tournaments", "Privates": "privates",
+               "Calendars": "calendar links"}
 
 
 def keep_programs(new: "ScheduleInput", old: "ScheduleInput | None", use_file: bool = False) -> list[str]:
@@ -622,6 +626,7 @@ class Tournament:
     coaches: list[str]        # local: coaches of its locals program
     club: str = ""
     ages: list[int] = field(default_factory=list)
+    program: str = ""         # local: the locals program running it
 
     def covers(self, d: date) -> bool:
         return self.start <= d <= self.end
@@ -1022,7 +1027,8 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             if prog and not any(lp.name.lower() == prog.lower() for lp in locals_):
                 warnings.append(f"{row}: program '{prog}' isn't on the Locals sheet")
             tournaments.append(Tournament(name, kind, t_start, t_end, t_teams,
-                                          courts if kind == "local" else [], coaches, club, ages))
+                                          courts if kind == "local" else [], coaches, club, ages,
+                                          next((lp.name for lp in locals_ if lp.name.lower() == prog.lower()), prog)))
         except (ValueError, TypeError, KeyError) as e:
             errors.append(f"{row}: {e}")
 

@@ -84,6 +84,7 @@ Closures default to the major family holidays: New Year's Day, July 4, Thanksgiv
 - **Privates:** book 1-hour private lessons (coach, date, any start time, court: the practice court by default), toggled **Team** (for one of the club's teams) or **Personal**. Each is checked against the schedule, so a court or coach that's busy then is flagged before and after booking. Privates show on the weekly court view. **Download every coach's privates** gives a spreadsheet with every coach and their team / personal counts, one list of all privates, and a sheet per coach.
 - **Coaches:** each coach's head and assistant teams, locals, no-dates, privates and full schedule, plus an `.ics` download for Google Calendar. Coaches who aren't on a team yet (e.g. ones who only work programs) can be added to the roster here.
 - **Importing a spreadsheet** (new schedule or *Replace data*) keeps the locals programs, tournaments and privates you already have, so they don't need to be in every spreadsheet. A new schedule takes them from a saved schedule you pick (the newest by default); *Replace data* keeps the open schedule's unless you tick *Also replace programs and tournaments*. An empty or missing sheet never wipes them.
+- **Google Calendar** (Publish tab): push a published version to each team's, club's and program's Google Calendar. Preview shows every add, update and removal before anything is written; test mode sends it all to one throwaway calendar; events added by hand are never touched. Setup: [`docs/SETUP_CALENDAR.md`](docs/SETUP_CALENDAR.md).
 - **Publish:** mark the schedule as sent to coaches. Rebuilds then keep practices where they were, and this page lists every practice that moved, appeared, disappeared or changed court since a published version, with the reason (a new no-date, a program on the court, a tournament…). Downloadable as CSV. **Restore this version** makes an older version the current schedule again, rebuilt around the current inputs: anything that can't happen any more is left out with a note, and restored practices that now break a rule are flagged on Review.
 - **Review:** the practices-per-week grid (its title row stays put while you scroll), everything that differs from the ideal schedule, with the reason, plus a per-team count of the less-wanted spots (Court 2, 3:45, weekends, makeups, back-to-back days) for this schedule or every published version.
 - **Inputs:** edit any table in place and re-run.
@@ -159,6 +160,7 @@ scheduler/
   export.py             Excel workbook + per-coach .ics
   storage.py            saved schedules, users and the activity log (SQLite or Postgres via DATABASE_URL)
   access.py             roles: who can sign in and what they can change
+  gcal.py               Google Calendar sync: events to send, preview, apply
   changes.py            published versions, what changed, per-team burden counts
   pecking.py            read a pecking-order sheet and match it to the teams
   privates.py           private lessons: reading, conflict checks, per-coach spreadsheet
@@ -175,7 +177,7 @@ tests/                  hard-rule and parsing tests
 - [x] Google sign-in with coach / scheduling admin / app admin roles, View as, activity log
 - [ ] Coaches request changes (moves, privates, no-dates) and a scheduling admin approves them, with the solver checking each change; nobody approves their own
 - [ ] Email notifications for new requests and decisions
-- [ ] Live Google Calendar sync
+- [x] Google Calendar sync of published schedules (team, club and program calendars; test mode and preview)
 - [ ] Monthly prompt for coaches to submit next month's no-dates
 - [x] Local and travel tournaments, court quality ranking
 - [x] Published versions, stable rebuilds, a "what changed" list and restoring an older version
