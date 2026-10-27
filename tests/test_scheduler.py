@@ -1337,3 +1337,64 @@ def test_calendar_lists_local_courts_and_weeks_print():
     assert page.count('class="cs-week"') == 10   # Nov 1, 8, 15, 22, 29, two pages each
     assert "Courts 5–7 & practice court" in page
     assert "break-after: page" in page
+
+
+def test_extra_practice_beside_one_already_that_day():
+    """An extra on a day the team already practices keeps the other one."""
+    teams = [{"team": "16-Bea", "age": 16}, {"team": "17-Cy", "age": 17}]
+    inp = _inp(teams)
+    r0 = solve(inp, *NOV, time_limit_s=10)
+    pr0 = r0.assignments[(r0.assignments["kind"] == "Practice") & (r0.assignments["name"] == "16-Bea")]
+    first = pr0[pr0["date"].map(lambda d: d.weekday() < 5)].sort_values("date").iloc[0]
+    other = "7:20" if first["slot"] == "5:30" else "5:30"
+    inp.overrides = pd.DataFrame([{"team": "16-Bea", "action": "Extra", "date": f"{first['date']:%m/%d/%Y}",
+                                   "days": "", "time": other, "court": "", "note": ""}], columns=COLUMNS["Overrides"])
+    r = solve(inp, *NOV, time_limit_s=10, previous=r0.assignments, previous_pattern=r0.pattern)
+    pr = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["name"] == "16-Bea")]
+    that_day = pr[pr["date"] == first["date"]]
+    assert set(that_day["slot"]) == {first["slot"], other}, that_day
+    wk = week_start(first["date"])
+    assert _per_week(pr, "16-Bea")[wk] == _per_week(pr0, "16-Bea")[wk] + 1
+
+
+def test_two_hand_placed_practices_same_day_different_times():
+    teams = [{"team": "16-Bea", "age": 16}]
+    inp = _inp(teams)
+    inp.overrides = pd.DataFrame([
+        {"team": "16-Bea", "action": "Add", "date": "11/10/2026", "days": "", "time": "5:30", "court": "", "note": ""},
+        {"team": "16-Bea", "action": "Extra", "date": "11/10/2026", "days": "", "time": "7:20", "court": "", "note": ""},
+    ], columns=COLUMNS["Overrides"])
+    r = solve(inp, *NOV, time_limit_s=10)
+    pr = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["date"] == date(2026, 11, 10))]
+    assert set(pr["slot"]) == {"5:30", "7:20"}
+
+
+def test_boys_above_girls_at_the_same_rank():
+    from scheduler import pecking as pk
+    teams = pd.DataFrame([{"team": "14-Ann", "club": "SDVBC", "age": 14, "rank": "14-1"},
+                          {"team": "14 Black", "club": "Seaside", "age": 14, "rank": "14-1"},
+                          {"team": "14 Green", "club": "Seaside", "age": 14, "rank": "14-2"}])
+    order = pk.order_table(teams)
+    assert list(order["team"]) == ["14 Black", "14-Ann", "14 Green"]
+    data = clean(_inp([{"team": "14-Ann", "age": 14, "rank": "14-1"},
+                       {"team": "14 Black", "club": "Boys", "age": 14, "rank": "14-1", "head_coach": "Al"}]), *NOV)
+    from scheduler.config import pecking_weights
+    w = pecking_weights(data.teams)
+    assert w["14 Black"] > w["14-Ann"]
+
+
+def test_weekend_with_local_tournament_isnt_greyed_out_and_shows_under_the_day():
+    from scheduler.views import court_grid_html, week_dates
+    teams = [{"team": "16-Bea", "age": 16}]
+    inp = _with_tournaments(_inp(teams), [
+        {"name": "Girls Local A", "type": "Local", "start_date": "11/07/2026", "courts": "1-4"},
+        {"name": "Girls Local B", "type": "Local", "start_date": "11/07/2026", "courts": "5-7"}])
+    r = solve(inp, *NOV, time_limit_s=10)
+    assert date(2026, 11, 7) not in r.weekend_dates   # weekend not open for practices
+    ws = week_start(date(2026, 11, 7))
+    a = r.assignments
+    h = court_grid_html(a[a["date"].map(week_start) == ws], week_dates(ws, *NOV), {}, None, None, r.tournaments,
+                        r.weekend_dates)
+    assert h.count("weekend not open") == 1   # Sunday the 1st only; Saturday the 7th shows its tournaments
+    head = h.split("</thead>")[0]
+    assert "Girls Local A" in head and "Girls Local B" in head

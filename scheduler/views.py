@@ -53,7 +53,6 @@ CSS = """
 .cs-chip span { font-size: 11.5px; opacity: .85; }
 .cs-chip.cs-local { background-image: repeating-linear-gradient(135deg, transparent, transparent 6px, rgba(0,0,0,.04) 6px, rgba(0,0,0,.04) 12px); }
 .cs-chip.cs-moved { outline: 2px dashed #C0392B; outline-offset: -2px; }
-.cs-pin { font-size: 0.7em; vertical-align: 0.1em; color: #1F2A44; }
 .cs-chip.cs-dim { opacity: .2; }
 .cs-time { font-variant-numeric: tabular-nums; font-weight: 600; }
 .cs-legend { display:flex; flex-wrap:wrap; gap:6px; margin: 6px 0 10px; font-family: system-ui, sans-serif; font-size: 12px; align-items:center; }
@@ -75,6 +74,9 @@ CSS = """
 .cs-tag.cs-xtra { background: #E0E7FF; color: #3730A3; }
 .cs-chip.cs-priv { background: #F5EEFF; color: #4C1D95; border-left-color: #8B5CF6; padding: 2px 5px; }
 .cs-chip.cs-priv span { font-size: 11px; }
+.cs-grid th .cs-thead-t { margin-top: 4px; text-align: left; font-weight: 600; }
+.cs-grid th .cs-thead-t .cs-chip { margin: 0 0 3px 0; padding: 2px 5px; font-size: 11px; line-height: 1.2; }
+.cs-grid th .cs-thead-t .cs-chip span { display: block; font-weight: 400; font-size: 10.5px; opacity: .9; }
 .cs-grid tr.cs-pc td { background: #F6F3EC; }
 .cs-grid tr.cs-pc td.cs-daycell { background: #EDE6D6; color: #5A4A2A; border-top: 3px solid #1F2A44; }
 .cs-grid tr.cs-pc td:not(.cs-daycell) { border-top: 3px solid #1F2A44; }
@@ -129,15 +131,12 @@ def _chip(r, stripes, highlight=None, compact=False) -> str:
     if not _hit(r, highlight):
         cls.append("cs-dim")
     name = html.escape(str(r["name"]))
-    if r.get("pinned") == True:  # noqa: E712  (NaN-safe)
-        name = '<span class="cs-pin" title="set by hand">●</span> ' + name
     coaches = " · ".join(c.strip() for c in str(r.get("coach") or "").split(";") if c.strip())
     style = f"background:{bg};color:{fg};border-left-color:{stripe}"
     paired = _text(r.get("paired"))
     extra = r.get("extra") == True  # noqa: E712
     title = f"{r['slot_label']} · {coaches}" + ("" if "cs-moved" not in cls else " · moved from usual time") \
-        + (" · placed by hand" if r.get("pinned") == True else "") \
-        + (" · extra practice" if extra else "") + (f" · {paired}" if paired else "")  # noqa: E712
+        + (" · extra practice" if extra else "") + (f" · {paired}" if paired else "")
     tags = ""
     if paired:
         tags += f'<span class="cs-tag" title="{html.escape(paired)}">Paired · 3 on 2</span> '
@@ -213,6 +212,19 @@ def _tourn_chip(tn, compact=False) -> str:
     return f'<div class="cs-chip {cls}" title="{html.escape(title)}">{html.escape(tn.label())}{extra}</div>'
 
 
+def _tourn_head_chip(tn) -> str:
+    """A tournament under its day's name in the weekly grid."""
+    cls = "cs-tourn" if tn.kind == "local" else "cs-travel"
+    if tn.kind == "local":
+        sub = f"Local · until 7 PM · Ct {courts_label(tn.courts)}"
+    else:
+        sub = "Travel" + (f" · {', '.join(tn.teams)}" if tn.teams else "")
+    span = f"{tn.start:%a %-m/%-d}" + ("" if not tn.multi_day else f"–{tn.end:%a %-m/%-d}")
+    title = f"{tn.name} · {sub} · {span}"
+    return (f'<div class="cs-chip {cls}" title="{html.escape(title)}">{html.escape(tn.label())}'
+            f'<span>{html.escape(sub)}</span></div>')
+
+
 def court_grid_html(
     bookings: pd.DataFrame,
     day_dates: dict[str, date] | None = None,
@@ -238,37 +250,30 @@ def court_grid_html(
     open_wk = None if weekend_dates is None else set(weekend_dates)
 
     tournaments = tournaments or []
-    blocked, partial, notes = {}, {}, []
+    blocked, partial, on_day = {}, {}, {}
     for wd in cols:
         d = (day_dates or {}).get(wd)
-        if d is not None and d in closures:
+        if d is None or d == date.min:
+            if d == date.min:
+                blocked[wd] = "Outside this schedule period"
+            continue
+        on_day[wd] = [tn for tn in tournaments if tn.covers(d)]  # shown under the day's name
+        # until 7 PM: its courts show it, and 7:20 practices still show
+        partial[wd] = [tn for tn in on_day[wd] if tn.kind == "local"]
+        if d in closures:
             blocked[wd] = f"Closed: {html.escape(closures[d])}"
-        elif d is not None and d == date.min:
-            blocked[wd] = "Outside this schedule period"
-        elif (d is not None and open_wk is not None and d.weekday() >= 5 and d not in open_wk
+        elif (open_wk is not None and d.weekday() >= 5 and d not in open_wk and not partial[wd]
               and not (len(bookings) and (bookings["day"] == wd).any())):
             blocked[wd] = "No practices (weekend not open)"
-        elif d is not None:
-            for tn in tournaments:
-                if not tn.covers(d):
-                    continue
-                if tn.kind == "local":  # until 7 PM: 7:20 practices still show
-                    partial.setdefault(wd, []).append(tn)
-                elif tn not in notes:
-                    notes.append(tn)
-    if day_dates:
-        for tn in tournaments:  # list everything happening this week above the grid
-            if tn.kind == "local" and tn not in notes and any(
-                    d not in (None, date.min) and tn.covers(d) for d in day_dates.values()):
-                notes.append(tn)
 
     out = [CSS]
-    if notes:
-        out.append('<div class="cs-notes">' + "".join(_tourn_chip(tn) for tn in notes) + "</div>")
     out.append('<div class="cs-wrap"><table class="cs-grid"><thead><tr><th class="cs-day"></th>')
     for wd in cols:
         d = (day_dates or {}).get(wd)
         sub = f'<br><small style="font-weight:400;opacity:.8">{d:%b %-d}</small>' if d and d != date.min else ""
+        tn_html = "".join(_tourn_head_chip(tn) for tn in on_day.get(wd, []))
+        if tn_html:
+            sub += f'<div class="cs-thead-t">{tn_html}</div>'
         cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
         out.append(f"<th{cls}>{wd}{sub}</th>")
     out.append("</tr></thead><tbody>")
@@ -381,8 +386,6 @@ def legend_html(ages, stripes: dict, show_moved: bool = True) -> str:
     if show_moved:
         items.append('<div class="cs-chip cs-moved" style="background:#fff;color:#C0392B;border-left-color:#fff">'
                      'Moved / makeup</div>')
-    items.append('<div class="cs-chip" style="background:#fff;color:#1F2A44;border-left-color:#fff">'
-                 '<span class="cs-pin">●</span> Set by hand</div>')
     items.append('<span class="cs-tag">Paired · 3 on 2</span><span class="cs-tag cs-xtra">Extra</span>')
     return CSS + '<div class="cs-legend">' + "".join(items) + "</div>"
 

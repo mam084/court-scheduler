@@ -98,7 +98,8 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
         labels, closed, cols = {}, {}, []
         for i, wd in enumerate(WEEK_ORDER):
             d = ws_date + timedelta(days=i)
-            if wd in ("Sat", "Sun") and d not in weekend_open:
+            if wd in ("Sat", "Sun") and d not in weekend_open and not any(
+                    tn.kind == "local" and tn.covers(d) for tn in result.tournaments):
                 continue
             cols.append(wd)
             labels[wd] = f"{wd}\n{d:%b %-d}"

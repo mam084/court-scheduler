@@ -393,8 +393,10 @@ def test_app_admin_can_view_as_and_manage_access(db, monkeypatch):
     assert not at.exception
     at.selectbox(key="view_as").set_value("Scheduling admin").run()
     views = at.radio(key="nav").options
-    assert "Programs" in views and "Access" in views
+    assert "Programs" in views and "Access" not in views   # View as shows exactly what that role sees
     assert any("Auto-schedule" in b.label for b in at.button)
+    at.selectbox(key="view_as").set_value("Myself").run()
+    assert "Access" in at.radio(key="nav").options
 
 
 def test_scheduling_admin_has_everything_but_access(db, monkeypatch):
@@ -409,3 +411,65 @@ def test_outside_addresses_are_refused():
     from scheduler import access
     assert access.email_allowed("x@sdvbc.org") and not access.email_allowed("x@gmail.com")
     assert access.email_allowed("matthew@sdvbc.org")
+
+
+def test_coach_adds_own_no_date_and_sees_only_their_things(db, monkeypatch):
+    pid = _save(db, "Roles", 25)
+    head, team = _head_of_first_team(db, pid)
+    db.save_user("coach@sdvbc.org", "Coach", head)
+    at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
+    assert "Access" not in at.radio(key="nav").options
+    at.radio(key="nav").set_value("Court view").run()
+    keys = {t.key for t in at.toggle}
+    assert "hl_mine" in keys and "show_moved" not in keys
+    at.toggle(key="hl_mine").set_value(True).run()
+    assert not at.exception
+    at.radio(key="nav").set_value("Coaches").run()
+    assert at.selectbox(key=f"coach_pick_{head}").value == head      # opens on them
+    nk = f"nd_{head}"
+    at.multiselect(key=f"{nk}_days").set_value(["Fri"]).run()
+    next(b for b in at.button if b.key == f"{nk}_add").click().run()
+    assert not at.exception, at.exception
+    av = db.get(pid)["payload"]["inputs"]["Availability"]
+    assert any(r["who"] == head and r["type"] == "No" and r["days"] == "Fri" for r in av)
+
+
+def test_program_tournament_dates_round_trip_through_the_form(db):
+    """A program's local tournaments show in its form and survive a save."""
+    from streamlit.testing.v1 import AppTest
+    from scheduler.storage import read_payload
+    inp = simulate(4, 2, 2, seed=26, start=date(2026, 11, 1), end=date(2026, 11, 30))
+    prog = str(inp.locals.iloc[0]["program"])
+    inp.tournaments = pd.concat([inp.tournaments, pd.DataFrame([
+        {"name": "Local A", "type": "Local", "start_date": "11/07/2026", "end_date": "11/07/2026", "program": prog,
+         "courts": "1, 2, 3, 4"},
+        {"name": "Local B", "type": "Local", "start_date": "11/07/2026", "end_date": "11/07/2026", "program": prog,
+         "courts": "5, 6, 7"}])], ignore_index=True)
+    r = solve(inp, date(2026, 11, 1), date(2026, 11, 30), time_limit_s=10)
+    pid = new_id()
+    db.save(pid, "Prog T", make_payload(inp, date(2026, 11, 1), date(2026, 11, 30), {"time_limit": 10}, r))
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Programs").run()
+    pick = next(s for s in at.selectbox if s.key and s.key.startswith("edit_pick_"))
+    pick.set_value(next(o for o in pick.options if o.startswith(prog))).run()
+    next(b for b in at.button if b.label == "Save changes").click().run()
+    assert not at.exception, at.exception
+    t = at.session_state["inp"].tournaments
+    mine = t[t["program"] == prog]
+    assert sorted(mine["name"]) == ["Local A", "Local B"] and set(mine["start_date"]) == {"11/07/2026"}
+    saved = read_payload(db.get(pid)["payload"])[0].tournaments
+    assert len(saved[saved["program"] == prog]) == 2
+
+
+def test_private_start_uses_12_hour_clock(db):
+    at, _ = _open(db, "Privates 12h", 27)
+    at.radio(key="nav").set_value("Privates").run()
+    at.selectbox(key="pv_coach").set_value(at.selectbox(key="pv_coach").options[0]).run()
+    at.selectbox(key="pv_hour").set_value(9).run()
+    at.selectbox(key="pv_min").set_value(30).run()
+    at.radio(key="pv_ampm").set_value("AM").run()
+    next(b for b in at.button if b.label == "Book private").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["inp"].privates.iloc[-1]["time"] == "9:30 AM"

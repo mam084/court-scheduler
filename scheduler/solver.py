@@ -14,7 +14,7 @@ Hard rules (never broken)
   - No practices before a team's season start date.
   - Weekends: only open dates/blocks, only a team's weekend_only options,
     and never one team alone in a weekend block.
-  - At most one practice per team per day and two per week.
+  - At most one practice per team per day (hand-placed extras can share a day) and two per week.
 
 Soft preferences (weights in config.py)
   - 2 practices per week (shortfalls spread, older teams first).
@@ -194,8 +194,8 @@ def solve(
             problems.append(f"{label}: every court is taken by programs or a tournament")
         elif pn.court is not None and pn.court not in courts_on(d, s):
             problems.append(f"{label}: Court {pn.court} is taken by a program or tournament")
-        elif any(tt == t and dd == d for (tt, dd, _) in pinned):
-            problems.append(f"{label}: that team already has a practice placed that day")
+        elif (t, d, s) in pinned:
+            problems.append(f"{label}: that team already has a practice placed then")
         else:
             pinned[(t, d, s)] = pn.court
     by_slot = defaultdict(list)
@@ -338,6 +338,22 @@ def solve(
     def y_day(t, d):
         return sum(ys(t, d, s) for s in slots_on(d))
 
+    multi_day = {(t, d) for (t, d, s) in pinned}  # days that can hold 2+ practices (hand-placed)
+    day_on = {}
+
+    def on_day(t, d):
+        """1 if the team practices on d at all (a day with two practices counts once)."""
+        if (t, d) not in multi_day:
+            return y_day(t, d)
+        if (t, d) not in day_on:
+            vs = [y[t, d, s] for s in slots_on(d) if (t, d, s) in y]
+            if not vs:
+                return 0
+            u = m.NewBoolVar(f"on_{t}_{d}")
+            m.AddMaxEquality(u, vs)
+            day_on[t, d] = u
+        return day_on[t, d]
+
     # ---------------------------------------------------- hard rules --
     pair_vars = {}  # (d, s) -> teams over the court count (each one pairs 3 teams on 2 courts)
     for d in open_dates:
@@ -390,11 +406,19 @@ def solve(
                     asst_conflicts[c, d, s] = ov
                     obj.append(WEIGHTS["assistant_conflict"] * ov)
 
+    # One practice a day, as far as the solver's choices go. Practices placed
+    # by hand can share a day with others at a different time: an Extra sits
+    # beside whatever the team already has that day; a hand Add takes the
+    # team's spot that day.
     for t in T:
         for d in open_dates:
-            vs = [y[t, d, s] for s in slots_on(d) if (t, d, s) in y]
-            if len(vs) > 1:
-                m.AddAtMostOne(vs)
+            free = [y[t, d, s] for s in slots_on(d) if (t, d, s) in y and (t, d, s) not in pinned]
+            held = any((t, d, s) in pinned and (t, d, s) not in extra_keys for s in slots_on(d))
+            if held:
+                for v in free:
+                    m.Add(v == 0)
+            elif len(free) > 1:
+                m.AddAtMostOne(free)
         for ws, wdates in weeks.items():
             m.Add(sum(y_day(t, d) for d in wdates) <= teams[t].per_week + extras[t, ws])
 
@@ -625,7 +649,7 @@ def solve(
             if nxt in open_dates:  # back-to-back days, including Sat -> Sun
                 if d.weekday() < 4 and (DAYS[d.weekday()], DAYS[nxt.weekday()]) in wished_pairs:
                     continue
-                a, b = y_day(t, d), y_day(t, nxt)
+                a, b = on_day(t, d), on_day(t, nxt)
                 if isinstance(a, int) or isinstance(b, int):
                     continue
                 cons = m.NewBoolVar(f"cons_{t}_{d}")
@@ -703,6 +727,13 @@ def solve(
             if k in prev_keys:
                 obj.append(-WEIGHTS["keep_previous"] * v)
             m.AddHint(v, 1 if k in prev_keys else 0)
+    # A practice the solver puts on a day that already has a hand-placed
+    # extra costs a little, so an extra doesn't pull a second practice onto
+    # its day. One that was already there stays (adding an extra never bumps it).
+    for (t, d, s), v in y.items():
+        if (t, d, s) not in pinned and (t, d, s) not in prev_keys and any(
+                (t, d, x) in extra_keys for x in slots_on(d) if x != s):
+            obj.append(WEIGHTS["same_day_as_extra"] * v)
     if previous_pattern is not None and len(previous_pattern):
         pp = {(idx[r.team], r.day, r.slot) for r in previous_pattern.itertuples() if r.team in idx}
         for k, v in p.items():
@@ -932,11 +963,11 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
     taken = defaultdict(set)          # (d, s) -> courts already placed
     count = defaultdict(int)          # (d, s) -> practices already placed
     heads_at = defaultdict(set)       # (d, s) -> head coaches already placed
-    team_days, per_week = set(), defaultdict(int)
+    team_days, per_week = set(), defaultdict(int)   # team_days: (t, d, s) already placed
     for (t, d, s), c in pinned.items():
         count[d, s] += 1
         heads_at[d, s].update(teams[t].heads)
-        team_days.add((t, d))
+        team_days.add((t, d, s))
         per_week[t, week_start(d)] += 1
         if c is not None:
             taken[d, s].add(c)
@@ -967,8 +998,8 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
             drop(name, d, s, "that weekend time isn't open")
         elif s not in slots_on(d):
             drop(name, d, s, "that time isn't open")
-        elif (t, d) in team_days:
-            drop(name, d, s, "the team already has a practice placed by hand that day")
+        elif (t, d, s) in team_days:
+            drop(name, d, s, "the team already has a practice placed by hand then")
         elif per_week[t, week_start(d)] >= max(team.per_week, in_version[name, week_start(d)]) + extras[t, week_start(d)]:
             drop(name, d, s, f"the team already has {per_week[t, week_start(d)]} practices placed that week")
         elif count[d, s] >= len(courts_on(d, s)):
@@ -982,7 +1013,7 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
             restored.add((t, d, s))
             count[d, s] += 1
             heads_at[d, s].update(team.heads)
-            team_days.add((t, d))
+            team_days.add((t, d, s))
             per_week[t, week_start(d)] += 1
             if c is not None:
                 taken[d, s].add(c)
