@@ -371,7 +371,10 @@ def solve(
             # Court quality: the k-th team in a timeslot gets the k-th best open
             # court, so crowding a slot onto bad courts (Court 2) costs more
             # than moving a team to a time with a better court free.
-            costs = sorted(COURT_COST[c] for c in open_courts)[:len(vs)]
+            # On weekends this counts half: the club would rather fill one
+            # block (4 teams 9-11) than split it (2 at 9-11, 2 at 11-1) when
+            # there's room ("weekend_block").
+            costs = sorted(COURT_COST[c] // (2 if d.weekday() >= 5 else 1) for c in open_courts)[:len(vs)]
             if len(vs) > 1 and any(costs):
                 cum = [0]
                 for c_ in costs:

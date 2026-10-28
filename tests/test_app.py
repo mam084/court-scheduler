@@ -346,6 +346,7 @@ def test_first_sign_in_seeds_admins_and_coach_sees_limited_app(db, monkeypatch):
     assert db.get_user("matthew@sdvbc.org")["app_admin"] and db.get_user("cliff@sdvbc.org")["sched_admin"]
     views = at.radio(key="nav").options
     assert "Programs" not in views and "Inputs" not in views and "Access" not in views
+    assert "Review" not in views                                     # admins only
     assert not any("Auto-schedule" in b.label for b in at.button)
     # Not linked yet: can't edit any team.
     at.radio(key="nav").set_value("Edit practices").run()
@@ -473,3 +474,39 @@ def test_private_start_uses_12_hour_clock(db):
     next(b for b in at.button if b.label == "Book private").click().run()
     assert not at.exception, at.exception
     assert at.session_state["inp"].privates.iloc[-1]["time"] == "9:30 AM"
+
+
+def test_new_schedule_from_locals_template_then_import_coaches(db):
+    """New schedule: starts from the saved locals (no teams), the locals get
+    edited, then the coaches' spreadsheet comes in. The edited locals and the
+    tournaments stay; the old schedule's teams never show up."""
+    import io
+    from streamlit.testing.v1 import AppTest
+    from scheduler.data import ScheduleInput
+    src = _save(db, "Locals template", 30)
+    src_inp = ScheduleInput.from_records(db.get(src)["payload"]["inputs"])
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    assert not at.exception
+    assert at.sidebar.radio[0].value == "Locals template"
+    at.sidebar.text_input[0].set_value("Dec 5 - 20")
+    at.sidebar.date_input[0].set_value(date(2026, 12, 5))
+    at.sidebar.date_input[1].set_value(date(2026, 12, 20))
+    next(b for b in at.sidebar.button if b.label == "Create schedule").click().run()
+    assert not at.exception, at.exception
+    inp = at.session_state["inp"]
+    assert inp.teams.dropna(how="all").empty and inp.privates.dropna(how="all").empty
+    assert len(inp.locals) == len(src_inp.locals) and len(inp.tournaments) == len(src_inp.tournaments)
+    assert at.session_state["nav"] == "Programs"
+    for v in at.radio(key="nav").options:   # every section works with no teams yet
+        at.radio(key="nav").set_value(v).run()
+        assert not at.exception, (v, at.exception)
+    # Edit a program here, then import a coaches' spreadsheet whose Locals differ.
+    at.session_state["inp"].locals.loc[0, "program"] = "Renamed local"
+    coaches = simulate(3, 2, 1, seed=99, start=date(2026, 12, 5), end=date(2026, 12, 20))
+    from scheduler.data import keep_programs
+    new = ScheduleInput.from_excel(io.BytesIO(coaches.to_excel_bytes()))
+    keep_programs(new, at.session_state["inp"])
+    assert "Renamed local" in set(new.locals["program"])
+    assert set(new.teams["team"]) == set(coaches.teams["team"])
+    assert not set(new.teams["team"]) - set(coaches.teams["team"])

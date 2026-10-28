@@ -629,12 +629,23 @@ h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 17px; margin: 18px 0
   @page {{ size: landscape; }}
 }}
 </style></head><body>
+{PRINT_BUTTON}
 <h1>{html.escape(title)}</h1>
 <div class="cs-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y}{who}</div>
 <div class="cs-sub">Dashed outline = a makeup or a practice off the team's usual day/time.</div>
-<div class="cs-tip">To print or save as PDF: press Ctrl/Cmd + P. Each month prints on its own landscape page.</div>
+<div class="cs-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P). Each month prints on its own landscape page.</div>
 {''.join(parts)}
 </body></html>"""
+
+
+# A Print button for the downloadable print pages (stays at the top right, never printed).
+PRINT_BUTTON = """<style>
+.cs-print { position: fixed; top: 14px; right: 16px; z-index: 10; font: 600 15px -apple-system, Segoe UI, Roboto,
+            sans-serif; background: #1f2a44; color: #fff; border: 0; border-radius: 8px; padding: 10px 18px;
+            cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.2); }
+.cs-print:hover { background: #33416a; }
+@media print { .cs-print { display: none !important; } }
+</style><button class="cs-print" type="button" onclick="window.print()">&#128424;&#xFE0E; Print</button>"""
 
 
 # Shrinks a printed week that would spill onto an extra page (shared by the print views).
@@ -723,9 +734,10 @@ h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 16px; margin: 18px 0
   * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
 }}
 </style></head><body>
+{PRINT_BUTTON}
 <h1>{html.escape(title)}</h1>
 <div class="cs-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y}{who}</div>
-<div class="cs-tip">To print or save as PDF: press Ctrl/Cmd + P. Each week prints on two landscape pages:
+<div class="cs-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P). Each week prints on two landscape pages:
 courts 1–4, then courts 5–7 and the practice court.</div>
 <div class="cs-legend-top">{legend_html(ages, stripes, show_moved)}</div>
 {''.join(parts)}

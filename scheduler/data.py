@@ -1060,8 +1060,6 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
 
     if errors:
         raise ValueError("Please fix these in the input:\n- " + "\n- ".join(errors))
-    if not teams:
-        raise ValueError("There are no teams to schedule.")
     # ---- coach roster (coaches who aren't on a team yet, plus contact info)
     roster: dict[str, dict] = {}
     cdf = getattr(inp, "coaches", None)

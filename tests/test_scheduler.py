@@ -1441,3 +1441,66 @@ def test_paper_print_has_every_slot_as_a_line():
     assert h.count('<section class="cs-week">') == 2 * weeks
     assert "7:20-9:10" in h and "9-11" in h and "Boys Local" in h and "needed" in h
     assert "16-Bea" in h
+
+
+def test_weekend_teams_fill_one_block_before_opening_another():
+    """Only Friday and Saturday are open: each team takes a Saturday. With
+    room on the courts, they share one 2-hour block instead of splitting
+    2 at 9-11 and 2 at 11-1 (and never one team alone)."""
+    teams = [{"team": f"{a}-{n}", "age": a, "head_coach": n}
+             for a, n in [(16, "Ann"), (15, "Bea"), (14, "Cat"), (13, "Dee"), (17, "Eve"), (12, "Fay")]]
+    avail = [{"who": t["team"], "type": "No", "days": "Mon, Tue, Wed, Thu"} for t in teams]
+    weekends = [{"date": d, "open": "9AM-1PM"} for d in ("11/7/2026", "11/14/2026")]
+    inp = _inp(teams, avail, weekends=weekends)
+    r = solve(inp, date(2026, 11, 1), date(2026, 11, 14), time_limit_s=20)
+    _check_hard_rules(inp, r)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    we = pr[pr["date"].map(lambda d: d.weekday() >= 5)]
+    assert len(we) == 12
+    assert (we.groupby("date")["slot"].nunique() == 1).all(), we.groupby(["date", "slot"]).size()
+
+
+def test_schedule_with_no_teams_yet_shows_its_locals():
+    """A new schedule from the locals template has no teams until the
+    coaches' spreadsheet is imported: it still solves and shows the locals."""
+    from scheduler.data import ATTRS, empty
+    src = simulate(4, 2, 3, seed=5, start=date(2026, 12, 5), end=date(2026, 12, 20))
+    inp = ScheduleInput(**{a: empty(sh) for sh, a in ATTRS.items()})
+    inp.locals = src.locals
+    r = solve(inp, date(2026, 12, 5), date(2026, 12, 20), time_limit_s=5)
+    assert r.ok and r.metrics["teams"] == 0
+    assert set(r.assignments["kind"]) == {"Local"}
+
+
+def test_team_dates_spreadsheet_circles_tournaments():
+    import io, zipfile
+    from openpyxl import load_workbook
+    from scheduler.export import team_dates_excel
+    s, e = date(2026, 12, 5), date(2026, 12, 20)
+    inp = simulate(6, 4, 4, seed=7, start=s, end=e)
+    r = solve(inp, s, e, time_limit_s=10)
+    travel = [tn for tn in r.tournaments if tn.kind == "travel"]
+    assert travel
+    data = clean(inp, s, e)
+    order = [t.name for t in data.teams][::-1]
+    x = team_dates_excel(r, data.closures, order, "Dec")
+    wb = load_workbook(io.BytesIO(x))
+    sh = wb["Team Dates"]
+    assert [sh.cell(5 + i, 1).value for i in range(len(order))] == order       # in the given order
+    n_days = sum(len([d for d in pd.date_range(tn.start, tn.end).date if s <= d <= e]) * len(tn.teams)
+                 for tn in travel)
+    xml = zipfile.ZipFile(io.BytesIO(x)).read("xl/drawings/drawingCircles1.xml").decode()
+    assert xml.count('prst="ellipse"') == n_days
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert sum(sh.cell(5 + i, 3 + 16).value for i in range(len(order))) == len(pr)
+    assert wb["List"].max_row == 1 + len(pr) + n_days
+
+
+def test_print_pages_have_a_print_button():
+    from scheduler.paper import paper_weeks_html
+    from scheduler.views import calendar_print_html, weeks_print_html
+    s, e = date(2026, 11, 1), date(2026, 11, 14)
+    r = solve(simulate(4, 2, 2, seed=3, start=s, end=e), s, e, time_limit_s=10)
+    a = r.assignments
+    for page in (paper_weeks_html(a, s, e), calendar_print_html(a, s, e), weeks_print_html(a, s, e)):
+        assert 'onclick="window.print()"' in page and "@media print { .cs-print { display: none" in page

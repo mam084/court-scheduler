@@ -36,7 +36,7 @@ from scheduler import privates as pv
 from scheduler import access
 from scheduler import gcal
 from scheduler import pecking as pk
-from scheduler.export import calendar_excel, calendar_ics, to_excel, to_ics
+from scheduler.export import calendar_excel, calendar_ics, team_dates_excel, to_excel, to_ics
 from scheduler.paper import paper_weeks_html
 from scheduler.solver import week_start
 from scheduler.changes import add_version, burden, diff, pattern_of, practices_of, published_at, snapshot
@@ -204,6 +204,20 @@ def open_project(pid: str) -> bool:
     return True
 
 
+def locals_template(rec: dict | None) -> ScheduleInput:
+    """A schedule with no teams yet: the locals programs, tournaments and
+    calendar links from a saved schedule (rec), so the locals can be set up
+    before the coaches' spreadsheet is imported."""
+    new_inp = ScheduleInput(**{a: empty(sh) for sh, a in ATTRS.items()})
+    if rec is not None:
+        old = read_payload(rec["payload"])[0]
+        for attr in ("locals", "tournaments", "calendars"):
+            df = getattr(old, attr, None)
+            if isinstance(df, pd.DataFrame):
+                setattr(new_inp, attr, df.dropna(how="all").copy().reset_index(drop=True))
+    return new_inp
+
+
 def create_schedule(label: str, new_inp: ScheduleInput, s_: date, e_: date):
     """Save a new schedule, open it and build it right away."""
     pid = new_id()
@@ -212,6 +226,10 @@ def create_schedule(label: str, new_inp: ScheduleInput, s_: date, e_: date):
     open_project(pid)
     st.session_state.resolve = True
     st.session_state.flash = f"Created “{label}”. It saves automatically; bookmark this page to come back."
+    if new_inp.teams.dropna(how="all").empty:
+        st.session_state.flash += (" Set up the locals in **Programs** and the tournaments in **Tournaments**, then "
+                                   "import the coaches' spreadsheet from the sidebar (**Import coaches' spreadsheet**).")
+        st.session_state.nav = "Programs"
     st.rerun()
 
 
@@ -311,9 +329,20 @@ with st.sidebar:
         new_name = st.text_input("Name", placeholder="e.g. Nov 3 – Dec 4 practices")
         new_start = st.date_input("From", value=d_start, format="MM/DD/YYYY")
         new_end = st.date_input("To", value=d_end, format="MM/DD/YYYY")
-        source = st.radio("Start from", ["Upload spreadsheet", "Simulated club"], horizontal=True)
+        source = st.radio("Start from", ["Locals template", "Upload spreadsheet", "Simulated club"], horizontal=True,
+                          help="Locals template: the club's programs and tournaments with no teams yet, so you "
+                               "can set up the locals first and import the coaches' spreadsheet after.")
         up = None
-        if source == "Upload spreadsheet":
+        if source == "Locals template":
+            tmpl_opts = [p["id"] for p in saved] + ["__empty__"]  # saved is newest first
+            _tmpl = next((p["id"] for p in saved if "template" in p["name"].lower()), tmpl_opts[0])
+            tmpl_from = st.selectbox(
+                "Programs and tournaments from", tmpl_opts, index=tmpl_opts.index(_tmpl),
+                format_func=lambda o: "Nothing (start empty)" if o == "__empty__" else names[o],
+                help="Copies that schedule's locals programs and tournaments (no teams, coaches or privates). "
+                     "Picks a schedule with \"template\" in its name, else the newest.")
+            st.caption("Set up the locals in **Programs**, then import the coaches' spreadsheet from the sidebar.")
+        elif source == "Upload spreadsheet":
             up = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"])
             st.download_button("Download blank template", lambda: blank_template(new_start, new_end),
                                "court_scheduler_template.xlsx",
@@ -340,7 +369,9 @@ with st.sidebar:
             new_inp = None
             if not problems:
                 try:
-                    if source == "Upload spreadsheet":
+                    if source == "Locals template":
+                        new_inp = locals_template(store.get(tmpl_from) if tmpl_from != "__empty__" else None)
+                    elif source == "Upload spreadsheet":
                         new_inp = ScheduleInput.from_excel(up)
                         if keep_from != "__file__":
                             rec = store.get(keep_from)
@@ -372,7 +403,11 @@ with st.sidebar:
     if current is not None and CAN:
         bound(st.date_input, "From", "range_start", format="MM/DD/YYYY")
         bound(st.date_input, "To", "range_end", format="MM/DD/YYYY")
-        with st.expander("Replace data with a spreadsheet"):
+        _no_teams = st.session_state.inp.teams.dropna(how="all").empty
+        with st.expander("Import coaches' spreadsheet" if _no_teams else "Replace data with a spreadsheet",
+                         expanded=_no_teams):
+            st.caption("Brings in the teams, coaches, no-dates and wishlists. Anything from before (teams, "
+                       "coaches, hand edits) is replaced; the locals programs and tournaments stay.")
             rep = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"], key=f"replace_{current}")
             use_file = st.checkbox("Also replace programs and tournaments", key=f"replace_kept_{current}",
                                    help="Off: the Programs and Tournaments tabs stay as they are. On: use the "
@@ -380,13 +415,14 @@ with st.sidebar:
                                         "wipes them).")
             if not use_file:
                 st.caption("Programs and tournaments stay as they are.")
-            if rep is not None and st.button("Replace input tables", width="stretch"):
+            if rep is not None and st.button("Import" if _no_teams else "Replace input tables", width="stretch"):
                 try:
                     new_inp = ScheduleInput.from_excel(rep)
                     kept = keep_programs(new_inp, st.session_state.inp, use_file=use_file)
                     st.session_state.inp = new_inp
                     st.session_state.inp_sig = ("project", current, rep.name, rep.size)
                     st.session_state.result = None
+                    st.session_state.pending_prefs = []   # the old coaches' changes went with the old data
                     st.session_state.resolve = True
                     st.session_state.flash = (f"Replaced the inputs with {rep.name}"
                                               + (f" ({'; '.join(kept)})" if kept else "") + ".")
@@ -433,18 +469,18 @@ if st.session_state.get("project_id") is None:
                 "blocked off first, no-dates are respected, every team gets its two practices a week, and coaches' "
                 "requests are weighed against each other. Everything it couldn't give someone is listed with the reason.")
     c1, c2, c3 = st.columns(3)
-    c1.markdown("**1. Inputs**  \nUpload the club spreadsheet (teams, no-dates, wishlists, programs), or start "
-                "from a simulated club.")
-    c2.markdown("**2. Auto-schedule**  \nAn optimizer places every practice, then gives each team a home court "
-                "by the pecking order.")
-    c3.markdown("**3. Review & share**  \nCheck the court view, tweak practices by hand, publish, and send coaches "
-                "a calendar file.")
+    c1.markdown("**1. Locals first**  \nA new schedule starts from the locals template: the club's programs and "
+                "tournaments, no teams yet. Set up this period's locals in **Programs**.")
+    c2.markdown("**2. Import the coaches**  \nUpload the coaches' spreadsheet (teams, no-dates, wishlists). The "
+                "locals stay as you set them; the last schedule's teams and coaches don't come along.")
+    c3.markdown("**3. Auto-schedule & share**  \nThe optimizer places every practice, then check the court view, "
+                "tweak by hand, publish, print, and send coaches their dates.")
     d_s, d_e = next_month(date.today())
     if CAN:
         if st.button(f"Try it with a simulated club ({range_label(d_s, d_e)})", type="primary"):
             create_schedule("Demo club", simulate(6, 4, 4, seed=7, start=d_s, end=d_e), d_s, d_e)
-        st.caption("Or create a schedule from your own spreadsheet in the sidebar, or open a saved one from the "
-                   "**Schedule** menu.")
+        st.caption("Create a schedule in the sidebar (it starts from the locals template), or open a saved one "
+                   "from the **Schedule** menu.")
     if saved:
         st.markdown("**Saved schedules**")
         for p in saved:
@@ -604,8 +640,8 @@ else:
         lines = [f"- **Week of {ws:%b %-d}:** {short_list_text(g)}" for ws, g in short.groupby("week_of")]
         alerts.append((st.error, f"**{plural(n_teams, 'team')} {'is' if n_teams == 1 else 'are'} short "
                                  f"{plural(n_missed, 'practice')}:**\n" + "\n".join(lines)
-                       + "\n\nWhy each one happened is in the **Review** tab, and the full week-by-week counts "
-                         "are there too."))
+                       + ("" if COACH_VIEW else "\n\nWhy each one happened is in the **Review** tab, and the full "
+                                                 "week-by-week counts are there too.")))
     my_broken = [b for b in result.broken if mine(b["team"])]
     if my_broken:
         lines = [f"- **{b['team']}** · {b['date']:%a %b %-d} {b['slot_label']}: {b['who']}" for b in my_broken]
@@ -664,7 +700,7 @@ ALL_VIEWS = ["Court view", "Calendar", "Edit practices", "Programs", "Tournament
              "Coaches", "Pecking order", "Publish", "Review", "Inputs", "Access"]
 (TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_PRIV, TAB_COACH, TAB_PECK, TAB_PUB, TAB_REVIEW,
  TAB_INPUTS, TAB_ACCESS) = ALL_VIEWS
-ADMIN_ONLY = {TAB_PROG, TAB_TOURN, TAB_PECK, TAB_PUB, TAB_INPUTS}
+ADMIN_ONLY = {TAB_PROG, TAB_TOURN, TAB_PECK, TAB_PUB, TAB_REVIEW, TAB_INPUTS}
 VIEWS = [v for v in ALL_VIEWS if (CAN or v not in ADMIN_ONLY)
          and (v != TAB_ACCESS or (ME is not None and VIEWER.can_manage_access and VIEWER.acting_as is None))]
 if st.session_state.get("nav") not in VIEWS:
@@ -683,6 +719,15 @@ def template_locals(a: pd.DataFrame) -> pd.DataFrame:
     keep = counts[counts.apply(lambda r: r["n"] * 2 >= per_day[r["day"]], axis=1)]
     return loc.drop_duplicates(subset=["day", "slot", "court", "name"]).merge(
         keep[["name", "day", "slot", "court"]], on=["name", "day", "slot", "court"])
+
+
+def team_order() -> list[str]:
+    """Team names in the pecking order, top team first."""
+    from scheduler.config import pecking_key, team_is_boys
+    if not cleaned:
+        return []
+    return [t.name for t in sorted(cleaned.teams, key=lambda t: pecking_key(t.age, t.level,
+                                                                          team_is_boys(t.club, t.name)))]
 
 
 def people_options(a: pd.DataFrame) -> list[str]:
@@ -781,6 +826,11 @@ if VIEW == TAB_COURT:
                            help="Every week's court view in one page; each week prints on two landscape pages (courts 1-4, then 5-7 and the practice court). "
                                 "With **Show open court times** on, every open court time prints with a line to "
                                 "write a name in. Open it in your browser, then print or save as PDF.")
+        st.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
+                               result, closures, team_order(), st.session_state.get("project_name") or ""),
+                           f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", width="stretch",
+                           help="One row per team (in the pecking order) with every practice (time and court) and "
+                                "tournament date; tournament days are circled. Prints landscape on one page wide.")
 
 # ------------------------------------------------------------ calendar --
 if VIEW == TAB_CAL:
@@ -821,6 +871,11 @@ if VIEW == TAB_CAL:
         d3.download_button("Calendar (Excel)", lambda: calendar_excel(result, closures, hl or None, show_locals),
                            f"{fname}.xlsx", width="stretch",
                            help="The club's calendar layout: a block per week, each day with time · what · courts.")
+        st.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
+                               result, closures, team_order(), st.session_state.get("project_name") or ""),
+                           f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", key="team_dates_cal",
+                           help="One row per team with every practice and tournament date; tournament days are "
+                                "circled.")
 
 
 # ------------------------------------------------------ edit practices --

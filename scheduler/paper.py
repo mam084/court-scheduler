@@ -179,7 +179,7 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
                      tournaments: list | None = None, title: str = "Court schedule", privates: list | None = None,
                      practice_counts: pd.DataFrame | None = None, local_coaches: bool = False) -> str:
     """Every week in the paper layout, ready to print (two landscape pages a week)."""
-    from .views import FIT_SCRIPT
+    from .views import FIT_SCRIPT, PRINT_BUTTON
     closures = closures or {}
     tourns = list(tournaments or [])
     a = assignments if assignments is not None else pd.DataFrame(columns=["date", "court", "slot", "kind", "name"])
@@ -220,9 +220,10 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)}</title>{CSS}</head><body>
+{PRINT_BUTTON}
 <h1>{html.escape(title)}</h1>
 <div class="cs-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y}</div>
-<div class="cs-tip">To print or save as PDF: press Ctrl/Cmd + P. Each week prints on two landscape pages
+<div class="cs-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P). Each week prints on two landscape pages
 (courts 1–4, then courts 5–7 and the practice court). Every open time is a blank line to write in.</div>
 {''.join(parts)}
 {FIT_SCRIPT}

@@ -290,8 +290,10 @@ WEIGHTS = {
     # then a team) stays on the same court. Less important than nets.
     "coach_stay": 25,
     "keep_court": 4,
-    # each weekend 2-hour block opened (teams share blocks)
-    "weekend_block": 7,
+    # each weekend 2-hour block opened: the club would rather put 4 teams in
+    # 9-11 than 2 at 9-11 and 2 at 11-1 when there's room (on a busy weekend
+    # there isn't, and a team is never left alone in a block)
+    "weekend_block": 18,
     # reward: a coach's two teams in back-to-back slots the same day
     # (e.g. girls at 5:30 then boys at 7:20)
     "double_up": 6,

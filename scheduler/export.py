@@ -343,3 +343,234 @@ def calendar_excel(result: ScheduleResult, closures: dict, highlight: set[str] |
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ------------------------------------------------- team dates (per team) --
+# One row per team, one column per date: each practice (time and court) and
+# each travel tournament the team goes to, with the tournament days circled.
+# The circles are drawn shapes (Excel, Numbers, LibreOffice); the cells are
+# also red-outlined, which is what shows in Google Sheets (it drops shapes).
+
+_TOURN_FILL = PatternFill("solid", fgColor="FDECEC")
+_TOURN_SIDE = Side(style="medium", color="D62828")
+_WEEKEND_FILL = PatternFill("solid", fgColor="F4F6FA")
+_DATE_COL_W = 11      # characters
+_TEAM_ROW_H = 38      # points
+
+
+def _slot_text(slot: str) -> str:
+    return slot.replace("AM", " AM").replace("PM", " PM")
+
+
+def team_dates_excel(result: ScheduleResult, closures: dict, order: list[str] | None = None,
+                     title: str = "") -> bytes:
+    """Every team's practice and tournament dates, one row per team (in
+    `order`, e.g. the pecking order), with tournament days circled."""
+    start, end = result.start, result.end
+    a = result.assignments
+    pr = a[a["kind"] == "Practice"] if len(a) else a
+    teams = list(order or [])
+    for t in list(result.pattern["team"]) if len(result.pattern) else []:
+        if t not in teams:
+            teams.append(t)
+    for t in sorted(set(pr["name"])) if len(pr) else []:
+        if t not in teams:
+            teams.append(t)
+    heads = {}
+    if len(result.pattern):
+        heads = dict(zip(result.pattern["team"], result.pattern["head"]))
+    if len(pr):
+        for t, h in zip(pr["name"], pr["head"]):
+            heads.setdefault(t, h)
+    dates = list(pd.date_range(start, end).date)
+    travel = [tn for tn in result.tournaments if tn.kind == "travel"]
+    locals_t = [tn for tn in result.tournaments if tn.kind == "local"]
+
+    wb = Workbook()
+    sh = wb.active
+    sh.title = "Team Dates"
+    first_col = 3                 # A team, B head coach, then the dates
+    head_row, local_row = 3, 4
+    top = 5                       # first team row
+    sh.cell(1, 1, title or "Team practices & tournaments").font = Font(bold=True, size=14)
+    sh.cell(2, 1, f"{start:%b %-d} – {end:%b %-d, %Y}  ·  practice start time and court  ·  "
+                  "circled = tournament").font = Font(color="5B6475", italic=True)
+
+    for j, label in ((1, "Team"), (2, "Head coach")):
+        c = sh.cell(head_row, j, label)
+        c.font, c.fill, c.alignment = Font(bold=True, color="FFFFFF"), _head, Alignment(vertical="center")
+    c = sh.cell(local_row, 1, "Club events")
+    c.font, c.alignment = Font(italic=True, color="5B6475"), Alignment(vertical="center")
+    for k, d in enumerate(dates):
+        col = first_col + k
+        c = sh.cell(head_row, col, f"{d:%a}\n{d:%-m/%-d}")
+        c.font, c.fill = Font(bold=True, color="FFFFFF"), _head
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ev = [f"Closed: {closures[d]}"] if d in closures else []
+        ev += [f"{tn.name} (local)" for tn in locals_t if tn.covers(d)]
+        if ev:
+            c = sh.cell(local_row, col, "\n".join(ev))
+            c.font = Font(size=8, italic=True, color="5B6475")
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sh.column_dimensions[get_column_letter(col)].width = _DATE_COL_W
+    total_col = first_col + len(dates)
+    for j, label in ((total_col, "Practices"), (total_col + 1, "Tournaments")):
+        c = sh.cell(head_row, j, label)
+        c.font, c.fill = Font(bold=True, color="FFFFFF"), _head
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    sh.row_dimensions[head_row].height = 30
+    sh.row_dimensions[local_row].height = 30 if (closures or locals_t) else 16
+
+    by_team_day = {}
+    for r in pr.itertuples() if len(pr) else []:
+        by_team_day.setdefault((r.name, r.date), []).append(r)
+    circles = []                  # (row, col), 1-based
+    for i, t in enumerate(teams):
+        row = top + i
+        sh.row_dimensions[row].height = _TEAM_ROW_H
+        c = sh.cell(row, 1, t)
+        c.font, c.fill, c.border = Font(bold=True), _day, _border
+        c.alignment = Alignment(vertical="center")
+        c = sh.cell(row, 2, str(heads.get(t, "") or "").replace("; ", ", "))
+        c.border, c.alignment = _border, Alignment(vertical="center", wrap_text=True)
+        n_prac, my_t = 0, []
+        for k, d in enumerate(dates):
+            col = first_col + k
+            lines = []
+            for p in sorted(by_team_day.get((t, d), []), key=lambda p: SLOT_KEYS.index(p.slot)):
+                n_prac += 1
+                tag = " +" if p.extra == True else ""  # noqa: E712
+                lines.append(f"{_slot_text(p.slot)}{tag}\nCt {court_short(p.court)}")
+            tn_here = [tn for tn in travel if t in tn.teams and tn.covers(d)]
+            for tn in tn_here:
+                lines.append(tn.name)
+                if tn.name not in my_t:
+                    my_t.append(tn.name)
+            c = sh.cell(row, col, "\n".join(lines))
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = _border
+            if tn_here:
+                c.font, c.fill = Font(bold=True, color="B21E1E", size=8), _TOURN_FILL
+                c.border = Border(left=_TOURN_SIDE, right=_TOURN_SIDE, top=_TOURN_SIDE, bottom=_TOURN_SIDE)
+                circles.append((row, col))
+            elif d in closures:
+                c.fill = _closed
+            elif d.weekday() >= 5:
+                c.fill = _WEEKEND_FILL
+            if lines and not tn_here:
+                c.font = Font(size=10)
+        c = sh.cell(row, total_col, n_prac)
+        c.alignment, c.border, c.font = Alignment(horizontal="center", vertical="center"), _border, Font(bold=True)
+        c = sh.cell(row, total_col + 1, ", ".join(my_t))
+        c.alignment, c.border = Alignment(vertical="center", wrap_text=True), _border
+        if my_t:
+            c.font = Font(bold=True, color="B21E1E")
+
+    sh.column_dimensions["A"].width = 14
+    sh.column_dimensions["B"].width = 14
+    sh.column_dimensions[get_column_letter(total_col)].width = 10
+    sh.column_dimensions[get_column_letter(total_col + 1)].width = 26
+    sh.freeze_panes = sh.cell(top, first_col)
+    sh.print_title_rows = f"{head_row}:{local_row}"
+    sh.print_title_cols = "A:B"
+    sh.page_setup.orientation = "landscape"
+    sh.page_setup.fitToWidth = 1
+    sh.page_setup.fitToHeight = 0
+    sh.sheet_properties.pageSetUpPr.fitToPage = True
+    sh.page_margins.left = sh.page_margins.right = 0.3
+    sh.page_margins.top = sh.page_margins.bottom = 0.4
+
+    # A plain list too, one row per practice or tournament day (sortable).
+    ls = wb.create_sheet("List")
+    ls.append(["Team", "Date", "Day", "What", "Time", "Court"])
+    for c in ls[1]:
+        c.font, c.fill = Font(bold=True, color="FFFFFF"), _head
+    red = Font(bold=True, color="B21E1E")
+    for t in teams:
+        for d in dates:
+            for p in sorted(by_team_day.get((t, d), []), key=lambda p: SLOT_KEYS.index(p.slot)):
+                ls.append([t, d, f"{d:%a}", "Extra practice" if p.extra == True else "Practice",  # noqa: E712
+                           p.slot_label, court_name(p.court)])
+                ls.cell(ls.max_row, 2).number_format = "m/d/yyyy"
+            for tn in travel:
+                if t in tn.teams and tn.covers(d):
+                    ls.append([t, d, f"{d:%a}", f"Tournament: {tn.name}", "", ""])
+                    ls.cell(ls.max_row, 2).number_format = "m/d/yyyy"
+                    for c in ls[ls.max_row]:
+                        c.font = red
+    for j, w in enumerate([14, 11, 6, 34, 12, 14], start=1):
+        ls.column_dimensions[get_column_letter(j)].width = w
+    ls.freeze_panes = "A2"
+    ls.auto_filter.ref = f"A1:F{max(ls.max_row, 1)}"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return _add_circles(buf.getvalue(), "xl/worksheets/sheet1.xml", circles,
+                        col_w={first_col + k: _DATE_COL_W for k in range(len(dates))}, row_h=_TEAM_ROW_H)
+
+
+def _add_circles(xlsx: bytes, sheet_path: str, cells: list[tuple[int, int]], col_w: dict[int, float],
+                 row_h: float) -> bytes:
+    """Draws a red ellipse inside each (row, col) cell (1-based) of a sheet,
+    by adding a drawing part to the saved workbook (openpyxl can't make
+    shapes). The ellipses move and resize with their cells."""
+    import re
+    import zipfile
+    if not cells:
+        return xlsx
+    emu_px, emu_pt = 9525, 12700
+    parts = []
+    for n, (r, c) in enumerate(cells, start=1):
+        w = int((col_w.get(c, 9) * 7 + 5) * emu_px)
+        h = int(row_h * emu_pt)
+        ix, iy = 3 * emu_px, 2 * emu_px
+        parts.append(
+            f'<xdr:twoCellAnchor editAs="twoCell">'
+            f'<xdr:from><xdr:col>{c - 1}</xdr:col><xdr:colOff>{ix}</xdr:colOff>'
+            f'<xdr:row>{r - 1}</xdr:row><xdr:rowOff>{iy}</xdr:rowOff></xdr:from>'
+            f'<xdr:to><xdr:col>{c - 1}</xdr:col><xdr:colOff>{w - ix}</xdr:colOff>'
+            f'<xdr:row>{r - 1}</xdr:row><xdr:rowOff>{h - iy}</xdr:rowOff></xdr:to>'
+            f'<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="{n + 1}" name="Tournament circle {n}"/>'
+            f'<xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{w - 2 * ix}" '
+            f'cy="{h - 2 * iy}"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:noFill/>'
+            f'<a:ln w="25400"><a:solidFill><a:srgbClr val="D62828"/></a:solidFill></a:ln></xdr:spPr>'
+            f'</xdr:sp><xdr:clientData fPrintsWithSheet="1"/></xdr:twoCellAnchor>')
+    drawing = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+               '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" '
+               'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' + "".join(parts) + "</xdr:wsDr>")
+    src = zipfile.ZipFile(io.BytesIO(xlsx))
+    out = io.BytesIO()
+    rels_path = sheet_path.replace("worksheets/", "worksheets/_rels/") + ".rels"
+    rid = "rIdCircles1"
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        names = src.namelist()
+        for name in names:
+            data = src.read(name)
+            if name == sheet_path:
+                xml = data.decode("utf-8")
+                tag = (f'<drawing xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+                       f'r:id="{rid}"/>')
+                # <drawing> goes after the page setup elements, before any table parts.
+                m = re.search(r"<(legacyDrawing|tableParts|extLst)\b", xml)
+                xml = xml[:m.start()] + tag + xml[m.start():] if m else xml.replace("</worksheet>", tag + "</worksheet>")
+                data = xml.encode("utf-8")
+            elif name == "[Content_Types].xml":
+                xml = data.decode("utf-8").replace(
+                    "</Types>", '<Override PartName="/xl/drawings/drawingCircles1.xml" '
+                                'ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>')
+                data = xml.encode("utf-8")
+            elif name == rels_path:
+                xml = data.decode("utf-8").replace(
+                    "</Relationships>", f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/'
+                                        'officeDocument/2006/relationships/drawing" '
+                                        'Target="../drawings/drawingCircles1.xml"/></Relationships>')
+                data = xml.encode("utf-8")
+            z.writestr(name, data)
+        if rels_path not in names:
+            z.writestr(rels_path, '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                                  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                                  f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/'
+                                  '2006/relationships/drawing" Target="../drawings/drawingCircles1.xml"/>'
+                                  '</Relationships>')
+        z.writestr("xl/drawings/drawingCircles1.xml", drawing)
+    return out.getvalue()
