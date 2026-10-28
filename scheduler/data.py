@@ -212,6 +212,111 @@ def keep_programs(new: "ScheduleInput", old: "ScheduleInput | None", use_file: b
     return notes
 
 
+def _near_year(start: date):
+    """Month -> year for dates written without one, read as the date nearest
+    `start` (so '11/10' is last month and '1/2' is next year in December)."""
+    def y(month: int) -> int:
+        if month - start.month > 6:
+            return start.year - 1
+        if start.month - month > 6:
+            return start.year + 1
+        return start.year
+    return y
+
+
+def _ended_before(dates_value, start: date) -> bool:
+    """A dated row whose every date is before `start` (an old period's).
+    Undated rows (every week) and unreadable dates count as current."""
+    try:
+        spans = parse_date_ranges(dates_value, _near_year(start))
+    except (ValueError, TypeError):
+        return False
+    return bool(spans) and all(b < start for _, b in spans)
+
+
+def _norm_name(v) -> str:
+    return re.sub(r"[\s_-]+", " ", str(v or "")).strip().lower()
+
+
+def merge_import(new: "ScheduleInput", old: "ScheduleInput | None", start: date,
+                 use_file_programs: bool = False) -> list[str]:
+    """Brings a coaches' spreadsheet into the club's data (in place, into
+    `new`) without losing anything the club already has:
+
+    - Teams and the coach roster: the club's stay exactly as they are (names,
+      coaches, ranks); teams or coaches that are new in the file are added.
+    - No-dates and wishlists: everyone in the file gets the file's, replacing
+      their standing ones and anything from before `start`. A dated row for
+      `start` or later that the file doesn't have is kept (a coach may have
+      added it in the app). Everyone else keeps theirs, minus rows from
+      before `start`.
+    - Weekends / open days, closures, hand edits: the club's plus the file's.
+    - Programs, tournaments, privates, calendar links: the club's (see
+      keep_programs; use_file_programs takes the file's where it has rows).
+    Returns one line per change."""
+    if old is None:
+        return keep_programs(new, None, use_file=use_file_programs)
+    notes = keep_programs(new, old, use_file=use_file_programs)
+
+    def rows(df):
+        return df.dropna(how="all").reset_index(drop=True) if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+    # Teams and coaches: keep, add new.
+    for sheet, key, label in (("Teams", "team", "team"), ("Coaches", "coach", "coach")):
+        attr = ATTRS[sheet]
+        mine, theirs = rows(getattr(old, attr, None)), rows(getattr(new, attr, None))
+        if mine.empty:
+            continue
+        have = {_norm_name(v) for v in mine.get(key, [])}
+        add = theirs[~theirs[key].map(_norm_name).isin(have)] if len(theirs) else theirs
+        add = add[~add[key].map(blank)] if len(add) else add
+        merged = pd.concat([mine, add], ignore_index=True) if len(add) else mine
+        setattr(new, attr, merged.astype(object).reset_index(drop=True))
+        if len(add):
+            notes.append(f"added {len(add)} new {label}{'s' if len(add) != 1 else ''} "
+                         f"({', '.join(map(str, add[key]))})")
+        else:
+            notes.append(f"no new {label}s")
+
+    # No-dates and wishlists: the file's for everyone in it.
+    for sheet, who_col, date_col, label in (("Availability", "who", "dates", "no-dates"),
+                                            ("Wishlist", "team", None, "wishlists")):
+        attr = ATTRS[sheet]
+        mine, theirs = rows(getattr(old, attr, None)), rows(getattr(new, attr, None))
+        in_file = {_norm_name(v) for v in theirs.get(who_col, [])} if len(theirs) else set()
+        keep = []
+        for _, r in mine.iterrows():
+            who = _norm_name(r.get(who_col))
+            dated = date_col and not blank(r.get(date_col))
+            if dated and _ended_before(r.get(date_col), start):
+                continue                       # an old period's: gone
+            if who in in_file and not dated:
+                continue                       # their standing ones: the file's replace them
+            keep.append(r)
+        kept = pd.DataFrame(keep, columns=mine.columns) if keep else mine.iloc[0:0]
+        merged = pd.concat([theirs, kept], ignore_index=True) if len(kept) else theirs
+        if len(merged):
+            cols = COLUMNS[sheet]
+            merged = merged.reindex(columns=cols).astype(object)
+            merged = merged.drop_duplicates(subset=cols).reset_index(drop=True)
+        setattr(new, attr, merged if len(merged) else empty(sheet))
+        if len(theirs):
+            notes.append(f"{label} from the file for {len(in_file)} "
+                         f"{'coach or team' if len(in_file) == 1 else 'coaches and teams'}")
+
+    # Open days, closures, hand edits: both.
+    for sheet in ("Weekends", "Closures", "Overrides"):
+        attr = ATTRS[sheet]
+        mine, theirs = rows(getattr(old, attr, None)), rows(getattr(new, attr, None))
+        merged = pd.concat([mine, theirs], ignore_index=True) if len(theirs) else mine
+        if len(merged):
+            cols = COLUMNS[sheet]
+            merged = merged.reindex(columns=cols).astype(object)
+            merged = merged.drop_duplicates(subset=cols).reset_index(drop=True)
+        setattr(new, attr, merged if len(merged) else empty(sheet))
+    return notes
+
+
 # ============================================================== parsing ==
 
 def blank(v) -> bool:
@@ -907,8 +1012,11 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                     for k in range((b - a).days + 1)}
             for day in days:
                 day_slots = [s for s in SLOT_KEYS if s in times and ((day in WEEKEND) == (s in WEEKEND_KEYS))]
+                if not day_slots and day not in WEEKEND:
+                    # A weekday program in the 2-hour blocks: a break camp, 9AM-11AM.
+                    day_slots = [s for s in WEEKEND_KEYS if s in times]
                 if not day_slots:
-                    raise ValueError(f"{day} needs a {'weekend time like 9AM-1PM' if day in WEEKEND else 'weekday time like 5:30'}")
+                    raise ValueError(f"{day} needs a {'weekend time like 9AM-1PM' if day in WEEKEND else 'time like 5:30 or 9AM-11AM'}")
                 for slot in day_slots:
                     locals_.append(LocalProgram(name, day, slot, courts, staff, on_site, ranges,
                                                 program_side(r.get("side"), name), skip))
@@ -984,13 +1092,20 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
         if blank(r["date"]):
             continue
         try:
-            d = to_date(r["date"], year)
-            if d.weekday() < 5:
-                raise ValueError(f"{d:%a %-m/%-d} isn't a weekend day")
+            # A weekend day, or a weekday (a school break's days run in
+            # 2-hour blocks like a weekend). A range ("12/21-1/2") opens
+            # every day in it.
             courts = parse_courts(r.get("courts")) if not blank(r.get("courts")) else list(COURTS)
-            weekends[d] = WeekendDay(d, _parse_open(r.get("open")), courts,
-                                     None if blank(r.get("group")) else str(r["group"]).strip(),
-                                     yes(r.get("required")), "" if blank(r.get("note")) else str(r["note"]))
+            blocks = _parse_open(r.get("open"))
+            for a, b in parse_date_ranges(r["date"], year):
+                if (b - a).days > 62:
+                    raise ValueError(f"{a:%-m/%-d}–{b:%-m/%-d} is more than two months")
+                d = a
+                while d <= b:
+                    weekends[d] = WeekendDay(d, list(blocks), courts,
+                                             None if blank(r.get("group")) else str(r["group"]).strip(),
+                                             yes(r.get("required")), "" if blank(r.get("note")) else str(r["note"]))
+                    d += timedelta(days=1)
         except (ValueError, TypeError) as e:
             errors.append(f"Weekends row {i + 2}: {e}")
 

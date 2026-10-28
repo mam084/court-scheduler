@@ -285,6 +285,11 @@ def court_grid_html(
     cols = list(day_dates) if day_dates else list(WEEK_ORDER)
     open_wk = None if weekend_dates is None else set(weekend_dates)
 
+    def block_day(wd) -> bool:
+        """A weekend day, or a weekday run in 2-hour blocks (a school break)."""
+        d = (day_dates or {}).get(wd)
+        return wd not in WEEKDAYS or bool(open_wk and d in open_wk)
+
     tournaments = tournaments or []
     blocked, partial, on_day = {}, {}, {}
     for wd in cols:
@@ -310,7 +315,7 @@ def court_grid_html(
         tn_html = "".join(_tourn_head_chip(tn) for tn in on_day.get(wd, []))
         if tn_html:
             sub += f'<div class="cs-thead-t">{tn_html}</div>'
-        cls = ' class="cs-wkend"' if wd not in WEEKDAYS else ""
+        cls = ' class="cs-wkend"' if block_day(wd) else ""
         out.append(f"<th{cls}>{wd}{sub}</th>")
     out.append("</tr></thead><tbody>")
     rows_ = list(courts) if courts else list(ALL_COURTS)  # a subset, for a printed half-week
@@ -324,7 +329,7 @@ def court_grid_html(
         for wd in cols:
             if wd in blocked:
                 continue
-            weekend = wd not in WEEKDAYS
+            weekend = block_day(wd)
             cell = court_rows[court_rows["day"] == wd] if len(court_rows) else court_rows
             items = [(0, -1, _tourn_chip(tn, compact=True)) for tn in partial.get(wd, []) if c in tn.courts]
             for _, r in (cell.iterrows() if len(cell) else []):
@@ -362,7 +367,7 @@ def court_grid_html(
                     if i == 0 and band == 0:
                         out.append(f'<td class="cs-closed" rowspan="{len(rows_) * n_bands}">{blocked[wd]}</td>')
                     continue
-                weekend = wd not in WEEKDAYS
+                weekend = block_day(wd)
                 if weekend and band > 0:
                     continue  # covered by the weekend cell's rowspan
                 its = [x for x in cells[wd] if weekend or x[0] == band]
@@ -413,10 +418,10 @@ def open_slot_map(day_dates: dict | None, data, closures: dict | None = None) ->
     for wd, d in day_dates.items():
         if d is None or d == date.min or d in closures:
             continue
-        if d.weekday() < 5:
-            slots, courts = WEEKDAY_KEYS, set(COURTS)
-        elif data is not None and d in data.weekends:
+        if data is not None and d in data.weekends:  # a weekend or a break day: 2-hour blocks
             slots, courts = data.weekends[d].blocks, set(data.weekends[d].courts) & set(COURTS)
+        elif d.weekday() < 5:
+            slots, courts = WEEKDAY_KEYS, set(COURTS)
         else:
             continue
         per = {s: set(courts) for s in slots}
@@ -509,7 +514,7 @@ def month_calendar_html(
                 g = g.assign(o=g["slot"].map(SLOT_KEYS.index)).sort_values(["o", "court"])
                 chips += "".join(_chip(r, stripes, None, compact=True, local_coaches=local_coaches)
                                  for _, r in g.iterrows())
-            cls = ' class="cs-wkend"' if d.weekday() >= 5 else ""
+            cls = ' class="cs-wkend"' if d.weekday() >= 5 or d in weekend_dates else ""
             out.append(f'<td{cls}><div class="cs-datenum">{_daynum(d, start)}</div>{chips}</td>')
         out.append("</tr>")
         ws += timedelta(days=7)

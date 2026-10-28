@@ -1494,6 +1494,14 @@ def test_team_dates_spreadsheet_circles_tournaments():
     pr = r.assignments[r.assignments["kind"] == "Practice"]
     assert sum(sh.cell(5 + i, 3 + 16).value for i in range(len(order))) == len(pr)
     assert wb["List"].max_row == 1 + len(pr) + n_days
+    # Girls then boys, each under its own heading.
+    from scheduler.config import team_is_boys
+    sec = {t.name: "Boys" if team_is_boys(t.club, t.name) else "Girls" for t in data.teams}
+    order2 = sorted(order, key=lambda t: sec[t] == "Boys")
+    sh = load_workbook(io.BytesIO(team_dates_excel(r, data.closures, order2, "Dec", sec)))["Team Dates"]
+    col_a = [sh.cell(i, 1).value for i in range(5, 5 + len(order2) + 2)]
+    assert col_a[0] == "Girls" and "Boys" in col_a
+    assert col_a.index("Boys") == 1 + sum(1 for t in order2 if sec[t] == "Girls")
 
 
 def test_print_pages_have_a_print_button():
@@ -1504,3 +1512,51 @@ def test_print_pages_have_a_print_button():
     a = r.assignments
     for page in (paper_weeks_html(a, s, e), calendar_print_html(a, s, e), weeks_print_html(a, s, e)):
         assert 'onclick="window.print()"' in page and "@media print { .cs-print { display: none" in page
+
+
+def test_merge_import_keeps_teams_and_replaces_no_dates():
+    from scheduler.data import merge_import
+    old = _inp([{"team": "14-A", "age": 14, "head_coach": "Ann"}, {"team": "16-B", "age": 16, "head_coach": "Bo"}],
+               availability=[{"who": "Ann", "type": "No", "days": "Tue"},                  # standing: replaced
+                             {"who": "Ann", "type": "No", "dates": "11/12/2026"},          # last period: gone
+                             {"who": "Ann", "type": "No", "dates": "12/24/2026"},          # upcoming: kept
+                             {"who": "Bo", "type": "No", "dates": "11/20/2026"},           # last period: gone
+                             {"who": "Bo", "type": "No", "days": "Fri"}],                  # not in file: kept
+               wishlist=[{"team": "14-A", "choice": 1, "days": "Mon"}, {"team": "16-B", "choice": 1, "days": "Wed"}],
+               weekends=[{"date": "11/7/2026"}])
+    new = _inp([{"team": "14-A", "age": 14, "head_coach": "Someone Else"}, {"team": "15-C", "age": 15}],
+               availability=[{"who": "Ann", "type": "No", "days": "Thu"}],
+               wishlist=[{"team": "14-A", "choice": 1, "days": "Tue"}],
+               weekends=[{"date": "12/12/2026"}])
+    notes = merge_import(new, old, date(2026, 12, 5))
+    assert list(new.teams["team"]) == ["14-A", "16-B", "15-C"]
+    assert new.teams.iloc[0]["head_coach"] == "Ann"                    # the club's team wasn't overwritten
+    av = {(r.who, r.days or r.dates) for r in new.availability.fillna("").itertuples()}
+    assert av == {("Ann", "Thu"), ("Ann", "12/24/2026"), ("Bo", "Fri")}
+    assert {(r.team, r.days) for r in new.wishlist.itertuples()} == {("14-A", "Tue"), ("16-B", "Wed")}
+    assert set(new.weekends["date"]) == {"11/7/2026", "12/12/2026"}
+    assert any("added 1 new team" in n for n in notes)
+
+
+def test_break_days_run_in_blocks_with_a_morning_camp():
+    """Dec 21 - Jan 2 opened as block days: weekday practices go in 2-hour
+    blocks, a 9-11 AM camp blocks its courts, closures stay closed."""
+    s, e = date(2026, 12, 20), date(2027, 1, 2)
+    inp = simulate(8, 4, 3, seed=7, start=s, end=e)
+    inp.weekends = pd.concat([inp.weekends, pd.DataFrame([{"date": "12/21/2026-1/2/2027", "open": "9AM-9PM"}])],
+                             ignore_index=True)
+    inp.locals = pd.concat([inp.locals, pd.DataFrame([{
+        "program": "Winter Camp", "side": "Girls", "days": "Mon-Fri, Weekdays", "time": "9AM-11AM", "courts": "1-4",
+        "on_site": "Yes", "dates": "12/21/2026-1/2/2027"}])], ignore_index=True)
+    r = solve(inp, s, e, time_limit_s=20)
+    _check_hard_rules(inp, r)
+    a = r.assignments
+    pr = a[a["kind"] == "Practice"]
+    wk = pr[pr["date"].map(lambda d: d.weekday() < 5)]
+    assert len(wk) and set(wk["slot"]) <= {"9AM", "11AM", "1PM", "3PM", "5PM", "7PM"}
+    assert not (pr["date"] == date(2026, 12, 25)).any()
+    camp = a[a["name"] == "Winter Camp"]
+    assert set(camp["slot"]) == {"9AM"} and date(2026, 12, 21) in set(camp["date"])
+    nine = pr[(pr["slot"] == "9AM") & pr["date"].isin(set(camp["date"]))]
+    assert not set(nine["court"]) & {1, 2, 3, 4}
+    assert r.metrics["missed_practices"] == 0

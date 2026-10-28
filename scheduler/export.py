@@ -363,9 +363,11 @@ def _slot_text(slot: str) -> str:
 
 
 def team_dates_excel(result: ScheduleResult, closures: dict, order: list[str] | None = None,
-                     title: str = "") -> bytes:
+                     title: str = "", sections: dict[str, str] | None = None) -> bytes:
     """Every team's practice and tournament dates, one row per team (in
-    `order`, e.g. the pecking order), with tournament days circled."""
+    `order`, e.g. girls then boys, each in pecking order), with tournament
+    days circled. `sections` (team -> label, e.g. "Girls") puts a heading
+    row wherever the label changes."""
     start, end = result.start, result.end
     a = result.assignments
     pr = a[a["kind"] == "Practice"] if len(a) else a
@@ -425,8 +427,19 @@ def team_dates_excel(result: ScheduleResult, closures: dict, order: list[str] | 
     for r in pr.itertuples() if len(pr) else []:
         by_team_day.setdefault((r.name, r.date), []).append(r)
     circles = []                  # (row, col), 1-based
-    for i, t in enumerate(teams):
-        row = top + i
+    sections = sections or {}
+    row, last_sec = top - 1, None
+    for t in teams:
+        sec = sections.get(t)
+        if sec and sec != last_sec:
+            row += 1
+            c = sh.cell(row, 1, sec)
+            c.font = Font(bold=True, size=12, color="1F2A44")
+            sh.row_dimensions[row].height = 20
+            for col in range(1, total_col + 2):
+                sh.cell(row, col).fill = PatternFill("solid", fgColor="DCE3EE")
+            last_sec = sec
+        row += 1
         sh.row_dimensions[row].height = _TEAM_ROW_H
         c = sh.cell(row, 1, t)
         c.font, c.fill, c.border = Font(bold=True), _day, _border

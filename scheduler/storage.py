@@ -261,8 +261,13 @@ def result_from_dict(d: dict | None, inp: ScheduleInput) -> ScheduleResult | Non
 
 
 def make_payload(inp: ScheduleInput, start: date, end: date, settings: dict,
-                 result: ScheduleResult | None, published: list | None = None) -> dict:
-    return {
+                 result: ScheduleResult | None, published: list | None = None,
+                 periods: dict | None = None) -> dict:
+    """The saved schedule: the club's input tables, plus the dates being
+    worked on (start/end, settings, solved schedule, published versions).
+    `periods` holds the other dates already scheduled, each in the same
+    shape ({"start", "end", "settings", "result", "published"})."""
+    out = {
         "version": PAYLOAD_VERSION,
         "start": start.isoformat(),
         "end": end.isoformat(),
@@ -271,6 +276,68 @@ def make_payload(inp: ScheduleInput, start: date, end: date, settings: dict,
         "result": result_to_dict(result),
         "published": list(published or []),
     }
+    if periods:
+        out["periods"] = {k: v for k, v in periods.items() if k != period_key(start, end)}
+    return out
+
+
+# ------------------------------------------------------------- periods --
+# The club has one schedule. Each run of dates scheduled at a time (Nov 3 –
+# Dec 4, then Dec 5 – 20...) is a period: its own solved schedule and
+# published versions, all sharing the club's teams, coaches and programs.
+MAIN_ID = "main"
+MAIN_NAME = "Practice schedule"
+
+
+def period_key(start: date, end: date) -> str:
+    return f"{start.isoformat()}_{end.isoformat()}"
+
+
+def current_period(payload: dict) -> dict:
+    """The period stored at the top of a payload, in the periods' shape."""
+    return {"start": payload["start"], "end": payload["end"], "settings": dict(payload.get("settings") or {}),
+            "result": payload.get("result"), "published": list(payload.get("published") or [])}
+
+
+def all_periods(payload: dict) -> dict[str, dict]:
+    """Every period in a payload (the current one included), by key."""
+    out = dict(payload.get("periods") or {})
+    cur = current_period(payload)
+    out[period_key(date.fromisoformat(cur["start"]), date.fromisoformat(cur["end"]))] = cur
+    return out
+
+
+def read_period(entry: dict, inp: ScheduleInput) -> tuple[date, date, dict, ScheduleResult | None, list]:
+    s_, e_ = date.fromisoformat(entry["start"]), date.fromisoformat(entry["end"])
+    return s_, e_, dict(entry.get("settings") or {}), result_from_dict(entry.get("result"), inp), \
+        list(entry.get("published") or [])
+
+
+def ensure_main(store: "Store", default: tuple[date, date] | None = None) -> dict:
+    """The club's one schedule, created the first time from the most recent
+    saved schedule that has teams (older saved schedules stay in the
+    database, and their dates can be brought in), or empty."""
+    rec = store.get(MAIN_ID)
+    if rec is not None:
+        return rec
+    best = None
+    for p in store.list():  # newest first
+        r = store.get(p["id"])
+        if r is None:
+            continue
+        has_teams = bool((r["payload"].get("inputs") or {}).get("Teams"))
+        if best is None or (has_teams and "demo" not in p["name"].lower() and not best[1]):
+            best = (r, has_teams and "demo" not in p["name"].lower())
+            if best[1]:
+                break
+    if best is not None:
+        payload = dict(best[0]["payload"])
+        payload.pop("periods", None)
+    else:
+        s_, e_ = default or (date.today(), date.today())
+        payload = make_payload(ScheduleInput.from_records({}), s_, e_, {"time_limit": 60, "makeup": True}, None)
+    store.save(MAIN_ID, MAIN_NAME, payload)
+    return store.get(MAIN_ID)
 
 
 def read_published(payload: dict) -> list[dict]:

@@ -112,7 +112,14 @@ SLOT_OVERLAPS = {"3:30": {"3:45"}, "4:30": {"3:45"}}
 
 
 def slots_overlap(a: str, b: str) -> bool:
-    return a == b or b in SLOT_OVERLAPS.get(a, ()) or a in SLOT_OVERLAPS.get(b, ())
+    """Two timeslots share any time: a 3:30 JumpStart and the 3:45 practice;
+    on a break day run in 2-hour blocks, a 5:30 program and the 5-7 PM block."""
+    if a == b:
+        return True
+    if a not in SLOT_TIMES or b not in SLOT_TIMES:
+        return b in SLOT_OVERLAPS.get(a, ()) or a in SLOT_OVERLAPS.get(b, ())
+    (a0, a1), (b0, b1) = SLOT_TIMES[a], SLOT_TIMES[b]
+    return a0 < b1 and b0 < a1
 
 
 SLOTS = {"3:30": PROGRAM_SLOTS["3:30"], "3:45": WEEKDAY_SLOTS["3:45"], "4:30": PROGRAM_SLOTS["4:30"],

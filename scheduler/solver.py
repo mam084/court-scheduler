@@ -105,10 +105,12 @@ def solve(
     all_days = list(pd.date_range(start, end).date)
     open_dates = [d for d in all_days if d not in data.closures and
                   (d.weekday() < 5 or d in data.weekends)]
-    weekend_dates = [d for d in open_dates if d.weekday() >= 5]
+    # Block days: open weekend days, plus weekdays listed as open days (school
+    # breaks), which run in 2-hour blocks like a weekend.
+    weekend_dates = [d for d in open_dates if d in data.weekends]
 
     def slots_on(d):
-        return WEEKDAY_KEYS if d.weekday() < 5 else data.weekends[d].blocks
+        return data.weekends[d].blocks if d in data.weekends else WEEKDAY_KEYS
 
     def locals_at(d, s):
         """Programs taking courts/coaches in slot s (incl. overlapping JumpStart times)."""
@@ -118,7 +120,7 @@ def solve(
     travel_tourn = [tn for tn in data.tournaments if tn.kind == "travel"]
 
     def courts_on(d, s):
-        base = COURTS if d.weekday() < 5 else [c for c in data.weekends[d].courts if c in COURTS]
+        base = [c for c in data.weekends[d].courts if c in COURTS] if d in data.weekends else COURTS
         blocked = {c for lp in locals_at(d, s) if lp.on_site for c in lp.courts}
         blocked |= {c for tn in local_tourn if tn.blocks(d, s) for c in tn.courts}
         return [c for c in base if c not in blocked]
@@ -190,6 +192,9 @@ def solve(
             problems.append(f"{label}: the club is closed ({data.closures[d] or 'closure'})")
         elif d.weekday() >= 5 and (d not in data.weekends or s not in data.weekends[d].blocks):
             problems.append(f"{label}: that weekend time isn't open (add it on the Weekends sheet)")
+        elif s not in slots_on(d):
+            problems.append(f"{label}: that time isn't open that day"
+                            + (" (it runs in 2-hour blocks)" if d in data.weekends else ""))
         elif not courts_on(d, s):
             problems.append(f"{label}: every court is taken by programs or a tournament")
         elif pn.court is not None and pn.court not in courts_on(d, s):
@@ -374,7 +379,7 @@ def solve(
             # On weekends this counts half: the club would rather fill one
             # block (4 teams 9-11) than split it (2 at 9-11, 2 at 11-1) when
             # there's room ("weekend_block").
-            costs = sorted(COURT_COST[c] // (2 if d.weekday() >= 5 else 1) for c in open_courts)[:len(vs)]
+            costs = sorted(COURT_COST[c] // (2 if d in data.weekends else 1) for c in open_courts)[:len(vs)]
             if len(vs) > 1 and any(costs):
                 cum = [0]
                 for c_ in costs:
@@ -427,7 +432,7 @@ def solve(
 
     # Share of the period's weekdays each team is actually playing (season
     # start dates), used to weigh the weekly template.
-    weekday_dates = [d for d in open_dates if d.weekday() < 5]
+    weekday_dates = [d for d in open_dates if d.weekday() < 5 and d not in data.weekends]
     active_frac = {t: (sum(1 for d in weekday_dates if not teams[t].start or d >= teams[t].start)
                        / len(weekday_dates)) if weekday_dates else 1.0
                    for t in T}
@@ -599,8 +604,8 @@ def solve(
             short_vars[t, ws] = (terms, target)
 
         for d in open_dates:
-            if d.weekday() >= 5 or (team.start and d < team.start):
-                continue
+            if d.weekday() >= 5 or d in data.weekends or (team.start and d < team.start):
+                continue  # weekends and block days (breaks) aren't part of the usual week
             wd = DAYS[d.weekday()]
             for s in WEEKDAY_KEYS:
                 if (t, wd, s) not in p:
@@ -797,6 +802,7 @@ def solve(
         if (t, d, s) in off_vars:
             on_pattern = not solver.Value(off_vars[t, d, s])
         else:
+            # A break's block days are their own schedule, not makeups.
             on_pattern = d.weekday() < 5
         rows.append({
             "date": d, "day": DAYS[d.weekday()], "slot": s, "slot_label": SLOTS[s],
@@ -861,7 +867,9 @@ def solve(
         issues = pd.concat([issues, pd.DataFrame(wish_rows, columns=issues.columns)], ignore_index=True)
 
     practices = assignments[assignments["kind"] == "Practice"] if len(assignments) else assignments
-    weekday_pr = practices[practices["date"].map(lambda d: d.weekday() < 5)] if len(practices) else practices
+    weekday_pr = (practices[practices["date"].map(lambda d: d.weekday() < 5 and d not in data.weekends)]
+                  if len(practices) else practices)
+    n_weekend = int(practices["date"].map(lambda d: d.weekday() >= 5).sum()) if len(practices) else 0
     wish_hits = wish_total = 0
     for _, r in weekday_pr.iterrows():
         ws_ = data.wishes.get(r["name"])
@@ -877,8 +885,8 @@ def solve(
         + sum(goal for _, _, goal in no_slot_weeks),
         "missed_practices": int(sum(solver.Value(v) for (terms, _) in short_vars.values() for v in terms))
         + sum(goal for _, _, goal in no_slot_weeks),
-        "weekend_practices": int(len(practices) - len(weekday_pr)),
-        "on_pattern_pct": round(float(100 * weekday_pr["on_pattern"].mean()), 1) if len(weekday_pr) else 0.0,
+        "weekend_practices": n_weekend,
+        "on_pattern_pct": round(float(100 * weekday_pr["on_pattern"].mean()), 1) if len(weekday_pr) else None,
         "wishlist_pct": round(100 * wish_hits / wish_total, 1) if wish_total else None,
         "practices_at_3_45": int((practices["slot"] == "3:45").sum()) if len(practices) else 0,
         "double_ups": int(sum(solver.Value(v) for v in doubles)),

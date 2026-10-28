@@ -29,7 +29,7 @@ from scheduler.config import (
     SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND_KEYS, court_name, court_short,
 )
 from scheduler.data import (
-    ATTRS, COLUMNS, blank, empty, keep_programs, parse_courts, parse_date_ranges, parse_days, parse_names, parse_rank,
+    ATTRS, COLUMNS, blank, empty, keep_programs, merge_import, parse_courts, parse_date_ranges, parse_days, parse_names, parse_rank,
     parse_times, program_coach_conflicts, program_side, span_text, tournament_conflicts,
 )
 from scheduler import privates as pv
@@ -40,7 +40,10 @@ from scheduler.export import calendar_excel, calendar_ics, team_dates_excel, to_
 from scheduler.paper import paper_weeks_html
 from scheduler.solver import week_start
 from scheduler.changes import add_version, burden, diff, pattern_of, practices_of, published_at, snapshot
-from scheduler.storage import Store, database_url, make_payload, new_id, read_payload, read_published
+from scheduler.storage import (
+    MAIN_ID, Store, all_periods, current_period, database_url, ensure_main, make_payload, period_key, read_payload,
+    read_period, read_published,
+)
 from scheduler.views import (
     DARK_CSS, calendar_print_html, club_stripes, court_grid_html, legend_html, month_calendar_html, open_slot_map, practice_counts_html,
     range_label, short_list_text, week_dates, weeks_print_html,
@@ -127,7 +130,7 @@ except Exception as e:  # noqa: BLE001  (bad DATABASE_URL: explain instead of cr
     st.stop()
 PROJECT_KEYS = ["project_id", "project_name", "inp", "result", "result_period", "inp_sig", "last_saved",
                 "range_start", "range_end", "time_limit", "makeup", "keep_prev", "published", "base_version", "_save_sig",
-                "pending_prefs"]
+                "pending_prefs", "periods", "periods_dirty", "periods_deleted"]
 
 # --------------------------------------------------------------- sign-in --
 # With Google sign-in set up (see docs/SETUP_LOGINS.md), only club addresses
@@ -183,68 +186,100 @@ def payload_hash(payload: dict) -> str:
     return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def open_project(pid: str) -> bool:
-    rec = store.get(pid)
-    if rec is None:
-        return False
-    inp_, s_, e_, settings, result_ = read_payload(rec["payload"])
-    published_ = read_published(rec["payload"])
+def _load_into_session(rec: dict, key: str | None = None):
+    """Opens the club's schedule at a period (key; default: the one stored on top)."""
+    payload = rec["payload"]
+    inp_ = ScheduleInput.from_records(payload.get("inputs", {}))
+    periods_ = all_periods(payload)
+    top = period_key(date.fromisoformat(payload["start"]), date.fromisoformat(payload["end"]))
+    key = key if key in periods_ else top
+    s_, e_, settings, result_, published_ = read_period(periods_.pop(key), inp_)
+    inp_.start, inp_.end = s_, e_
     st.session_state.update(
-        project_id=pid, project_name=rec["name"], inp=inp_, result=result_,
+        project_id=MAIN_ID, project_name=rec["name"], inp=inp_, result=result_,
         result_period=(result_.start, result_.end) if result_ else None,
-        inp_sig=("project", pid, str(rec["updated_at"])),
+        inp_sig=("project", MAIN_ID, str(rec["updated_at"])),
         range_start=s_, range_end=e_,
         time_limit=int(settings.get("time_limit", 60)), makeup=bool(settings.get("makeup", True)),
         keep_prev=bool(settings.get("keep_prev", True)), published=published_,
         base_version=settings.get("base_version"), pending_prefs=list(settings.get("pending_prefs") or []),
-        last_saved=payload_hash(make_payload(inp_, s_, e_, settings, result_, published_)),
+        periods=periods_, periods_dirty=set(), periods_deleted=set(),
+        last_saved=payload_hash(make_payload(inp_, s_, e_, settings, result_, published_, periods=periods_)),
     )
     st.session_state.pop("_save_sig", None)
-    st.query_params["project"] = pid
+
+
+def open_project(pid: str = MAIN_ID, key: str | None = None) -> bool:
+    """(Re)opens the club's schedule, at the period being viewed unless `key` says otherwise."""
+    rec = ensure_main(store, next_month(date.today()))
+    if key is None and st.session_state.get("range_start"):
+        key = period_key(st.session_state.range_start, st.session_state.range_end)
+    _load_into_session(rec, key)
     return True
 
 
-def locals_template(rec: dict | None) -> ScheduleInput:
-    """A schedule with no teams yet: the locals programs, tournaments and
-    calendar links from a saved schedule (rec), so the locals can be set up
-    before the coaches' spreadsheet is imported."""
-    new_inp = ScheduleInput(**{a: empty(sh) for sh, a in ATTRS.items()})
-    if rec is not None:
-        old = read_payload(rec["payload"])[0]
-        for attr in ("locals", "tournaments", "calendars"):
-            df = getattr(old, attr, None)
-            if isinstance(df, pd.DataFrame):
-                setattr(new_inp, attr, df.dropna(how="all").copy().reset_index(drop=True))
-    return new_inp
+def _period_entry() -> dict:
+    """The period being viewed, in the stored shape."""
+    from scheduler.storage import result_to_dict
+    return {"start": st.session_state.range_start.isoformat(), "end": st.session_state.range_end.isoformat(),
+            "settings": {"time_limit": st.session_state.time_limit, "makeup": st.session_state.makeup,
+                         "keep_prev": st.session_state.get("keep_prev", True),
+                         "base_version": st.session_state.get("base_version"),
+                         "pending_prefs": list(st.session_state.get("pending_prefs") or [])},
+            "result": result_to_dict(st.session_state.get("result")),
+            "published": list(st.session_state.get("published") or [])}
 
 
-def create_schedule(label: str, new_inp: ScheduleInput, s_: date, e_: date):
-    """Save a new schedule, open it and build it right away."""
-    pid = new_id()
-    store.save(pid, label, make_payload(new_inp, s_, e_, {"time_limit": 60, "makeup": True}, None))
-    saved_changed()
-    open_project(pid)
-    st.session_state.resolve = True
-    st.session_state.flash = f"Created “{label}”. It saves automatically; bookmark this page to come back."
-    if new_inp.teams.dropna(how="all").empty:
-        st.session_state.flash += (" Set up the locals in **Programs** and the tournaments in **Tournaments**, then "
-                                   "import the coaches' spreadsheet from the sidebar (**Import coaches' spreadsheet**).")
-        st.session_state.nav = "Programs"
-    st.rerun()
-
-
-def close_project():
-    for k in PROJECT_KEYS:
+def switch_period(key: str, new: tuple[date, date] | None = None):
+    """Shows another period (or starts new dates), keeping this one."""
+    cur = period_key(st.session_state.range_start, st.session_state.range_end)
+    periods_ = st.session_state.periods
+    periods_[cur] = _period_entry()
+    if CAN:
+        st.session_state.periods_dirty.add(cur)
+    if new is not None:
+        s_, e_ = new
+        settings = {"time_limit": st.session_state.time_limit, "makeup": st.session_state.makeup}
+        result_, published_ = None, []
+    else:
+        s_, e_, settings, result_, published_ = read_period(periods_[key], st.session_state.inp)
+    periods_.pop(period_key(s_, e_), None)
+    st.session_state.update(
+        result=result_, result_period=(result_.start, result_.end) if result_ else None,
+        range_start=s_, range_end=e_,
+        time_limit=int(settings.get("time_limit", 60)), makeup=bool(settings.get("makeup", True)),
+        keep_prev=bool(settings.get("keep_prev", True)), published=published_,
+        base_version=settings.get("base_version"), pending_prefs=list(settings.get("pending_prefs") or []))
+    for k in ("w_range_start", "w_range_end"):
         st.session_state.pop(k, None)
-    st.query_params.clear()
 
 
-# Opening a link like ...?project=abc (or refreshing) reopens that schedule.
-qp = st.query_params.get("project")
-if qp and st.session_state.get("project_id") != qp:
-    if not open_project(qp):
-        st.query_params.clear()
-        st.session_state.flash_warn = "That saved schedule wasn't found (it may have been deleted)."
+def period_label(entry_or_dates) -> str:
+    if isinstance(entry_or_dates, dict):
+        s_, e_ = date.fromisoformat(entry_or_dates["start"]), date.fromisoformat(entry_or_dates["end"])
+        pub = bool(entry_or_dates.get("published"))
+    else:
+        (s_, e_), pub = entry_or_dates, bool(st.session_state.get("published"))
+    return range_label(s_, e_) + ("" if pub else " · not published")
+
+
+def periods_for_save(rec_payload: dict | None) -> dict:
+    """The other periods to save: what's in the database (another admin may
+    be working on other dates), with this session's changes on top."""
+    out = all_periods(rec_payload) if rec_payload else {}
+    for k in st.session_state.get("periods_deleted", set()):
+        out.pop(k, None)
+    for k in st.session_state.get("periods_dirty", set()):
+        if k in st.session_state.periods:
+            out[k] = st.session_state.periods[k]
+    for k in st.session_state.periods:  # periods this session knows that the database lost track of
+        out.setdefault(k, st.session_state.periods[k])
+    out.pop(period_key(st.session_state.range_start, st.session_state.range_end), None)
+    return out
+
+
+if st.session_state.get("project_id") != MAIN_ID:
+    open_project()
 
 # ---------------------------------------------------------------- sidebar --
 def bound(widget, label: str, key: str, **kw):
@@ -294,166 +329,133 @@ with st.sidebar:
     st.caption("🌙 Dark mode: **⋮** (top right) → **Settings** → theme.")
     CAN = VIEWER.can_schedule
     saved = _saved_list(database_url(), st.session_state.get("saved_ver", 0))
-    if st.session_state.get("project_id") and not any(p["id"] == st.session_state.project_id for p in saved):
-        saved_changed()  # opened from a link to a schedule newer than the cached menu: refresh it
-        saved = _saved_list(database_url(), st.session_state.get("saved_ver", 0))
     names = {p["id"]: p["name"] for p in saved}
-    _dupes = {n for n in names.values() if list(names.values()).count(n) > 1}
-    for _p in saved:  # the menu needs unique labels; tell same-named schedules apart
-        if _p["name"] in _dupes:
-            names[_p["id"]] = f"{_p['name']} · #{_p['id'][:4]}"
-    current = st.session_state.get("project_id")
-    # Stable order (by name), and a widget key tied to the options, so saving
-    # (which changes "last updated") can never shift the menu onto another schedule.
-    ordered = sorted(names, key=lambda i: (names[i].lower(), i))
-    options = ["__new__"] + ordered
-    _okey = hashlib.sha1("|".join(options).encode()).hexdigest()[:8]
-    choice = st.selectbox("Schedule", options, index=options.index(current) if current in options else 0,
-                          format_func=lambda o: ("New schedule" if CAN else "Choose a schedule…") if o == "__new__"
-                          else names[o],
-                          key=f"picker_{current}_{_okey}")
-    if choice != (current or "__new__"):
-        if choice == "__new__":
-            close_project()
-        else:
-            open_project(choice)
+    if not CAN and not st.session_state.get("_coach_default"):
+        # A coach opens on the dates covering today (else the latest published ones).
+        st.session_state._coach_default = True
+        _cur = period_key(st.session_state.range_start, st.session_state.range_end)
+        _all = dict(st.session_state.periods, **{_cur: _period_entry()})
+        _today = date.today()
+        _pick = next((k for k, v in _all.items() if v.get("published")
+                      and date.fromisoformat(v["start"]) <= _today <= date.fromisoformat(v["end"])), None)
+        _pick = _pick or max((k for k, v in _all.items() if v.get("published")), default=None)
+        if _pick and _pick != _cur:
+            switch_period(_pick)
+
+    # ------------------------------------------------------------- dates --
+    current = MAIN_ID
+    cur_key = period_key(st.session_state.range_start, st.session_state.range_end)
+    p_opts = sorted(list(st.session_state.periods) + [cur_key])
+    p_lab = {k: period_label(v) for k, v in st.session_state.periods.items()}
+    p_lab[cur_key] = period_label((st.session_state.range_start, st.session_state.range_end))
+    pick = st.selectbox("Dates", p_opts, index=p_opts.index(cur_key), format_func=p_lab.get,
+                        key=f"period_{cur_key}_{len(p_opts)}",
+                        help="The schedule is built a run of dates at a time. Pick which dates to see.")
+    if pick != cur_key:
+        switch_period(pick)
         st.rerun()
 
     run = False
-    if current is None and not CAN:
-        st.caption("Pick a schedule above to see it.")
-    elif current is None:
-        # ------------------------------------------------- new schedule --
-        st.subheader("New schedule")
-        d_start, d_end = next_month(date.today())
-        new_name = st.text_input("Name", placeholder="e.g. Nov 3 – Dec 4 practices")
-        new_start = st.date_input("From", value=d_start, format="MM/DD/YYYY")
-        new_end = st.date_input("To", value=d_end, format="MM/DD/YYYY")
-        source = st.radio("Start from", ["Locals template", "Upload spreadsheet", "Simulated club"], horizontal=True,
-                          help="Locals template: the club's programs and tournaments with no teams yet, so you "
-                               "can set up the locals first and import the coaches' spreadsheet after.")
-        up = None
-        if source == "Locals template":
-            tmpl_opts = [p["id"] for p in saved] + ["__empty__"]  # saved is newest first
-            _tmpl = next((p["id"] for p in saved if "template" in p["name"].lower()), tmpl_opts[0])
-            tmpl_from = st.selectbox(
-                "Programs and tournaments from", tmpl_opts, index=tmpl_opts.index(_tmpl),
-                format_func=lambda o: "Nothing (start empty)" if o == "__empty__" else names[o],
-                help="Copies that schedule's locals programs and tournaments (no teams, coaches or privates). "
-                     "Picks a schedule with \"template\" in its name, else the newest.")
-            st.caption("Set up the locals in **Programs**, then import the coaches' spreadsheet from the sidebar.")
-        elif source == "Upload spreadsheet":
-            up = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"])
-            st.download_button("Download blank template", lambda: blank_template(new_start, new_end),
-                               "court_scheduler_template.xlsx",
-                               help="Sheets: Teams, Availability, Wishlist, Locals, Weekends, Closures, Tournaments. "
-                                    "Example rows show the format.")
-            keep_opts = [p["id"] for p in saved] + ["__file__"]  # saved is newest first
-            keep_from = st.selectbox(
-                "Programs and tournaments from", keep_opts,
-                format_func=lambda o: "The spreadsheet" if o == "__file__" else names[o],
-                help="Locals programs and tournaments carry over from a saved schedule, so you don't have to "
-                     "put them in every spreadsheet. If that schedule has none, the spreadsheet's are used.")
-        else:
-            with st.expander("Simulation settings", expanded=False):
-                n_girls = st.slider("Girls teams", 0, 24, 6)
-                n_boys = st.slider("Boys teams", 0, 12, 4)
-                n_locals = st.slider("Locals programs", 0, 6, 4)
-                seed = st.number_input("Random seed", 0, 9999, 7, help="Change for a different simulated club")
-        if st.button("Create schedule", type="primary", width="stretch"):
-            problems = []
-            if new_end < new_start:
-                problems.append("The end date is before the start date.")
-            if source == "Upload spreadsheet" and up is None:
-                problems.append("Upload the club spreadsheet first.")
-            new_inp = None
-            if not problems:
-                try:
-                    if source == "Locals template":
-                        new_inp = locals_template(store.get(tmpl_from) if tmpl_from != "__empty__" else None)
-                    elif source == "Upload spreadsheet":
-                        new_inp = ScheduleInput.from_excel(up)
-                        if keep_from != "__file__":
-                            rec = store.get(keep_from)
-                            keep_programs(new_inp, read_payload(rec["payload"])[0] if rec else None)
-                    else:
-                        new_inp = simulate(n_girls, n_boys, n_locals, seed=int(seed), start=new_start, end=new_end)
-                except Exception as e:  # noqa: BLE001
-                    problems.append(f"Couldn't read that file: {e}")
-            if problems:
-                st.error(" ".join(problems))
-            else:
-                create_schedule(new_name.strip() or range_label(new_start, new_end), new_inp, new_start, new_end)
-        st.caption(f"Schedules are saved to a {store.kind}" +
-                   ("." if store.permanent else " on the app server and can be cleared when the app restarts."))
+    if not CAN:
+        st.caption("You can change your teams' preferences in **Edit practices**; other changes go through the "
+                   "scheduling admins.")
     else:
-        # ---------------------------------------------- open schedule --
-        st.caption("Saved automatically, and opens on any device from its link:")
-        try:
-            _host = st.context.headers.get("host") or ""
-        except Exception:  # noqa: BLE001
-            _host = ""
-        if _host:
-            _scheme = "http" if _host.startswith(("localhost", "127.")) else "https"
-            st.code(f"{_scheme}://{_host}/?project={current}", language=None)
-        if not CAN:
-            st.caption(f"{range_label(st.session_state.range_start, st.session_state.range_end)}. "
-                       "You can change your teams' preferences in **Edit practices**; other changes go through "
-                       "the scheduling admins.")
-    if current is not None and CAN:
-        bound(st.date_input, "From", "range_start", format="MM/DD/YYYY")
-        bound(st.date_input, "To", "range_end", format="MM/DD/YYYY")
+        with st.expander("Schedule new dates"):
+            _ns = st.session_state.range_end + pd.Timedelta(days=1)
+            n_start = st.date_input("From", value=_ns, format="MM/DD/YYYY", key="new_from")
+            n_end = st.date_input("To", value=n_start + pd.Timedelta(days=13), format="MM/DD/YYYY", key="new_to")
+            st.caption("Starts a new set of dates with the club's teams, coaches, programs and tournaments. "
+                       "The dates you've already scheduled stay in the **Dates** menu.")
+            if st.button("Start these dates", width="stretch"):
+                nk = period_key(n_start, n_end)
+                if n_end < n_start:
+                    st.error("The end date is before the start date.")
+                elif nk == cur_key or nk in st.session_state.periods:
+                    st.error("Those dates are already in the Dates menu.")
+                else:
+                    switch_period(nk, (n_start, n_end))
+                    st.session_state.resolve = True
+                    st.session_state.flash = f"Started {range_label(n_start, n_end)}."
+                    st.rerun()
         _no_teams = st.session_state.inp.teams.dropna(how="all").empty
-        with st.expander("Import coaches' spreadsheet" if _no_teams else "Replace data with a spreadsheet",
-                         expanded=_no_teams):
-            st.caption("Brings in the teams, coaches, no-dates and wishlists. Anything from before (teams, "
-                       "coaches, hand edits) is replaced; the locals programs and tournaments stay.")
-            rep = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"], key=f"replace_{current}")
-            use_file = st.checkbox("Also replace programs and tournaments", key=f"replace_kept_{current}",
+        with st.expander("Import coaches' spreadsheet", expanded=_no_teams):
+            st.caption("Adds any new teams and coaches (the ones already here stay as they are) and brings in "
+                       "everyone's no-dates and wishlists from the file, replacing their old ones. Programs, "
+                       "tournaments and open days stay.")
+            rep = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"], key="replace_main")
+            use_file = st.checkbox("Also replace programs and tournaments", key="replace_kept_main",
                                    help="Off: the Programs and Tournaments tabs stay as they are. On: use the "
                                         "spreadsheet's, where it has any (an empty or missing sheet never "
                                         "wipes them).")
-            if not use_file:
-                st.caption("Programs and tournaments stay as they are.")
-            if rep is not None and st.button("Import" if _no_teams else "Replace input tables", width="stretch"):
+            if rep is not None and st.button("Import", width="stretch"):
                 try:
                     new_inp = ScheduleInput.from_excel(rep)
-                    kept = keep_programs(new_inp, st.session_state.inp, use_file=use_file)
+                    notes = merge_import(new_inp, st.session_state.inp, st.session_state.range_start,
+                                         use_file_programs=use_file)
                     st.session_state.inp = new_inp
                     st.session_state.inp_sig = ("project", current, rep.name, rep.size)
                     st.session_state.result = None
-                    st.session_state.pending_prefs = []   # the old coaches' changes went with the old data
+                    st.session_state.pending_prefs = []   # those coaches' changes are in the file now
+                    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
                     st.session_state.resolve = True
-                    st.session_state.flash = (f"Replaced the inputs with {rep.name}"
-                                              + (f" ({'; '.join(kept)})" if kept else "") + ".")
+                    st.session_state.flash = (f"Imported {rep.name}" + (f": {'; '.join(notes)}" if notes else "")
+                                              + ".")
+                    if ME is not None:
+                        store.log(VIEWER.log_name, "Import", rep.name + (f" ({'; '.join(notes)})" if notes else ""),
+                                  MAIN_ID)
                     st.rerun()
                 except Exception as e:  # noqa: BLE001
                     st.error(f"Couldn't read that file: {e}")
+            st.download_button("Download blank template", lambda: blank_template(st.session_state.range_start,
+                                                                                 st.session_state.range_end),
+                               "court_scheduler_template.xlsx",
+                               help="Sheets: Teams, Availability, Wishlist, Locals, Weekends, Closures, "
+                                    "Tournaments. Example rows show the format.")
         with st.expander("Solver settings", expanded=False):
             bound(st.slider, "Time limit (seconds)", "time_limit", min_value=5, max_value=120)
             bound(st.checkbox, "Make up practices lost to closures", "makeup",
-                        help="If on, a team whose usual day is a closure gets a makeup that week "
-                             "(on another weekday or an open weekend).")
+                  help="If on, a team whose usual day is a closure gets a makeup that week "
+                       "(on another weekday or an open weekend).")
             bound(st.checkbox, "Keep practices where they are when rebuilding", "keep_prev",
-                        help="Rebuilding moves only the practices that have to move, starting from the last "
-                             "published schedule (or the version you restored, or the current one if nothing's "
-                             "published). Turn off to "
-                             "start fresh.")
+                  help="Rebuilding moves only the practices that have to move, starting from the last "
+                       "published schedule (or the version you restored, or the current one if nothing's "
+                       "published). Turn off to start fresh.")
         run = st.button("Auto-schedule", type="primary", width="stretch")
-        with st.expander("Rename or delete"):
-            nn = st.text_input("Name", value=st.session_state.get("project_name", ""), key=f"rename_{current}")
-            if st.button("Rename", width="stretch") and nn.strip():
-                store.rename(current, nn.strip())
-                saved_changed()
-                st.session_state.project_name = nn.strip()
-                st.rerun()
-            sure = st.checkbox("Yes, delete this schedule for everyone", key=f"del_{current}")
-            if st.button("Delete schedule", disabled=not sure, width="stretch"):
-                store.delete(current)
-                saved_changed()
-                close_project()
-                st.session_state.flash = "Schedule deleted."
-                st.rerun()
+        with st.expander("Change or remove these dates"):
+            bound(st.date_input, "From", "range_start", format="MM/DD/YYYY")
+            bound(st.date_input, "To", "range_end", format="MM/DD/YYYY")
+            if p_opts != [cur_key]:
+                sure = st.checkbox(f"Yes, remove {range_label(st.session_state.range_start, st.session_state.range_end)}"
+                                   " for everyone", key=f"del_{cur_key}")
+                if st.button("Remove these dates", disabled=not sure, width="stretch"):
+                    gone = cur_key
+                    other = next(k for k in p_opts if k != cur_key)
+                    switch_period(other)
+                    st.session_state.periods.pop(gone, None)
+                    st.session_state.periods_dirty.discard(gone)
+                    st.session_state.periods_deleted.add(gone)
+                    st.session_state._force_save = True
+                    st.session_state.flash = "Removed those dates."
+                    st.rerun()
+        old = [p for p in saved if p["id"] != MAIN_ID]
+        if old:
+            with st.expander("Old saved schedules"):
+                st.caption("From before the club had one schedule. Bring one's dates in (its schedule and "
+                           "published versions; the club's teams and programs stay as they are here).")
+                o_pick = st.selectbox("Schedule", [p["id"] for p in old], format_func=names.get, key="old_pick")
+                if st.button("Add its dates", width="stretch"):
+                    rec_o = store.get(o_pick)
+                    if rec_o is not None:
+                        ent = current_period(rec_o["payload"])
+                        k = period_key(date.fromisoformat(ent["start"]), date.fromisoformat(ent["end"]))
+                        if k == cur_key or k in st.session_state.periods:
+                            st.error("Those dates are already in the Dates menu.")
+                        else:
+                            st.session_state.periods[k] = ent
+                            st.session_state.periods_dirty.add(k)
+                            st.session_state._force_save = True
+                            st.session_state.flash = f"Added {period_label(ent)} to the Dates menu."
+                            st.rerun()
         if not store.permanent:
             st.caption("⚠️ Saved on the app server only: it survives refreshes but can be cleared when the app "
                        "restarts. Connect a database (see README) to keep schedules permanently.")
@@ -461,37 +463,11 @@ with st.sidebar:
 if "flash_warn" in st.session_state:
     st.warning(st.session_state.pop("flash_warn"))
 
-if st.session_state.get("project_id") is None:
-    st.header("Court Scheduler")
-    if "flash" in st.session_state:
-        st.success(st.session_state.pop("flash"))
-    st.markdown("Builds a fair practice schedule for every team across courts 1–7: locals and tournaments are "
-                "blocked off first, no-dates are respected, every team gets its two practices a week, and coaches' "
-                "requests are weighed against each other. Everything it couldn't give someone is listed with the reason.")
-    c1, c2, c3 = st.columns(3)
-    c1.markdown("**1. Locals first**  \nA new schedule starts from the locals template: the club's programs and "
-                "tournaments, no teams yet. Set up this period's locals in **Programs**.")
-    c2.markdown("**2. Import the coaches**  \nUpload the coaches' spreadsheet (teams, no-dates, wishlists). The "
-                "locals stay as you set them; the last schedule's teams and coaches don't come along.")
-    c3.markdown("**3. Auto-schedule & share**  \nThe optimizer places every practice, then check the court view, "
-                "tweak by hand, publish, print, and send coaches their dates.")
-    d_s, d_e = next_month(date.today())
-    if CAN:
-        if st.button(f"Try it with a simulated club ({range_label(d_s, d_e)})", type="primary"):
-            create_schedule("Demo club", simulate(6, 4, 4, seed=7, start=d_s, end=d_e), d_s, d_e)
-        st.caption("Create a schedule in the sidebar (it starts from the locals template), or open a saved one "
-                   "from the **Schedule** menu.")
-    if saved:
-        st.markdown("**Saved schedules**")
-        for p in saved:
-            st.markdown(f"- [{p['name']}](?project={p['id']}) · updated {p['updated_at']:%b %-d, %-I:%M %p}")
-    st.stop()
-
-if not CAN:  # someone else (an admin) saved a newer version: show it
-    _rec = next((p for p in saved if p["id"] == st.session_state.project_id), None)
+if not CAN:  # an admin saved a newer version: show it
+    _rec = next((p for p in saved if p["id"] == MAIN_ID), None)
     _sig = st.session_state.get("inp_sig")
     if _rec and _sig and _sig[0] == "project" and len(_sig) == 3 and _sig[2] != str(_rec["updated_at"]):
-        open_project(st.session_state.project_id)
+        open_project()
 
 inp: ScheduleInput = st.session_state.inp
 for _sheet, _attr in (("Tournaments", "tournaments"), ("Coaches", "coaches"), ("Overrides", "overrides"),
@@ -615,9 +591,14 @@ if p_conflicts:
                              "programs.** Find a sub or take them off one:\n"
                    + "\n".join(f"- {p_conflict_text(c)}" for c in p_conflicts)))
 
-if result is None:
+if CAN and inp.teams.dropna(how="all").empty:
+    st.info("**Getting these dates ready:** 1) set up the locals in **Programs**, tournaments in **Tournaments** and "
+            "any weekends or school-break days in **Open days**; 2) **Import coaches' spreadsheet** in the sidebar "
+            "for the teams, no-dates and wishlists; 3) **Auto-schedule**.")
+elif result is None:
     st.info("Press **Auto-schedule** in the sidebar to build the schedule for these dates. "
-            "You can review and edit the inputs in the **Inputs** tab first.")
+            "You can review and edit the inputs in the **Inputs** tab first." if CAN else
+            "These dates haven't been scheduled yet.")
 elif not result.ok:
     st.error(f"No schedule found ({result.status}). Check for more teams than open courts, "
              "or a coach whose no-dates block every slot.")
@@ -631,7 +612,8 @@ else:
     c[3].metric("Wishlist 1st choice", f"{m['wishlist_pct']}%" if m["wishlist_pct"] is not None else "–",
                 help="Weekday practices matching the team's 1st-choice wishlist")
     c[4].metric("Coach double-ups", m["double_ups"], help="A coach's teams back-to-back on the same day")
-    c[5].metric("On usual schedule", f"{m['on_pattern_pct']}%")
+    c[5].metric("On usual schedule", f"{m['on_pattern_pct']}%" if m.get("on_pattern_pct") is not None else "–",
+                help="Weekday practices on the team's usual day and time (break days in 2-hour blocks don't count)")
     short = result.shortfalls
     if len(short) and COACH_VIEW:
         short = short[short["team"].map(mine)]
@@ -696,11 +678,11 @@ if "flash" in st.session_state:
 # Navigation. Only the chosen section is built on each click (tabs would
 # build every section every time), and the choice is remembered, so saving a
 # program or removing something keeps you where you were.
-ALL_VIEWS = ["Court view", "Calendar", "Edit practices", "Programs", "Tournaments", "Privates",
+ALL_VIEWS = ["Court view", "Calendar", "Edit practices", "Programs", "Tournaments", "Open days", "Privates",
              "Coaches", "Pecking order", "Publish", "Review", "Inputs", "Access"]
-(TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_PRIV, TAB_COACH, TAB_PECK, TAB_PUB, TAB_REVIEW,
+(TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_OPEN, TAB_PRIV, TAB_COACH, TAB_PECK, TAB_PUB, TAB_REVIEW,
  TAB_INPUTS, TAB_ACCESS) = ALL_VIEWS
-ADMIN_ONLY = {TAB_PROG, TAB_TOURN, TAB_PECK, TAB_PUB, TAB_REVIEW, TAB_INPUTS}
+ADMIN_ONLY = {TAB_PROG, TAB_TOURN, TAB_OPEN, TAB_PECK, TAB_PUB, TAB_REVIEW, TAB_INPUTS}
 VIEWS = [v for v in ALL_VIEWS if (CAN or v not in ADMIN_ONLY)
          and (v != TAB_ACCESS or (ME is not None and VIEWER.can_manage_access and VIEWER.acting_as is None))]
 if st.session_state.get("nav") not in VIEWS:
@@ -722,12 +704,17 @@ def template_locals(a: pd.DataFrame) -> pd.DataFrame:
 
 
 def team_order() -> list[str]:
-    """Team names in the pecking order, top team first."""
+    """Team names, girls then boys, each in the pecking order (top team first)."""
     from scheduler.config import pecking_key, team_is_boys
     if not cleaned:
         return []
-    return [t.name for t in sorted(cleaned.teams, key=lambda t: pecking_key(t.age, t.level,
-                                                                          team_is_boys(t.club, t.name)))]
+    return [t.name for t in sorted(cleaned.teams, key=lambda t: (team_is_boys(t.club, t.name),
+                                                                 pecking_key(t.age, t.level, False)))]
+
+
+def team_sections() -> dict[str, str]:
+    from scheduler.config import team_is_boys
+    return {t.name: "Boys" if team_is_boys(t.club, t.name) else "Girls" for t in (cleaned.teams if cleaned else [])}
 
 
 def people_options(a: pd.DataFrame) -> list[str]:
@@ -807,7 +794,8 @@ if VIEW == TAB_COURT:
         d0.download_button("Printable weeks · paper style", type="primary", width="stretch",
                            data=lambda: paper_weeks_html(result.assignments, start, end, closures, result.tournaments,
                                                          f"{st.session_state.get('project_name') or 'Court schedule'}",
-                                                         privs, result.practice_counts, show_lc).encode(),
+                                                         privs, result.practice_counts, show_lc,
+                                                         block_days=result.weekend_dates).encode(),
                            file_name=f"court_sheets_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html",
                            help="Like the sheets on the board: every timeslot on every court is a line, filled in "
                                 "where something's booked and blank where it's open, so privates and changes can "
@@ -827,9 +815,9 @@ if VIEW == TAB_COURT:
                                 "With **Show open court times** on, every open court time prints with a line to "
                                 "write a name in. Open it in your browser, then print or save as PDF.")
         st.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
-                               result, closures, team_order(), st.session_state.get("project_name") or ""),
+                               result, closures, team_order(), st.session_state.get("project_name") or "", team_sections()),
                            f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", width="stretch",
-                           help="One row per team (in the pecking order) with every practice (time and court) and "
+                           help="One row per team (girls, then boys, each in the pecking order) with every practice (time and court) and "
                                 "tournament date; tournament days are circled. Prints landscape on one page wide.")
 
 # ------------------------------------------------------------ calendar --
@@ -872,7 +860,7 @@ if VIEW == TAB_CAL:
                            f"{fname}.xlsx", width="stretch",
                            help="The club's calendar layout: a block per week, each day with time · what · courts.")
         st.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
-                               result, closures, team_order(), st.session_state.get("project_name") or ""),
+                               result, closures, team_order(), st.session_state.get("project_name") or "", team_sections()),
                            f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", key="team_dates_cal",
                            help="One row per team with every practice and tournament date; tournament days are "
                                 "circled.")
@@ -954,7 +942,8 @@ def change_prefs(team: str, add_wish: dict | None, add_avoid: dict | None, drop_
     apply(i_)
     settings_["pending_prefs"] = list(settings_.get("pending_prefs") or []) + [
         f"{VIEWER.who.label if VIEWER.who else 'A coach'} · {team}: {what}"]
-    store.save(pid, rec["name"], make_payload(i_, s_, e_, settings_, r_, read_published(rec["payload"])))
+    store.save(pid, rec["name"], make_payload(i_, s_, e_, settings_, r_, read_published(rec["payload"]),
+                                              periods=rec["payload"].get("periods")))
     saved_changed()
     open_project(pid)
     st.session_state.flash = message + " The scheduling admins will fit it in at the next rebuild."
@@ -1631,6 +1620,95 @@ if VIEW == TAB_TOURN:
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
             st.session_state.resolve = True
             st.session_state.flash = f"Removed {plural(len(drop_t), 'tournament')}. Schedule rebuilt."
+            st.rerun()
+
+# ----------------------------------------------------------- open days --
+OPEN_HOURS = [("9AM", "9 AM"), ("11AM", "11 AM"), ("1PM", "1 PM"), ("3PM", "3 PM"), ("5PM", "5 PM"),
+              ("7PM", "7 PM"), ("9PM", "9 PM")]
+
+if VIEW == TAB_OPEN:
+    st.markdown("Days the gym runs in **2-hour blocks** (9–11, 11–1 … 7–9): open **weekends**, and **school "
+                "breaks**, when weekday practices switch to blocks too (e.g. Dec 21 – Jan 2). Closed days "
+                "(Christmas, New Year's) stay closed. Break **camps** are programs: add one on the **Programs** tab "
+                "with the days (Mon–Fri), the time **9AM-11AM** and its courts, and it's blocked off like any program. "
+                "Weekday programs that don't run over a break need their dates or a skip set there too.")
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        o_from = c1.date_input("From", value=start, format="MM/DD/YYYY", key="o_from")
+        o_to = c2.date_input("To", value=o_from, format="MM/DD/YYYY", key="o_to",
+                             help="The same as From for a single day.")
+        c1, c2 = st.columns(2)
+        _hk = [k for k, _ in OPEN_HOURS]
+        o_a = c1.selectbox("Opens", _hk[:-1], format_func=dict(OPEN_HOURS).get, key="o_a")
+        o_b = c2.selectbox("Closes", _hk[1:], index=len(_hk) - 2, format_func=dict(OPEN_HOURS).get, key="o_b")
+        c1, c2 = st.columns([2, 1])
+        o_courts = c1.multiselect("Courts", COURTS, default=COURTS, format_func=court_name, key="o_courts")
+        o_note = c2.text_input("Note", placeholder="e.g. Winter break", key="o_note")
+        o_wk = st.checkbox("Include the weekend days in that range", value=True, key="o_wk",
+                           help="Off: only the weekdays open (weekends stay as they are).")
+        add_o = st.button("Open these days", type="primary")
+    if add_o:
+        if o_to < o_from:
+            st.error("The end date is before the start date.")
+        elif _hk.index(o_b) <= _hk.index(o_a):
+            st.error("It has to close after it opens.")
+        elif not o_courts:
+            st.error("Pick the courts.")
+        else:
+            days_ = [d.date() for d in pd.date_range(o_from, o_to) if o_wk or d.weekday() < 5]
+            courts_txt = "" if sorted(o_courts) == list(COURTS) else ", ".join(map(str, sorted(o_courts)))
+            rows_ = []
+            # One row per run of consecutive days, so a break reads as "12/21/2026-01/02/2027".
+            run = []
+            for d in days_ + [None]:
+                if run and (d is None or (d - run[-1]).days != 1):
+                    txt = f"{run[0]:%m/%d/%Y}" + ("" if len(run) == 1 else f"-{run[-1]:%m/%d/%Y}")
+                    rows_.append({"date": txt, "open": f"{o_a}-{o_b}", "courts": courts_txt, "group": "",
+                                  "required": "", "note": o_note.strip()})
+                    run = []
+                if d is not None:
+                    run.append(d)
+            trial = inp.weekends.copy()
+            trial = pd.concat([trial, pd.DataFrame(rows_, columns=COLUMNS["Weekends"])], ignore_index=True)
+            try:
+                clean(ScheduleInput(inp.teams, inp.availability, inp.wishlist, inp.locals, trial, inp.closures,
+                                    tournaments=inp.tournaments, coaches=inp.coaches, overrides=inp.overrides),
+                      start, end)
+            except ValueError as e:
+                st.error(f"Couldn't add those days: {e}")
+            else:
+                inp.weekends = trial.astype(object)
+                st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+                st.session_state.resolve = True
+                st.session_state.flash = (f"Opened {plural(len(days_), 'day')} in 2-hour blocks "
+                                          f"({dict(OPEN_HOURS)[o_a]}–{dict(OPEN_HOURS)[o_b]}). Schedule rebuilt.")
+                st.rerun()
+
+    st.subheader("Open days")
+    wk = inp.weekends.dropna(how="all")
+    if wk.empty:
+        st.caption("None yet. Weekdays not listed here use the usual 3:45 / 5:30 / 7:20 times; weekends not listed "
+                   "are closed for practices.")
+    else:
+        view_ = wk.fillna("").astype(str)
+        _lab = [f"{r['date']} · {r['open'] or 'all day'}" + (f" · {r['note']}" if r["note"] else "")
+                for _, r in view_.iterrows()]
+        view_.index = [lab if _lab.count(lab) == 1 else f"{lab} (#{i + 1})" for i, lab in enumerate(_lab)]
+        st.dataframe(view_[["date", "open", "courts", "note"]].rename(columns=str.title), hide_index=True,
+                     width="stretch")
+        if cleaned:
+            in_range = sorted(d for d in cleaned.weekends if start <= d <= end)
+            n_wd = sum(1 for d in in_range if d.weekday() < 5 and d not in closures)
+            if n_wd:
+                st.caption(f"In these dates: {plural(n_wd, 'weekday')} run in 2-hour blocks.")
+        c1, c2 = st.columns([3, 1])
+        drop_o = c1.multiselect("Remove", list(view_.index), placeholder="Choose open days to remove")
+        if c2.button("Remove", disabled=not drop_o, width="stretch", key="rm_open"):
+            keep = [i for i, lab in enumerate(view_.index) if lab not in drop_o]
+            inp.weekends = wk.iloc[keep].reset_index(drop=True)
+            st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+            st.session_state.resolve = True
+            st.session_state.flash = f"Removed {plural(len(drop_o), 'row')}. Schedule rebuilt."
             st.rerun()
 
 # ------------------------------------------------------------ privates --
@@ -2356,17 +2434,23 @@ _settings = {"time_limit": time_limit, "makeup": makeup, "keep_prev": st.session
 # dates or any input table.
 _sig = (id(st.session_state.get("result")), len(st.session_state.get("published", [])),
         tuple(v["id"] for v in st.session_state.get("published", [])), json.dumps(_settings), str(start), str(end),
-        hashlib.sha1(json.dumps(inp.to_records(), sort_keys=True, default=str).encode()).hexdigest())
-if CAN and _sig != st.session_state.get("_save_sig"):
-    _payload = make_payload(inp, start, end, _settings, st.session_state.get("result"),
-                            st.session_state.get("published", []))
-    _h = payload_hash(_payload)
-    if _h == st.session_state.get("last_saved"):
-        st.session_state._save_sig = _sig
-    else:
-        try:
-            store.save(st.session_state.project_id, st.session_state.project_name, _payload)
+        hashlib.sha1(json.dumps(inp.to_records(), sort_keys=True, default=str).encode()).hexdigest(),
+        tuple(sorted(st.session_state.get("periods", {}))))
+if CAN and (_sig != st.session_state.get("_save_sig") or st.session_state.pop("_force_save", False)):
+    try:
+        _db = store.get(MAIN_ID)
+        _payload = make_payload(inp, start, end, _settings, st.session_state.get("result"),
+                                st.session_state.get("published", []),
+                                periods=periods_for_save(_db["payload"] if _db else None))
+        _h = payload_hash(_payload)
+        if _h == st.session_state.get("last_saved"):
+            st.session_state._save_sig = _sig
+        else:
+            store.save(MAIN_ID, st.session_state.project_name, _payload)
             st.session_state.last_saved = _h
             st.session_state._save_sig = _sig
-        except Exception as e:  # noqa: BLE001  (not marked saved, so the next click tries again)
-            st.toast(f"Couldn't save: {e}", icon="⚠️")
+            st.session_state.periods_dirty = set()
+            st.session_state.periods_deleted = set()
+            st.session_state.periods = {k: v for k, v in (_payload.get("periods") or {}).items()}
+    except Exception as e:  # noqa: BLE001  (not marked saved, so the next click tries again)
+        st.toast(f"Couldn't save: {e}", icon="⚠️")

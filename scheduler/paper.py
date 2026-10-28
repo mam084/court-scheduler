@@ -108,9 +108,11 @@ def _start(slot: str) -> int:
     return h * 60 + m
 
 
-def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_coaches: bool) -> str:
-    """Every timeslot of the day on court c, booked or blank."""
-    weekend = d.weekday() >= 5
+def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_coaches: bool,
+         block_days: set | frozenset = frozenset()) -> str:
+    """Every timeslot of the day on court c, booked or blank. Weekends and
+    block days (a school break's weekdays) list the 2-hour blocks."""
+    weekend = d.weekday() >= 5 or d in block_days
     here = book[(book["date"] == d) & (book["court"] == c)] if len(book) else book
     by_slot: dict[str, list] = {}
     for _, r in (here.iterrows() if len(here) else []):
@@ -155,7 +157,8 @@ def _head(d: date, start: date, end: date, closures: dict, tourns: list, wd: str
     return f'<th class="dh">{wd} <span class="num">{d.day}</span>{note}</th>'
 
 
-def _footer(book: pd.DataFrame, days: list[date], start: date, end: date, need: int | None) -> str:
+def _footer(book: pd.DataFrame, days: list[date], start: date, end: date, need: int | None,
+            block_days: set | frozenset = frozenset()) -> str:
     """Team practices per day (and per weekday time), the week's total vs. what teams need."""
     pr = book[book["kind"] == "Practice"] if len(book) else book
     cells, total = [], 0
@@ -166,7 +169,7 @@ def _footer(book: pd.DataFrame, days: list[date], start: date, end: date, need: 
         if not (start <= d <= end) or n == 0:
             cells.append("<td></td>")
             continue
-        if d.weekday() < 5:
+        if d.weekday() < 5 and d not in block_days:
             per = " · ".join(str(int((g["slot"] == s).sum())) for s in WEEKDAY_KEYS)
             cells.append(f'<td><b>{n}</b><br><span title="3:45 · 5:30 · 7:20">{per}</span></td>')
         else:
@@ -177,8 +180,11 @@ def _footer(book: pd.DataFrame, days: list[date], start: date, end: date, need: 
 
 def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,
                      tournaments: list | None = None, title: str = "Court schedule", privates: list | None = None,
-                     practice_counts: pd.DataFrame | None = None, local_coaches: bool = False) -> str:
-    """Every week in the paper layout, ready to print (two landscape pages a week)."""
+                     practice_counts: pd.DataFrame | None = None, local_coaches: bool = False,
+                     block_days=None) -> str:
+    """Every week in the paper layout, ready to print (two landscape pages a week).
+    block_days: weekdays run in 2-hour blocks (a school break)."""
+    block_days = set(block_days or ())
     from .views import FIT_SCRIPT, PRINT_BUTTON
     closures = closures or {}
     tourns = list(tournaments or [])
@@ -209,10 +215,10 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
                     elif d in closures:
                         cells.append(f'<td class="off">{html.escape(closures[d] or "Closed")}</td>')
                     else:
-                        cells.append(f'<td class="box">{_box(d, c, book, tourns, pv, local_coaches)}</td>')
+                        cells.append(f'<td class="box">{_box(d, c, book, tourns, pv, local_coaches, block_days)}</td>')
                 rows.append(f'<tr{cls}><td class="ct">{cname}</td>{"".join(cells)}</tr>')
             if i == len(HALVES) - 1:
-                rows.append(_footer(book, days, start, end, need_by_week.get(ws)))
+                rows.append(_footer(book, days, start, end, need_by_week.get(ws), block_days))
             rows.append("</tbody></table>")
             parts.append(f'<section class="cs-week"><h2>{month} <span>· week of {ws:%b %-d} · {label} · '
                          f'{html.escape(title)}</span></h2>{"".join(rows)}</section>')

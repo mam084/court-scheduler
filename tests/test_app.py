@@ -16,31 +16,62 @@ def db(tmp_path, monkeypatch):
     return Store(url)
 
 
-def _save(store, name, seed):
+def _save(store, name, seed, pid=None):
+    """Saves a solved November as the club's schedule (or, with pid, as an
+    old saved schedule from before there was one)."""
+    from scheduler.storage import MAIN_ID
     inp = simulate(4, 2, 2, seed=seed, start=date(2026, 11, 1), end=date(2026, 11, 30))
     r = solve(inp, date(2026, 11, 1), date(2026, 11, 30), time_limit_s=10)
-    pid = new_id()
+    pid = pid or MAIN_ID
     store.save(pid, name, make_payload(inp, date(2026, 11, 1), date(2026, 11, 30),
                                        {"time_limit": 10, "makeup": True}, r))
     return pid
 
 
-def test_open_schedule_stays_open_through_autosaves(db):
+def test_one_schedule_new_dates_and_switching_between_them(db):
+    """The club has one schedule; new dates are added to it, both stay in
+    the Dates menu, and each keeps its own built schedule."""
     from streamlit.testing.v1 import AppTest
-    # Several schedules with the same name: the menu must never jump between them.
-    ids = [_save(db, "November", seed) for seed in (1, 2, 3)]
-    target = ids[1]
-    at = AppTest.from_file("../app.py", default_timeout=120)
-    at.query_params["project"] = target
+    from scheduler.storage import MAIN_ID, all_periods
+    pid = _save(db, "November", 1)
+    at = AppTest.from_file("../app.py", default_timeout=180)
     at.run()
     assert not at.exception
-    assert at.session_state["project_id"] == target
-    at.session_state["makeup"] = False   # a change -> autosave -> "last updated" order changes
+    assert at.session_state["project_id"] == MAIN_ID
+    nov_practices = len(at.session_state["result"].assignments)
+    at.sidebar.date_input(key="new_from").set_value(date(2026, 12, 5))
+    at.sidebar.date_input(key="new_to").set_value(date(2026, 12, 20))
+    next(b for b in at.sidebar.button if b.label == "Start these dates").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["range_start"] == date(2026, 12, 5)
+    assert at.session_state["result"] is not None and at.session_state["result"].start == date(2026, 12, 5)
+    periods = all_periods(db.get(pid)["payload"])
+    assert set(periods) == {"2026-11-01_2026-11-30", "2026-12-05_2026-12-20"}
+    # Back to November: its schedule is still there; no other saved schedules appeared.
+    menu = next(sb for sb in at.sidebar.selectbox if sb.label == "Dates")
+    menu.set_value("2026-11-01_2026-11-30").run()
+    assert not at.exception
+    assert at.session_state["range_start"] == date(2026, 11, 1)
+    assert len(at.session_state["result"].assignments) == nov_practices
+    assert [p["id"] for p in db.list()] == [MAIN_ID]
+    # A refresh opens the dates last worked on, with both still listed.
+    at2 = AppTest.from_file("../app.py", default_timeout=180)
+    at2.run()
+    assert at2.session_state["range_start"] == date(2026, 11, 1)
+    assert len(next(sb for sb in at2.sidebar.selectbox if sb.label == "Dates").options) == 2
+
+
+def test_first_open_moves_an_old_saved_schedule_into_the_one_schedule(db):
+    from streamlit.testing.v1 import AppTest
+    from scheduler.storage import MAIN_ID
+    _save(db, "Demo club", 2, pid="old1")
+    _save(db, "November", 3, pid="old2")
+    at = AppTest.from_file("../app.py", default_timeout=180)
     at.run()
-    for _ in range(2):
-        at.run()
-    assert at.session_state["project_id"] == target
-    assert db.get(target)["payload"]["settings"]["makeup"] is False
+    assert not at.exception
+    main = db.get(MAIN_ID)
+    assert main is not None and main["payload"]["inputs"] == db.get("old2")["payload"]["inputs"]
+    assert any(e.label == "Old saved schedules" for e in at.sidebar.expander)
 
 
 def test_link_reopens_schedule_with_its_programs(db):
@@ -476,37 +507,61 @@ def test_private_start_uses_12_hour_clock(db):
     assert at.session_state["inp"].privates.iloc[-1]["time"] == "9:30 AM"
 
 
-def test_new_schedule_from_locals_template_then_import_coaches(db):
-    """New schedule: starts from the saved locals (no teams), the locals get
-    edited, then the coaches' spreadsheet comes in. The edited locals and the
-    tournaments stay; the old schedule's teams never show up."""
+def test_import_adds_new_teams_and_replaces_no_dates(db):
+    """Importing the coaches' spreadsheet keeps the club's teams and programs,
+    adds the new teams, and brings in the file's no-dates and wishlists."""
     import io
     from streamlit.testing.v1 import AppTest
-    from scheduler.data import ScheduleInput
-    src = _save(db, "Locals template", 30)
-    src_inp = ScheduleInput.from_records(db.get(src)["payload"]["inputs"])
+    from scheduler.data import ScheduleInput, merge_import
+    _save(db, "November", 30)
     at = AppTest.from_file("../app.py", default_timeout=180)
     at.run()
     assert not at.exception
-    assert at.sidebar.radio[0].value == "Locals template"
-    at.sidebar.text_input[0].set_value("Dec 5 - 20")
-    at.sidebar.date_input[0].set_value(date(2026, 12, 5))
-    at.sidebar.date_input[1].set_value(date(2026, 12, 20))
-    next(b for b in at.sidebar.button if b.label == "Create schedule").click().run()
-    assert not at.exception, at.exception
-    inp = at.session_state["inp"]
-    assert inp.teams.dropna(how="all").empty and inp.privates.dropna(how="all").empty
-    assert len(inp.locals) == len(src_inp.locals) and len(inp.tournaments) == len(src_inp.tournaments)
-    assert at.session_state["nav"] == "Programs"
-    for v in at.radio(key="nav").options:   # every section works with no teams yet
-        at.radio(key="nav").set_value(v).run()
-        assert not at.exception, (v, at.exception)
-    # Edit a program here, then import a coaches' spreadsheet whose Locals differ.
-    at.session_state["inp"].locals.loc[0, "program"] = "Renamed local"
+    club = at.session_state["inp"]
+    club.locals.loc[0, "program"] = "Renamed local"
+    club.teams.loc[0, "head_coach"] = "Edited Coach"
+    first = club.teams.loc[0, "team"]
     coaches = simulate(3, 2, 1, seed=99, start=date(2026, 12, 5), end=date(2026, 12, 20))
-    from scheduler.data import keep_programs
+    coaches.teams.loc[0, "team"] = first            # a team the club already has
     new = ScheduleInput.from_excel(io.BytesIO(coaches.to_excel_bytes()))
-    keep_programs(new, at.session_state["inp"])
+    merge_import(new, club, date(2026, 12, 5))
     assert "Renamed local" in set(new.locals["program"])
-    assert set(new.teams["team"]) == set(coaches.teams["team"])
-    assert not set(new.teams["team"]) - set(coaches.teams["team"])
+    assert new.teams.loc[new.teams["team"] == first, "head_coach"].iloc[0] == "Edited Coach"
+    assert set(club.teams["team"]) <= set(new.teams["team"])
+    assert set(coaches.teams["team"]) <= set(new.teams["team"])
+    assert len(new.teams) == len(set(club.teams["team"]) | set(coaches.teams["team"]))   # no duplicates
+
+
+def test_open_days_form_opens_a_break_in_blocks(db):
+    from streamlit.testing.v1 import AppTest
+    _save(db, "November", 31)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    at.radio(key="nav").set_value("Open days").run()
+    assert not at.exception
+    at.date_input(key="o_from").set_value(date(2026, 11, 23))
+    at.date_input(key="o_to").set_value(date(2026, 11, 25))
+    at.text_input(key="o_note").set_value("Thanksgiving week")
+    next(b for b in at.button if b.label == "Open these days").click().run()
+    assert not at.exception, at.exception
+    pr = at.session_state["result"].assignments
+    pr = pr[(pr["kind"] == "Practice") & pr["date"].isin([date(2026, 11, d) for d in (23, 24, 25)])]
+    assert len(pr) and set(pr["slot"]) <= {"9AM", "11AM", "1PM", "3PM", "5PM", "7PM"}
+    assert "11/23/2026-11/25/2026" in set(at.session_state["inp"].weekends["date"])
+
+
+def test_coach_opens_on_the_published_dates_covering_today(db, monkeypatch):
+    """A coach lands on the published dates that include today, not the
+    dates an admin happens to be working on."""
+    from scheduler.storage import MAIN_ID, current_period, make_payload, read_payload
+    from datetime import timedelta
+    today = date.today()
+    pid = _save(db, "Main", 32)
+    rec = db.get(pid)
+    inp, s_, e_, settings, r = read_payload(rec["payload"])
+    live = dict(current_period(rec["payload"]), start=(today - timedelta(days=3)).isoformat(),
+                end=(today + timedelta(days=3)).isoformat(), published=[{"id": "v1", "at": "x"}])
+    db.save(pid, "Main", make_payload(inp, today + timedelta(days=40), today + timedelta(days=50), settings, None,
+                                      periods={"live": live}))
+    at, _ = _as(db, monkeypatch, "somecoach@sdvbc.org", pid=pid)
+    assert at.session_state["range_start"] == today - timedelta(days=3)
