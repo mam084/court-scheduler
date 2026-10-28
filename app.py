@@ -111,12 +111,21 @@ if APP_PASSWORD and not AUTH_ON and not st.session_state.get("authed"):
 
 # ------------------------------------------------------- saved schedules --
 @st.cache_resource
-def get_store(url: str | None) -> Store:
+def get_store(url: str | None, code_version: str) -> Store:
+    """One database connection for the whole app. `code_version` changes
+    whenever storage.py does, so an update never keeps using a connection
+    object built from the old code (which lacked newer methods)."""
     return Store(url)
 
 
+def _storage_version() -> str:
+    from scheduler import storage as _storage_mod
+    with open(_storage_mod.__file__, "rb") as fh:
+        return hashlib.sha1(fh.read()).hexdigest()[:12]
+
+
 try:
-    store = get_store(database_url())
+    store = get_store(database_url(), _storage_version())
 except Exception as e:  # noqa: BLE001  (bad DATABASE_URL: explain instead of crashing)
     url = database_url() or ""
     st.error("**Couldn't connect to the database in `DATABASE_URL`.**")
