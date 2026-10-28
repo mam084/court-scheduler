@@ -9,7 +9,7 @@ with the most likely reason taken from the current inputs.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pandas as pd
 
@@ -30,12 +30,14 @@ def snapshot(result, label: str, note: str = "") -> dict:
     a = result.assignments
     pr = a[a["kind"] == "Practice"] if len(a) else a
     pr = pr[[c for c in PRACTICE_COLS if c in pr.columns]]
-    pt = result.pattern[[c for c in PATTERN_COLS if c in result.pattern.columns]] if len(result.pattern) else result.pattern
+    pt = result.pattern
+    if len(pt):
+        pt = pt[[c for c in PATTERN_COLS if c in pt.columns]]
     return {
-        "id": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f"),
+        "id": datetime.now(UTC).strftime("%Y%m%d%H%M%S%f"),
         "label": label,
         "note": note,
-        "at": datetime.now(timezone.utc).isoformat(),
+        "at": datetime.now(UTC).isoformat(),
         "start": result.start.isoformat() if result.start else None,
         "end": result.end.isoformat() if result.end else None,
         "practices": [{k: _iso(v) for k, v in r.items()} for r in pr.to_dict(orient="records")],
@@ -49,6 +51,7 @@ def add_version(versions: list[dict], snap: dict) -> list[dict]:
 
 
 def practices_of(version: dict) -> pd.DataFrame:
+    """A published version's practices as a bookings table (like ScheduleResult.assignments)."""
     df = pd.DataFrame(version.get("practices", []), columns=PRACTICE_COLS)
     if len(df):
         df["date"] = pd.to_datetime(df["date"]).dt.date
@@ -59,6 +62,7 @@ def practices_of(version: dict) -> pd.DataFrame:
 
 
 def pattern_of(version: dict) -> pd.DataFrame:
+    """A published version's weekly template (each team's usual days and times)."""
     return pd.DataFrame(version.get("pattern", []), columns=PATTERN_COLS)
 
 

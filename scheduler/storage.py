@@ -18,12 +18,25 @@ from __future__ import annotations
 import json
 import os
 import secrets as _secrets
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import (
-    Boolean, Column, DateTime, Integer, MetaData, String, Table, Text, create_engine, delete, insert, select, text, update,
+    Boolean,
+    Column,
+    DateTime,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    create_engine,
+    delete,
+    insert,
+    select,
+    text,
+    update,
 )
 
 from .data import ScheduleInput, clean
@@ -99,6 +112,10 @@ def _normalize_url(url: str) -> str:
 
 
 class Store:
+    """The database: the club's schedule, people and roles, the activity log, settings and change requests.
+
+    Postgres when DATABASE_URL is set (permanent), else a local SQLite file.
+    """
     def __init__(self, url: str | None = None):
         if url:
             self.url = _normalize_url(url)
@@ -154,7 +171,7 @@ class Store:
     def save(self, pid: str, name: str, payload: dict) -> None:
         self._ensure()
         body = json.dumps(payload, default=str)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self.engine.begin() as c:
             exists = c.execute(select(projects.c.id).where(projects.c.id == pid)).first()
             if exists:
@@ -190,7 +207,7 @@ class Store:
         self._ensure()
         email = email.strip().lower()
         vals = dict(name=name or "", coach=coach or "", app_admin=bool(app_admin), sched_admin=bool(sched_admin),
-                    updated_at=datetime.now(timezone.utc))
+                    updated_at=datetime.now(UTC))
         with self.engine.begin() as c:
             if c.execute(select(users.c.email).where(users.c.email == email)).first():
                 c.execute(update(users).where(users.c.email == email).values(**vals))
@@ -205,7 +222,7 @@ class Store:
     def log(self, who: str, action: str, detail: str = "", project: str = "") -> None:
         self._ensure()
         with self.engine.begin() as c:
-            c.execute(insert(activity).values(at=datetime.now(timezone.utc), who=who or "", action=action,
+            c.execute(insert(activity).values(at=datetime.now(UTC), who=who or "", action=action,
                                               detail=detail or "", project=project or ""))
 
     def activity(self, limit: int = 200, project: str | None = None) -> list[dict]:
@@ -230,7 +247,7 @@ class Store:
         with self.engine.begin() as c:
             c.execute(delete(settings_kv).where(settings_kv.c.key == key))
             if value is not None:
-                c.execute(insert(settings_kv).values(key=key, value=value, updated_at=datetime.now(timezone.utc)))
+                c.execute(insert(settings_kv).values(key=key, value=value, updated_at=datetime.now(UTC)))
 
     # --------------------------------------------------------- requests --
     def add_request(self, email: str, who: str, kind: str, team: str, period: str, summary: str,
@@ -239,7 +256,7 @@ class Store:
         rid = new_id()
         with self.engine.begin() as c:
             c.execute(insert(requests_t).values(
-                id=rid, created_at=datetime.now(timezone.utc), email=email.strip().lower(), who=who or "",
+                id=rid, created_at=datetime.now(UTC), email=email.strip().lower(), who=who or "",
                 kind=kind, team=team or "", period=period or "", summary=summary or "",
                 detail=json.dumps(detail, default=str), note=note or "", status="pending", decided_by="",
                 decision_note=""))
@@ -274,12 +291,13 @@ class Store:
         self._ensure()
         with self.engine.begin() as c:
             res = c.execute(update(requests_t).where((requests_t.c.id == rid) & (requests_t.c.status == "pending"))
-                            .values(status=status, decided_by=by or "", decided_at=datetime.now(timezone.utc),
+                            .values(status=status, decided_by=by or "", decided_at=datetime.now(UTC),
                                     decision_note=note or ""))
         return bool(res.rowcount)
 
 
 def new_id() -> str:
+    """A random, URL-safe id."""
     return _secrets.token_urlsafe(9)  # unguessable, URL-safe
 
 
@@ -304,6 +322,7 @@ def _frame_in(rows: list[dict], date_cols=("date", "week_of")) -> pd.DataFrame:
 
 
 def result_to_dict(r: ScheduleResult | None) -> dict | None:
+    """A solved schedule as JSON-ready data (None if there isn't a good one)."""
     if r is None or not r.ok:
         return None
     return {
@@ -322,6 +341,7 @@ def result_to_dict(r: ScheduleResult | None) -> dict | None:
 
 
 def result_from_dict(d: dict | None, inp: ScheduleInput) -> ScheduleResult | None:
+    """A solved schedule back from saved data; tournaments are re-read from the inputs."""
     if not d:
         return None
     start = date.fromisoformat(d["start"]) if d.get("start") else None
@@ -378,6 +398,7 @@ MAIN_NAME = "Practice schedule"
 
 
 def period_key(start: date, end: date) -> str:
+    """The key for a run of dates: '2026-12-05_2026-12-20'."""
     return f"{start.isoformat()}_{end.isoformat()}"
 
 
@@ -396,12 +417,13 @@ def all_periods(payload: dict) -> dict[str, dict]:
 
 
 def read_period(entry: dict, inp: ScheduleInput) -> tuple[date, date, dict, ScheduleResult | None, list]:
+    """A stored run of dates -> (start, end, settings, solved schedule, published versions)."""
     s_, e_ = date.fromisoformat(entry["start"]), date.fromisoformat(entry["end"])
     return s_, e_, dict(entry.get("settings") or {}), result_from_dict(entry.get("result"), inp), \
         list(entry.get("published") or [])
 
 
-def ensure_main(store: "Store", default: tuple[date, date] | None = None) -> dict:
+def ensure_main(store: Store, default: tuple[date, date] | None = None) -> dict:
     """The club's one schedule, created the first time from the most recent
     saved schedule that has teams (older saved schedules stay in the
     database, and their dates can be brought in), or empty."""
@@ -434,6 +456,7 @@ def read_published(payload: dict) -> list[dict]:
 
 
 def read_payload(payload: dict) -> tuple[ScheduleInput, date, date, dict, ScheduleResult | None]:
+    """The saved schedule -> (inputs, start, end, settings, solved schedule) for the dates on top."""
     inp = ScheduleInput.from_records(payload.get("inputs", {}))
     start = date.fromisoformat(payload["start"])
     end = date.fromisoformat(payload["end"])

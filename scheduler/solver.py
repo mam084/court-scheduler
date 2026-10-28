@@ -29,23 +29,40 @@ from __future__ import annotations
 
 import time
 from collections import Counter, defaultdict
-from itertools import permutations
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from itertools import permutations
 
 import pandas as pd
 from ortools.sat.python import cp_model
 
-from .config import week_start as _week_start, day_in_week, slots_overlap
 from .config import (
-    COURT_COST, COURT_RANK, COURTS, DAYS, PRACTICES_PER_WEEK, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKDAYS,
-    WEIGHTS, back_to_back, court_name, is_hs_boys, is_late_exception, pecking_weights, slot_cost, team_court_weight,
+    COURT_COST,
+    COURT_RANK,
+    COURTS,
+    DAYS,
+    PRACTICES_PER_WEEK,
+    SLOT_KEYS,
+    SLOTS,
+    WEEKDAY_KEYS,
+    WEEKDAYS,
+    WEIGHTS,
+    back_to_back,
+    court_name,
+    day_in_week,
+    is_hs_boys,
+    is_late_exception,
+    pecking_weights,
+    slot_cost,
+    slots_overlap,
 )
+from .config import week_start as _week_start
 from .data import CleanInput, ScheduleInput, clean, span_text, tournament_conflicts
 
 
 @dataclass
 class ScheduleResult:
+    """A solved schedule: every booking, each team's usual week, what to look at, and summary numbers."""
     status: str
     assignments: pd.DataFrame          # every booking: practices + locals
     pattern: pd.DataFrame              # each team's recurring weekday template
@@ -935,7 +952,7 @@ def solve(
             "detail": "Possible if " + " and ".join(f"{c} gets a sub for {' / '.join(ps)}" for c, ps in need)}]),
             issues], ignore_index=True)
     seen_pairs = set()
-    for (t, d, s), label in sorted(paired.items(), key=lambda kv: (kv[0][1], SLOT_KEYS.index(kv[0][2]), kv[1]),
+    for (_t, d, s), label in sorted(paired.items(), key=lambda kv: (kv[0][1], SLOT_KEYS.index(kv[0][2]), kv[1]),
                                    reverse=True):  # prepended one by one, so they end up in date order
         if (d, s, label) in seen_pairs:
             continue
@@ -1014,7 +1031,8 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
             drop(name, d, s, "that time isn't open")
         elif (t, d, s) in team_days:
             drop(name, d, s, "the team already has a practice placed by hand then")
-        elif per_week[t, week_start(d)] >= max(team.per_week, in_version[name, week_start(d)]) + extras[t, week_start(d)]:
+        elif (per_week[t, week_start(d)]
+              >= max(team.per_week, in_version[name, week_start(d)]) + extras[t, week_start(d)]):
             drop(name, d, s, f"the team already has {per_week[t, week_start(d)]} practices placed that week")
         elif count[d, s] >= len(courts_on(d, s)):
             drop(name, d, s, "every court is taken then")
@@ -1263,7 +1281,8 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
                         or (tn.kind == "local" and set(COURTS) <= set(tn.courts) and tn.blocks(d, sl)))]
             if tn_here:
                 tn = tn_here[0]
-                reasons.append(f"{'away at' if tn.kind == 'travel' else 'courts taken by'} {tn.name} on usual {wd} {d:%-m/%-d}")
+                why = "away at" if tn.kind == "travel" else "courts taken by"
+                reasons.append(f"{why} {tn.name} on usual {wd} {d:%-m/%-d}")
                 continue
             near = [tn for tn in data.tournaments if tn.kind == "travel" and team.name in tn.teams and
                     d in (tn.start - timedelta(days=1), tn.end + timedelta(days=1))]
@@ -1299,7 +1318,7 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
                     "detail": "every open slot is blocked" + (f" (no-dates: {'; '.join(nos)})" if nos else "")
                     + ("; weekend limited to its listed dates" if team.weekend_only else "")})
 
-    for g, (miss, gdates) in group_unused.items():
+    for miss, gdates in group_unused.values():
         if solver.Value(miss):
             out.append({"severity": "High", "team": "(all)", "week_of": week_start(min(gdates)),
                         "issue": "Required weekend not used: " + " or ".join(f"{d:%a %-m/%-d}" for d in gdates),
@@ -1384,6 +1403,12 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
     return df
 
 
+
+def _wished_slot(wishes, wd: str, sl: str) -> bool:
+    """Does any of these wishlist rows cover this weekday and timeslot?"""
+    return any((not w.days or wd in w.days) and (not w.times or sl in w.times) for w in wishes)
+
+
 def _wish_issues(data, teams, pattern_slots, rules_for, week_of) -> list[dict]:
     """One row per team whose usual week misses its 1st-choice wishlist, with
     what got in the way of each 1st-choice day/time."""
@@ -1437,19 +1462,15 @@ def _wish_issues(data, teams, pattern_slots, rules_for, week_of) -> list[dict]:
         mine = sorted(usual.get(t, []), key=lambda k: WEEKDAYS.index(k[0]))
         if not firsts or not mine:
             continue
-        def first_choice(wd, sl):
-            return any((not w.days or wd in w.days) and (not w.times or sl in w.times) for w in firsts)
         # A 1st choice naming just one day (e.g. "Mon, then Wed/Thu") can
         # only cover one practice, so a 2nd-choice second day isn't a miss.
         first_days = {d for w in firsts for d in (w.days or WEEKDAYS)}
         seconds = [w for w in data.wishes.get(team.name, []) if w.choice == 2]
-        def second_choice(wd, sl):
-            return any((not w.days or wd in w.days) and (not w.times or sl in w.times) for w in seconds)
-        misses = [(wd, sl) for wd, sl in mine if not first_choice(wd, sl)
-                  and not (len(first_days) < 2 and second_choice(wd, sl))]
+        misses = [(wd, sl) for wd, sl in mine if not _wished_slot(firsts, wd, sl)
+                  and not (len(first_days) < 2 and _wished_slot(seconds, wd, sl))]
         if not misses:
             continue
-        mine_days = {wd for wd, _ in mine if first_choice(wd, _)}
+        mine_days = {wd for wd, sl in mine if _wished_slot(firsts, wd, sl)}
         reasons = {}
         for w in firsts:
             for wd in (w.days or WEEKDAYS):

@@ -1,0 +1,30 @@
+# Tool settings only: the app is run with `streamlit run app.py` and its
+# dependencies are in requirements.txt (what Streamlit Community Cloud reads).
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["data", "storage", "docs"]
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, bugbear, import order, pyupgrade, simplify
+select = ["E", "W", "F", "B", "I", "UP", "SIM"]
+ignore = [
+    "B905",    # zip() without strict=: the zipped columns always come from one table
+    "SIM102",  # nested ifs often read better when each one is a separate rule
+    "SIM103",  # an explicit `return True/False` is clearer for rule checks
+    "SIM108",  # ternaries aren't always clearer than an if/else
+    "SIM110",  # same: a loop with early returns reads like the rule it checks
+]
+
+[tool.ruff.lint.per-file-ignores]
+# app.py reloads the scheduler package before importing it (see the top of
+# the file), so those imports can't sit at the very top.
+"app.py" = ["E402"]
+"tests/*" = ["B011"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["scheduler"]

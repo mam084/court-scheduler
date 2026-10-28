@@ -16,6 +16,7 @@ def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
 
 
 def major_holidays(year: int) -> dict[date, str]:
+    """The family holidays the club is closed for in `year`, by date."""
     thanksgiving = _nth_weekday(year, 11, 3, 4)  # 4th Thursday of November
     return {
         date(year, 1, 1): "New Year's Day",

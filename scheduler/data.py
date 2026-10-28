@@ -58,10 +58,25 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
-from .config import PROGRAM_KEYS, blocked_by_local_tournament, slots_overlap
 from .config import (
-    ALL_COURTS, AM_BLOCKS, COURTS, DAYS, MAX_PRACTICES_PER_WEEK, PRACTICE_COURT, PRACTICES_PER_WEEK, PM_BLOCKS,
-    SLOT_KEYS, WEEKDAY_KEYS, WEEKDAYS, WEEKEND, WEEKEND_KEYS, default_priority, slot_allowed_for_age,
+    ALL_COURTS,
+    AM_BLOCKS,
+    COURTS,
+    DAYS,
+    MAX_PRACTICES_PER_WEEK,
+    PM_BLOCKS,
+    PRACTICE_COURT,
+    PRACTICES_PER_WEEK,
+    PROGRAM_KEYS,
+    SLOT_KEYS,
+    WEEKDAY_KEYS,
+    WEEKDAYS,
+    WEEKEND,
+    WEEKEND_KEYS,
+    blocked_by_local_tournament,
+    default_priority,
+    slot_allowed_for_age,
+    slots_overlap,
 )
 
 COLUMNS = {
@@ -89,6 +104,7 @@ ATTRS = {"Teams": "teams", "Availability": "availability", "Wishlist": "wishlist
 
 
 def empty(sheet: str) -> pd.DataFrame:
+    """An empty table with a sheet's columns."""
     return pd.DataFrame(columns=COLUMNS[sheet])
 
 
@@ -106,6 +122,10 @@ def _migrate(sheet: str, df: pd.DataFrame) -> pd.DataFrame:
 
 @dataclass
 class ScheduleInput:
+    """The club's input tables, one DataFrame per spreadsheet sheet (see COLUMNS), as typed or imported.
+
+    clean() turns these into the validated objects the solver uses.
+    """
     teams: pd.DataFrame
     availability: pd.DataFrame
     wishlist: pd.DataFrame
@@ -157,7 +177,7 @@ class ScheduleInput:
         return out
 
     @classmethod
-    def from_records(cls, records: dict[str, list[dict]]) -> "ScheduleInput":
+    def from_records(cls, records: dict[str, list[dict]]) -> ScheduleInput:
         frames = {}
         for sheet, cols in COLUMNS.items():
             df = _migrate(sheet, pd.DataFrame(records.get(sheet, [])))
@@ -168,7 +188,7 @@ class ScheduleInput:
         return cls(**frames)
 
     @classmethod
-    def from_excel(cls, file) -> "ScheduleInput":
+    def from_excel(cls, file) -> ScheduleInput:
         xl = pd.read_excel(file, sheet_name=None, dtype=str)
         frames = {}
         lower = {k.strip().lower(): v for k, v in xl.items()}
@@ -195,7 +215,7 @@ _KEPT_LABEL = {"Locals": "programs", "Tournaments": "tournaments", "Privates": "
                "Calendars": "calendar links", "Resolved": "resolved flags"}
 
 
-def keep_programs(new: "ScheduleInput", old: "ScheduleInput | None", use_file: bool = False) -> list[str]:
+def keep_programs(new: ScheduleInput, old: ScheduleInput | None, use_file: bool = False) -> list[str]:
     """Carries the locals programs and tournaments from `old` into `new` (in
     place), so importing a spreadsheet doesn't wipe them.
 
@@ -243,7 +263,7 @@ def _norm_name(v) -> str:
     return re.sub(r"[\s_-]+", " ", str(v or "")).strip().lower()
 
 
-def merge_import(new: "ScheduleInput", old: "ScheduleInput | None", start: date,
+def merge_import(new: ScheduleInput, old: ScheduleInput | None, start: date,
                  use_file_programs: bool = False) -> list[str]:
     """Brings a coaches' spreadsheet into the club's data (in place, into
     `new`) without losing anything the club already has:
@@ -325,10 +345,12 @@ def merge_import(new: "ScheduleInput", old: "ScheduleInput | None", start: date,
 # ============================================================== parsing ==
 
 def blank(v) -> bool:
+    """Is a spreadsheet cell empty? Blank text, NaN, 'none', 'x' and '-' all count."""
     return v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip().lower() in ("", "nan", "none", "x", "-")
 
 
 def parse_list(value, sep=r"[;,]") -> list[str]:
+    """'A; B, C' -> ['A', 'B', 'C'] (blank -> [])."""
     if blank(value):
         return []
     return [p.strip() for p in re.split(sep, str(value)) if p.strip()]
@@ -398,9 +420,7 @@ def parse_times(value) -> set[str] | None:
             continue
         # whole hour -> weekend block start
         h24 = h
-        if ampm == "pm" and h < 12:
-            h24 = h + 12
-        elif ampm is None and h < 9:
+        if ampm == "pm" and h < 12 or ampm is None and h < 9:
             h24 = h + 12
         if h24 not in _WEEKEND_HOUR:
             raise ValueError(f"'{tok}' isn't a weekend block start ({', '.join(WEEKEND_KEYS)})")
@@ -525,6 +545,7 @@ def parse_date_ranges(value, year: int) -> list[tuple[date, date]]:
 
 
 def to_date(value, year: int | None = None) -> date:
+    """A cell -> date. Dates without a year use `year` (a number, or month -> year)."""
     if isinstance(value, (date, datetime, pd.Timestamp)):
         return pd.Timestamp(value).date()
     s = re.sub(r"\s+00:00:00$", "", str(value).strip())
@@ -535,6 +556,7 @@ def to_date(value, year: int | None = None) -> date:
 
 
 def yes(v) -> bool:
+    """Is a cell a yes ('Yes', 'Y', 'true', '1', 'required', 'on')?"""
     return not blank(v) and str(v).strip().lower() in ("y", "yes", "true", "1", "required", "on")
 
 
@@ -558,6 +580,7 @@ class WeekendToken:
 
 
 def parse_weekend_tokens(value, year: int) -> list[WeekendToken]:
+    """'11/1 AM; Sat PM; 11/8 3PM' -> weekend options (a date or weekday, and AM / PM / a block)."""
     out = []
     for tok in parse_list(value, r"[;,]|\s+or\s+|\s+&\s+"):
         wt = WeekendToken()
@@ -578,6 +601,7 @@ def parse_weekend_tokens(value, year: int) -> list[WeekendToken]:
 
 @dataclass
 class Team:
+    """A team as the solver sees it: club, age, coaches, season start, weekend limits, rank and practices a week."""
     name: str
     club: str
     age: int
@@ -633,6 +657,7 @@ class Rule:
 
 @dataclass
 class Wish:
+    """One wishlist row: a team's 1st or 2nd choice of days and times."""
     team: str
     choice: int
     days: list[str]
@@ -648,6 +673,7 @@ class Wish:
 
 @dataclass
 class LocalProgram:
+    """One program (locals, JumpStart, a camp) on one weekday in one timeslot, with its courts and coaches."""
     name: str
     day: str
     slot: str
@@ -697,7 +723,7 @@ def ranges_overlap(r1: list[tuple[date, date]], r2: list[tuple[date, date]]) -> 
     return any(a1 <= b2 and a2 <= b1 for a1, b1 in r1 for a2, b2 in r2)
 
 
-def local_conflicts(programs: list["LocalProgram"]) -> list[str]:
+def local_conflicts(programs: list[LocalProgram]) -> list[str]:
     """On-site programs sharing a court at the same day/time with overlapping dates."""
     out, seen = [], set()
     on = [lp for lp in programs if lp.on_site and lp.courts]
@@ -717,6 +743,7 @@ def local_conflicts(programs: list["LocalProgram"]) -> list[str]:
 
 @dataclass
 class WeekendDay:
+    """An open day in 2-hour blocks (a weekend, or a weekday over a school break): its blocks and courts."""
     day: date
     blocks: list[str]
     courts: list[int]
@@ -727,6 +754,7 @@ class WeekendDay:
 
 @dataclass
 class Tournament:
+    """A local tournament (hosted here: takes courts and coaches until 7 PM) or a travel one (teams away)."""
     name: str
     kind: str                 # "local" | "travel"
     start: date
@@ -753,7 +781,7 @@ class Tournament:
         return self.name
 
 
-def tournament_conflicts(teams: list["Team"], tournaments: list["Tournament"]) -> list[dict]:
+def tournament_conflicts(teams: list[Team], tournaments: list[Tournament]) -> list[dict]:
     """Coaches who can't be in two places at once at tournaments:
 
     - kind "local_travel": working a local tournament while coaching a team
@@ -795,7 +823,7 @@ def tournament_conflicts(teams: list["Team"], tournaments: list["Tournament"]) -
     return sorted(out, key=lambda f: (f["start"], f["coach"]))
 
 
-def program_coach_conflicts(locals_: list["LocalProgram"], start: date, end: date,
+def program_coach_conflicts(locals_: list[LocalProgram], start: date, end: date,
                             closures: dict | None = None) -> list[dict]:
     """Coaches listed on two programs that run at the same time (overlapping
     timeslots on the same date). One dict per coach and pair of programs:
@@ -822,6 +850,7 @@ def program_coach_conflicts(locals_: list["LocalProgram"], start: date, end: dat
 
 
 def span_text(a: date, b: date) -> str:
+    """'Sat 11/14' or 'Sat 11/14–Sun 11/15'."""
     return f"{a:%a %-m/%-d}" + ("" if a == b else f"–{b:%a %-m/%-d}")
 
 
@@ -903,6 +932,7 @@ class Pin:
 
 @dataclass
 class CleanInput:
+    """The validated, parsed inputs for one run of dates: what the solver works from."""
     teams: list[Team]
     rules: list[Rule]
     wishes: dict[str, list[Wish]]
@@ -912,7 +942,7 @@ class CleanInput:
     warnings: list[str]
     tournaments: list[Tournament] = field(default_factory=list)
     roster: dict[str, dict] = field(default_factory=dict)  # coach -> {email, phone, note}
-    pins: list["Pin"] = field(default_factory=list)          # manual practices
+    pins: list[Pin] = field(default_factory=list)          # manual practices
     cancels: dict = field(default_factory=dict)              # (team, date) -> practices cancelled (no makeup)
     usual: dict = field(default_factory=dict)                # team -> [(weekday, slot)]
     usual_court: dict = field(default_factory=dict)          # team -> court
@@ -1045,7 +1075,8 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                     # A weekday program in the 2-hour blocks: a break camp, 9AM-11AM.
                     day_slots = [s for s in WEEKEND_KEYS if s in times]
                 if not day_slots:
-                    raise ValueError(f"{day} needs a {'weekend time like 9AM-1PM' if day in WEEKEND else 'time like 5:30 or 9AM-11AM'}")
+                    example = "weekend time like 9AM-1PM" if day in WEEKEND else "time like 5:30 or 9AM-11AM"
+                    raise ValueError(f"{day} needs a {example}")
                 for slot in day_slots:
                     locals_.append(LocalProgram(name, day, slot, courts, staff, on_site, ranges,
                                                 program_side(r.get("side"), name), skip))
@@ -1191,7 +1222,7 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                                 f"'{r.get('ages') or 'any'}', so it doesn't affect anyone")
             courts = parse_courts(r.get("courts")) if not blank(r.get("courts")) else list(COURTS)
             prog = "" if blank(r.get("program")) else str(r["program"]).strip()
-            coaches = sorted({c for lp in locals_ if lp.name.lower() == prog.lower() for c in lp.coaches} if prog else set())
+            coaches = sorted({c for lp in locals_ if prog and lp.name.lower() == prog.lower() for c in lp.coaches})
             if kind == "local":  # coaches working it besides its program's
                 coaches = sorted(set(coaches) | set(parse_names(r.get("coaches"))))
             if prog and not any(lp.name.lower() == prog.lower() for lp in locals_):
@@ -1247,7 +1278,8 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 if slot in PROGRAM_KEYS:
                     raise ValueError("JumpStart times are for programs, not team practices")
                 if not team.allowed(slot):
-                    warnings.append(f"{row}: {team.age}s don't normally practice at {slot}; kept because it was set by hand")
+                    warnings.append(f"{row}: {team.age}s don't normally practice at {slot}; "
+                                    "kept because it was set by hand")
                 pins.append(Pin(tname, d, slot, court, note, extra=action.startswith("extra")))
             elif action.startswith("rem") or action.startswith("can") or action.startswith("del"):
                 d = to_date(r["date"], year)

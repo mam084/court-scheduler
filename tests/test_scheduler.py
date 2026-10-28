@@ -9,11 +9,18 @@ import pytest
 
 from scheduler import ScheduleInput, clean, simulate, solve
 from scheduler.closures import default_closures
-from scheduler.data import (
-    COLUMNS, tournament_conflicts, parse_courts, parse_date_ranges, parse_days, parse_names, parse_slot, parse_times,
-    parse_weekend_tokens,
-)
 from scheduler.config import slots_overlap
+from scheduler.data import (
+    COLUMNS,
+    parse_courts,
+    parse_date_ranges,
+    parse_days,
+    parse_names,
+    parse_slot,
+    parse_times,
+    parse_weekend_tokens,
+    tournament_conflicts,
+)
 from scheduler.solver import week_start
 
 NOV = (date(2026, 11, 1), date(2026, 11, 30))
@@ -33,7 +40,7 @@ def _check_hard_rules(inp, r):
         assert n == 2 and (here["kind"] == "Practice").all(), here
         assert here["paired"].fillna("").str.startswith("3 teams on").all(), here
     paired = pr[pr["paired"].fillna("") != ""] if "paired" in pr else pr.iloc[0:0]
-    for (d, s), g in paired.groupby(["date", "slot"]):
+    for _, g in paired.groupby(["date", "slot"]):
         assert len(g) % 3 == 0 and g["court"].nunique() == 2 * len(g) // 3, g
 
     for _, row in pr.iterrows():
@@ -145,8 +152,10 @@ def test_assistant_can_overlap_but_head_cannot():
 
 def test_locals_block_courts_and_coaches_off_site_only_coaches():
     teams = [{"team": "15-Sage", "age": 15}, {"team": "16-Ann", "age": 16}]
-    locals_ = [{"program": "Clinic", "days": "Tue, Thu", "time": "5:30", "courts": "1-7", "coaches": "", "on_site": "Yes"},
-               {"program": "Offsite HS", "days": "Wed", "time": "7:20", "courts": "", "coaches": "Sage", "on_site": "No"}]
+    locals_ = [{"program": "Clinic", "days": "Tue, Thu", "time": "5:30", "courts": "1-7", "coaches": "",
+                "on_site": "Yes"},
+               {"program": "Offsite HS", "days": "Wed", "time": "7:20", "courts": "", "coaches": "Sage",
+                "on_site": "No"}]
     inp = _inp(teams, locals_=locals_)
     r = solve(inp, *NOV, time_limit_s=10)
     pr = r.assignments[r.assignments["kind"] == "Practice"]
@@ -370,7 +379,8 @@ def _store_roundtrip(store):
     inp2, s, e, settings, r2 = read_payload(rec["payload"])
     assert (s, e) == (date(2026, 11, 3), date(2026, 12, 4)) and settings == {"time_limit": 20, "makeup": False}
     assert len(inp2.teams) == len(inp.teams) and len(inp2.tournaments) == 1
-    assert len(r2.assignments) == len(r.assignments) and r2.metrics["practices_scheduled"] == r.metrics["practices_scheduled"]
+    assert len(r2.assignments) == len(r.assignments)
+    assert r2.metrics["practices_scheduled"] == r.metrics["practices_scheduled"]
     assert isinstance(r2.assignments["date"].iloc[0], date) and [t.name for t in r2.tournaments] == ["Boys Local"]
     # The reloaded inputs solve again just like the originals.
     r3 = solve(inp2, s, e, time_limit_s=10)
@@ -389,6 +399,7 @@ def test_storage_roundtrip_sqlite(tmp_path):
 @pytest.mark.skipif(not __import__("os").environ.get("TEST_DATABASE_URL"), reason="no Postgres configured")
 def test_storage_roundtrip_postgres():
     import os
+
     from scheduler.storage import Store
     _store_roundtrip(Store(os.environ["TEST_DATABASE_URL"]))
 
@@ -644,8 +655,6 @@ def test_restore_published_version():
     r1 = solve(inp, *NOV, time_limit_s=20)
     v1 = snapshot(r1, "Nov v1")
     old = practices_of(v1)
-    # A different schedule (no stability) so there's something to restore.
-    r2 = solve(inp, *NOV, time_limit_s=20, seed=9)
     r3 = solve(inp, *NOV, time_limit_s=20, previous=old, restore=old, seed=3)
     key = ["name", "date", "slot", "court"]
     got = r3.assignments[r3.assignments["kind"] == "Practice"]
@@ -684,7 +693,7 @@ def test_open_boxes_mark_free_court_times():
                             open_slots=open_slot_map(dd, data))
     # Every free weekday court/time gets exactly one "Open" box.
     expected = 0
-    for wd, d in dd.items():
+    for d in dd.values():
         if d == date.min or d.weekday() >= 5 or d in data.closures:
             continue
         for c in COURTS:
@@ -1006,6 +1015,7 @@ def test_team_no_date_naming_an_assistant_is_pointed_out():
 
 def test_rank_parsing_handles_club_formats_and_excel_dates():
     from datetime import datetime
+
     from scheduler.data import parse_rank
     assert parse_rank("16-3", 16) == (3, None)
     assert parse_rank("16 - 3", 16) == (3, None)
@@ -1044,6 +1054,7 @@ def _pecking_xlsx(tmp_path, rows):
 
 def test_pecking_import_matches_nicknames_and_excel_dates(tmp_path):
     from datetime import datetime
+
     from scheduler import pecking as pk
     teams = [{"team": "18 Black", "club": "Seaside", "age": 18, "head_coach": "Tyler", "assistants": "Alex"},
              {"team": "16-Danielle & Darci", "club": "SDVBC", "age": 16, "head_coach": "Danielle; Darci"},
@@ -1107,7 +1118,9 @@ def test_lowest_ranked_team_gets_court_2():
 
 def test_calendar_exports(tmp_path):
     import io as _io
+
     from openpyxl import load_workbook
+
     from scheduler.export import calendar_excel, calendar_ics, to_excel
     from scheduler.views import calendar_print_html
     inp = simulate(4, 2, 2, start=date(2026, 11, 1), end=date(2026, 11, 30))
@@ -1279,7 +1292,7 @@ def test_hs_boys_keep_their_courts_from_530_to_720():
     pr = a[a["kind"] == "Practice"]
     boys = {t["team"] for t in teams if t["club"] == "Boys"}
     changes = 0
-    for (d, c), g in pr[pr["slot"].isin(["5:30", "7:20"])].groupby(["date", "court"]):
+    for _, g in pr[pr["slot"].isin(["5:30", "7:20"])].groupby(["date", "court"]):
         kinds = {s: set(g[g["slot"] == s]["name"].isin(boys)) for s in ("5:30", "7:20")}
         if kinds["5:30"] and kinds["7:20"] and kinds["5:30"] != kinds["7:20"]:
             changes += 1
@@ -1295,13 +1308,14 @@ def test_coach_stays_on_court_for_back_to_back_teams():
             {"team": "18-Ana", "choice": 1, "days": "Mon, Wed", "times": "7:20"}]
     r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=10)
     pr = r.assignments[r.assignments["kind"] == "Practice"]
-    for d, g in pr.groupby("date"):
+    for _, g in pr.groupby("date"):
         if set(g["slot"]) == {"5:30", "7:20"}:
             assert g["court"].nunique() == 1, g
 
 
 def test_privates_conflicts_and_export():
     from openpyxl import load_workbook
+
     from scheduler import privates as pv
     teams = [{"team": "16-Bea", "age": 16, "head_coach": "Bea"}]
     r = solve(_inp(teams), *NOV, time_limit_s=10)
@@ -1362,7 +1376,8 @@ def test_two_hand_placed_practices_same_day_different_times():
     inp = _inp(teams)
     inp.overrides = pd.DataFrame([
         {"team": "16-Bea", "action": "Add", "date": "11/10/2026", "days": "", "time": "5:30", "court": "", "note": ""},
-        {"team": "16-Bea", "action": "Extra", "date": "11/10/2026", "days": "", "time": "7:20", "court": "", "note": ""},
+        {"team": "16-Bea", "action": "Extra", "date": "11/10/2026", "days": "", "time": "7:20", "court": "",
+         "note": ""},
     ], columns=COLUMNS["Overrides"])
     r = solve(inp, *NOV, time_limit_s=10)
     pr = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["date"] == date(2026, 11, 10))]
@@ -1473,8 +1488,11 @@ def test_schedule_with_no_teams_yet_shows_its_locals():
 
 
 def test_team_dates_spreadsheet_circles_tournaments():
-    import io, zipfile
+    import io
+    import zipfile
+
     from openpyxl import load_workbook
+
     from scheduler.export import team_dates_excel
     s, e = date(2026, 12, 5), date(2026, 12, 20)
     inp = simulate(6, 4, 4, seed=7, start=s, end=e)

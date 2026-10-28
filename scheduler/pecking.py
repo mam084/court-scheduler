@@ -25,7 +25,7 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from .data import blank, parse_names, parse_rank, _team_name_head
+from .data import _team_name_head, blank, parse_names, parse_rank
 
 _COLS = {
     "rank": ("rank", "pecking", "order", "level"),
@@ -86,7 +86,11 @@ def read_pecking(file, filename: str = "") -> pd.DataFrame:
     Values are kept raw (Excel dates included) so ranks Excel turned into
     dates can be read back."""
     name = (filename or getattr(file, "name", "") or "").lower()
-    data = file.read() if hasattr(file, "read") else open(file, "rb").read()
+    if hasattr(file, "read"):
+        data = file.read()
+    else:
+        with open(file, "rb") as fh:
+            data = fh.read()
     tables: list[tuple[str, list[list]]] = []
     if name.endswith(".csv"):
         df = pd.read_csv(io.BytesIO(data), header=None, dtype=str, keep_default_na=False)
@@ -106,7 +110,8 @@ def read_pecking(file, filename: str = "") -> pd.DataFrame:
         i, cols = hit
         out = []
         for r in rows[i + 1:]:
-            get = lambda k: r[cols[k]] if k in cols and cols[k] < len(r) else None  # noqa: E731
+            def get(k, r=r, cols=cols):
+                return r[cols[k]] if k in cols and cols[k] < len(r) else None
             if blank(get("team")) and blank(get("rank")):
                 continue
             out.append({"rank": get("rank"), "team": "" if blank(get("team")) else str(get("team")).strip(),
@@ -121,6 +126,7 @@ def read_pecking(file, filename: str = "") -> pd.DataFrame:
 
 @dataclass
 class Match:
+    """One row of an imported pecking-order sheet, matched (or not) to a team in the app."""
     row: int                      # 0-based row in the pecking table
     sheet_team: str
     rank_text: str                # as it should read in the app, e.g. "16-3"
@@ -195,6 +201,7 @@ def match_teams(pecking: pd.DataFrame, teams: pd.DataFrame) -> list[Match]:
 
 
 def unranked(matches: list[Match], teams: pd.DataFrame) -> list[str]:
+    """Teams in the app that the imported pecking order didn't rank."""
     got = {m.team for m in matches if m.team}
     return [str(t) for t in teams["team"] if not blank(t) and str(t).strip() not in got]
 

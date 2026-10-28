@@ -7,7 +7,6 @@ to test and to preview in the app.
 from __future__ import annotations
 
 import html as _h
-from datetime import date
 
 import pandas as pd
 
@@ -111,6 +110,3 @@ def teams_of(coach: str, teams) -> list[str]:
     assts = [t.name for t in teams if coach in t.assistants and coach not in t.heads]
     return heads + assts
 
-
-def fmt_day(d: date) -> str:
-    return f"{d:%a %b %-d}"

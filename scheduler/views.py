@@ -14,8 +14,21 @@ from datetime import date, timedelta
 import pandas as pd
 
 from .config import (
-    ALL_COURTS, COURTS, DAYS, PRACTICE_COURT, SLOT_KEYS, SLOT_TIMES, SLOTS, WEEK_ORDER, WEEKDAY_KEYS, WEEKDAYS,
-    blocked_by_local_tournament, court_name, court_short, slots_overlap, week_start,
+    ALL_COURTS,
+    COURTS,
+    DAYS,
+    PRACTICE_COURT,
+    SLOT_KEYS,
+    SLOT_TIMES,
+    SLOTS,
+    WEEK_ORDER,
+    WEEKDAY_KEYS,
+    WEEKDAYS,
+    blocked_by_local_tournament,
+    court_name,
+    court_short,
+    slots_overlap,
+    week_start,
 )
 
 # Age group -> (background, text).
@@ -44,18 +57,21 @@ CSS = """
 .cs-grid th.cs-day { width: 76px; }
 .cs-grid td { border: 1px solid #C9CED8; vertical-align: top; padding: 4px; background: #FAFBFC; height: 64px; }
 .cs-grid td.cs-wkend { background: #F3F5FA; }
-.cs-grid td.cs-daycell { background: #EEF1F6; color: #1F2A44; font-weight: 600; text-align: center; vertical-align: middle; }
+.cs-grid td.cs-daycell { background: #EEF1F6; color: #1F2A44; font-weight: 600; text-align: center;
+                        vertical-align: middle; }
 .cs-grid td.cs-closed { background: repeating-linear-gradient(45deg,#F4F4F4,#F4F4F4 8px,#E9E9E9 8px,#E9E9E9 16px);
                         color: #6B6B6B; text-align: center; vertical-align: middle; font-style: italic; }
 .cs-chip { border-radius: 6px; padding: 3px 6px 3px 7px; margin: 0 0 4px 0; line-height: 1.25;
            border: 1px solid rgba(0,0,0,.08); border-left-width: 4px; }
 .cs-chip b { display: block; font-size: 12.5px; }
 .cs-chip span { font-size: 11.5px; opacity: .85; }
-.cs-chip.cs-local { background-image: repeating-linear-gradient(135deg, transparent, transparent 6px, rgba(0,0,0,.04) 6px, rgba(0,0,0,.04) 12px); }
+.cs-chip.cs-local { background-image: repeating-linear-gradient(135deg, transparent, transparent 6px,
+                                                                 rgba(0,0,0,.04) 6px, rgba(0,0,0,.04) 12px); }
 .cs-chip.cs-moved { outline: 2px dashed #C0392B; outline-offset: -2px; }
 .cs-chip.cs-dim { opacity: .2; }
 .cs-time { font-variant-numeric: tabular-nums; font-weight: 600; }
-.cs-legend { display:flex; flex-wrap:wrap; gap:6px; margin: 6px 0 10px; font-family: system-ui, sans-serif; font-size: 12px; align-items:center; }
+.cs-legend { display:flex; flex-wrap:wrap; gap:6px; margin: 6px 0 10px; font-family: system-ui, sans-serif;
+             font-size: 12px; align-items:center; }
 .cs-legend .cs-chip { margin: 0; }
 .cs-legend .cs-lbl { color: #5A6478; margin: 0 2px 0 8px; }
 .cs-cal td { height: 92px; }
@@ -64,7 +80,8 @@ CSS = """
 .cs-cal .cs-chip { padding: 2px 5px; margin-bottom: 3px; font-size: 11.5px; }
 .cs-tourn { background: #FFF1D6; color: #7A4B00; border-left-color: #E8A33D !important; font-weight: 600; }
 .cs-travel { background: #E8F0FF; color: #1F3F7A; border-left-color: #4A7BD0 !important; font-weight: 600; }
-.cs-notes { font-family: system-ui, sans-serif; font-size: 12.5px; margin: 2px 0 8px; display:flex; flex-wrap:wrap; gap:6px; }
+.cs-notes { font-family: system-ui, sans-serif; font-size: 12.5px; margin: 2px 0 8px; display:flex; flex-wrap:wrap;
+            gap:6px; }
 .cs-notes .cs-chip { margin: 0; }
 .cs-open { border: 1px dashed #B7BECB; border-radius: 6px; padding: 2px 6px; margin: 0 0 4px 0; color: #8A93A5;
            font-size: 11.5px; line-height: 1.25; background: transparent; }
@@ -230,7 +247,8 @@ def _private_chip(p) -> str:
     who = html.escape(str(p["coach"]))
     what = html.escape(p.get("what") or "")
     title = f"Private {p['time']}–{p['end_label']} · {p['coach']}" + (f" · {p['what']}" if p.get("what") else "")
-    return (f'<div class="cs-chip cs-priv" title="{html.escape(title)}"><span class="cs-time">{html.escape(p["time"])}</span>'
+    return (f'<div class="cs-chip cs-priv" title="{html.escape(title)}">'
+            f'<span class="cs-time">{html.escape(p["time"])}</span>'
             f' Private · {who}' + (f'<br><span>{what}</span>' if what else "") + "</div>")
 
 
@@ -243,7 +261,8 @@ def _tourn_chip(tn, compact=False) -> str:
         extra = "<span style='font-weight:400'> · until 7 PM" + ("" if compact else f", Ct {courts_label(tn.courts)}") \
                 + "</span>"
     span = f"{tn.start:%a %-m/%-d}" + ("" if not tn.multi_day else f"–{tn.end:%a %-m/%-d}")
-    title = f"{tn.name} ({'local until 7 PM, ' + ', '.join(court_name(c) for c in tn.courts) if tn.kind == 'local' else 'travel'}) {span}"
+    kind = ("local until 7 PM, " + ", ".join(court_name(c) for c in tn.courts)) if tn.kind == "local" else "travel"
+    title = f"{tn.name} ({kind}) {span}"
     return f'<div class="cs-chip {cls}" title="{html.escape(title)}">{html.escape(tn.label())}{extra}</div>'
 
 
@@ -281,7 +300,7 @@ def court_grid_html(
     open_slot_map) adds an "Open" box for every free practice time.
     `privates`: rows from privates.display_rows for this week."""
     closures = closures or {}
-    stripes = stripes or club_stripes(bookings["club"] if "club" in bookings else [])
+    stripes = stripes or club_stripes(bookings.get("club", []))
     cols = list(day_dates) if day_dates else list(WEEK_ORDER)
     open_wk = None if weekend_dates is None else set(weekend_dates)
 
@@ -437,6 +456,7 @@ def open_slot_map(day_dates: dict | None, data, closures: dict | None = None) ->
 
 
 def legend_html(ages, stripes: dict, show_moved: bool = True) -> str:
+    """The color key above the court view: age groups, clubs, programs and tags."""
     items = ['<span class="cs-lbl">Age</span>']
     for a in sorted({int(x) for x in ages if pd.notna(x)}):
         bg, fg = AGE_COLORS.get(a, DEFAULT_COLOR)
@@ -452,7 +472,8 @@ def legend_html(ages, stripes: dict, show_moved: bool = True) -> str:
         items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};border-left-color:{col}">'
                      f'{side}</div>')
     bg, fg = LOCAL_COLORS
-    items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};border-left-color:#9AA3B2">Other</div>')
+    items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};'
+                 'border-left-color:#9AA3B2">Other</div>')
     if show_moved:
         items.append('<div class="cs-chip cs-moved" style="background:#fff;color:#C0392B;border-left-color:#fff">'
                      'Moved / makeup</div>')
@@ -501,7 +522,8 @@ def month_calendar_html(
                 out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.4">{d:%-d}</div></td>')
                 continue
             if d in closures:
-                out.append(f'<td class="cs-closed"><div class="cs-datenum">{_daynum(d, start)}</div>{html.escape(closures[d])}</td>')
+                out.append(f'<td class="cs-closed"><div class="cs-datenum">{_daynum(d, start)}</div>'
+                           f'{html.escape(closures[d])}</td>')
                 continue
             has_tourn = any(tn.covers(d) for tn in (tournaments or []))
             if d.weekday() >= 5 and d not in weekend_dates and d not in by_date and not has_tourn:
@@ -528,6 +550,7 @@ def _daynum(d: date, start: date) -> str:
 
 
 def range_label(start: date, end: date) -> str:
+    """'Nov 3 – Dec 4, 2026', 'December 2026' or 'Dec 6–20, 2026'."""
     if start.year != end.year:
         return f"{start:%b %-d, %Y} – {end:%b %-d, %Y}"
     if start.month != end.month:
@@ -549,6 +572,7 @@ def week_dates(ws: date, start: date, end: date, weekend_dates=()) -> dict[str, 
 
 
 def month_name(d: date) -> str:
+    """'December 2026'."""
     return f"{calendar.month_name[d.month]} {d.year}"
 
 
@@ -577,7 +601,9 @@ def practice_counts_html(counts: pd.DataFrame, highlight: set[str] | None = None
 .cs-counts thead th { position: sticky; top: 0; z-index: 2; }
 .cs-counts thead th:first-child { left: 0; z-index: 3; }
 .cs-counts tr.cs-hl td.cs-team { outline: 2px solid #1F4E99; outline-offset:-2px; }
-</style>""", '<div class="cs-counts-wrap"><table class="cs-grid cs-counts" style="min-width:0;border-collapse:separate;border-spacing:0"><thead><tr><th class="cs-day" style="width:150px">Team</th>']
+</style>""", '<div class="cs-counts-wrap"><table class="cs-grid cs-counts" '
+                'style="min-width:0;border-collapse:separate;border-spacing:0">'
+                '<thead><tr><th class="cs-day" style="width:150px">Team</th>']
     out += [f"<th>Week of {w:%b %-d}</th>" for w in weeks]
     out.append("</tr></thead><tbody>")
     for tm in teams:
@@ -590,7 +616,9 @@ def practice_counts_html(counts: pd.DataFrame, highlight: set[str] | None = None
                 out.append(f'<td class="cs-none" title="No weekly target this week">{n if n else "–"}</td>')
             elif r.short:
                 c = "cs-short2" if r.short >= 2 else "cs-short1"
-                out.append(f'<td class="{c}" title="Short {r.short} practice{'' if r.short == 1 else 's'}">{r.scheduled} of {r.target}</td>')
+                plural_s = "" if r.short == 1 else "s"
+                out.append(f'<td class="{c}" title="Short {r.short} practice{plural_s}">'
+                           f'{r.scheduled} of {r.target}</td>')
             else:
                 out.append(f'<td class="cs-ok">{r.scheduled} of {r.target}</td>')
         out.append("</tr>")
@@ -638,7 +666,8 @@ h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 17px; margin: 18px 0
 <h1>{html.escape(title)}</h1>
 <div class="cs-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y}{who}</div>
 <div class="cs-sub">Dashed outline = a makeup or a practice off the team's usual day/time.</div>
-<div class="cs-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P). Each month prints on its own landscape page.</div>
+<div class="cs-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P).
+Each month prints on its own landscape page.</div>
 {''.join(parts)}
 </body></html>"""
 
@@ -742,8 +771,8 @@ h1 {{ font-size: 20px; margin: 0 0 4px; }} h2 {{ font-size: 16px; margin: 18px 0
 {PRINT_BUTTON}
 <h1>{html.escape(title)}</h1>
 <div class="cs-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y}{who}</div>
-<div class="cs-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P). Each week prints on two landscape pages:
-courts 1–4, then courts 5–7 and the practice court.</div>
+<div class="cs-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P).
+Each week prints on two landscape pages: courts 1–4, then courts 5–7 and the practice court.</div>
 <div class="cs-legend-top">{legend_html(ages, stripes, show_moved)}</div>
 {''.join(parts)}
 {FIT_SCRIPT}

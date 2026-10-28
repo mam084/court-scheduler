@@ -64,10 +64,6 @@ def pecking_weights(teams) -> dict[str, int]:
     return {t.name: 2 + round(18 * (n - pos[key[t.name]]) / n) for t in teams}
 
 
-def team_court_weight(age: int, level: int | None) -> int:
-    """Court weight for a team on its own (no club context)."""
-    return 2 * max(0, age - 11) + max(0, 5 - level) if level else 2 * max(0, age - 11) + 2
-
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]  # index = date.weekday()
 WEEKDAYS = DAYS[:5]
 WEEKEND = DAYS[5:]
@@ -156,6 +152,7 @@ LOCAL_TOURNAMENT_END = (19, 0)
 
 
 def blocked_by_local_tournament(slot: str) -> bool:
+    """Does a local tournament (courts taken until 7 PM) block this timeslot?"""
     return SLOT_TIMES[slot][0] < LOCAL_TOURNAMENT_END
 
 
@@ -170,11 +167,13 @@ HS_BOYS_MIN_AGE = 15
 
 
 def is_boys_club(club) -> bool:
+    """A boys-side club name ('Seaside', 'Boys')."""
     low = str(club or "").lower()
     return "boy" in low or "seaside" in low
 
 
 def is_hs_boys(club, age) -> bool:
+    """A high school boys team (15s and up on the boys side)."""
     try:
         return is_boys_club(club) and int(age) >= HS_BOYS_MIN_AGE
     except (TypeError, ValueError):

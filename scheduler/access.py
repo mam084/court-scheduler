@@ -29,6 +29,7 @@ DEFAULT_SCHED_ADMINS = ["cliff@sdvbc.org"]
 
 @dataclass
 class Person:
+    """Someone signed in: their email, display name, the coach name they're linked to, and their roles."""
     email: str
     name: str = ""
     coach: str = ""            # the coach name used on the schedule
@@ -84,9 +85,6 @@ class Viewer:
         c = self.coach_name
         return [t.name for t in teams if c and c in t.staff]
 
-    def can_edit_prefs(self, team: str, teams) -> bool:
-        return self.can_schedule or team in self.my_teams(teams)
-
     @property
     def log_name(self) -> str:
         if self.person is None:
@@ -111,14 +109,17 @@ def _env_list(name: str, default: list[str], secrets=None) -> list[str]:
 
 
 def allowed_domains(secrets=None) -> list[str]:
+    """Email domains whose Google accounts may sign in (ALLOWED_DOMAINS, else the club's)."""
     return _env_list("ALLOWED_DOMAINS", DEFAULT_DOMAINS, secrets)
 
 
 def app_admins(secrets=None) -> list[str]:
+    """Emails that manage access and settings (ADMIN_EMAILS, else the defaults)."""
     return _env_list("ADMIN_EMAILS", DEFAULT_APP_ADMINS, secrets)
 
 
 def email_allowed(email: str, secrets=None) -> bool:
+    """Can this address sign in? App admins always can; anyone else needs a club domain."""
     email = (email or "").strip().lower()
     if email in app_admins(secrets):
         return True

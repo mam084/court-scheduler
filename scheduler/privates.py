@@ -47,11 +47,13 @@ def parse_start(value) -> int:
 
 
 def clock(minutes: int) -> str:
+    """Minutes after midnight -> '4:15 PM'."""
     h, m = divmod(int(minutes), 60)
     return f"{h % 12 or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
 
 
 def private_type(value) -> str:
+    """'Team' or 'Personal' from a cell (anything starting with 't' is a team private)."""
     return "Team" if str(value or "").strip().lower().startswith("t") else "Personal"
 
 
@@ -93,7 +95,8 @@ def _slot_span(slot: str) -> tuple[int, int]:
     return sh * 60 + sm, eh * 60 + em
 
 
-def conflicts(privs: list[dict], assignments: pd.DataFrame | None, closures: dict | None = None) -> dict[int, list[str]]:
+def conflicts(privs: list[dict], assignments: pd.DataFrame | None,
+              closures: dict | None = None) -> dict[int, list[str]]:
     """{private's row: [problems]}: the court is taken (practice, program,
     another private), the coach is busy (a practice or program they coach,
     another private), or the club is closed."""
@@ -217,6 +220,7 @@ def _style(sh, widths):
 
 
 def court_choice_label(c) -> str:
+    """A court's name for the privates form, noting the practice court is for programs and privates."""
     return court_name(c) + (" (programs & privates)" if c == PRACTICE_COURT else "")
 
 

@@ -32,6 +32,7 @@ def test_one_schedule_new_dates_and_switching_between_them(db):
     """The club has one schedule; new dates are added to it, both stay in
     the Dates menu, and each keeps its own built schedule."""
     from streamlit.testing.v1 import AppTest
+
     from scheduler.storage import MAIN_ID, all_periods
     pid = _save(db, "November", 1)
     at = AppTest.from_file("../app.py", default_timeout=180)
@@ -63,6 +64,7 @@ def test_one_schedule_new_dates_and_switching_between_them(db):
 
 def test_first_open_moves_an_old_saved_schedule_into_the_one_schedule(db):
     from streamlit.testing.v1 import AppTest
+
     from scheduler.storage import MAIN_ID
     _save(db, "Demo club", 2, pid="old1")
     _save(db, "November", 3, pid="old2")
@@ -274,7 +276,9 @@ def test_restore_published_version_button(db):
 
 def test_replacing_inputs_keeps_programs(db, tmp_path):
     import io
+
     from streamlit.testing.v1 import AppTest
+
     from scheduler.data import ScheduleInput
     pid = _save(db, "Keep programs", 7)
     before = ScheduleInput.from_records(db.get(pid)["payload"]["inputs"])
@@ -470,6 +474,7 @@ def test_coach_adds_own_no_date_and_sees_only_their_things(db, monkeypatch):
 def test_program_tournament_dates_round_trip_through_the_form(db):
     """A program's local tournaments show in its form and survive a save."""
     from streamlit.testing.v1 import AppTest
+
     from scheduler.storage import read_payload
     inp = simulate(4, 2, 2, seed=26, start=date(2026, 11, 1), end=date(2026, 11, 30))
     prog = str(inp.locals.iloc[0]["program"])
@@ -512,7 +517,9 @@ def test_import_adds_new_teams_and_replaces_no_dates(db):
     """Importing the coaches' spreadsheet keeps the club's teams and programs,
     adds the new teams, and brings in the file's no-dates and wishlists."""
     import io
+
     from streamlit.testing.v1 import AppTest
+
     from scheduler.data import ScheduleInput, merge_import
     _save(db, "November", 30)
     at = AppTest.from_file("../app.py", default_timeout=180)
@@ -554,8 +561,9 @@ def test_open_days_form_opens_a_break_in_blocks(db):
 def test_coach_opens_on_the_published_dates_covering_today(db, monkeypatch):
     """A coach lands on the published dates that include today, not the
     dates an admin happens to be working on."""
-    from scheduler.storage import MAIN_ID, current_period, make_payload, read_payload
     from datetime import timedelta
+
+    from scheduler.storage import current_period, make_payload, read_payload
     today = date.today()
     pid = _save(db, "Main", 32)
     rec = db.get(pid)
@@ -570,8 +578,8 @@ def test_coach_opens_on_the_published_dates_covering_today(db, monkeypatch):
 
 def _with_clash(db):
     """The club's schedule with one coach at two travel tournaments one weekend."""
-    from scheduler.storage import MAIN_ID, make_payload, read_payload
     from scheduler import clean
+    from scheduler.storage import make_payload, read_payload
     pid = _save(db, "Flags", 40)
     rec = db.get(pid)
     inp, s_, e_, settings, r = read_payload(rec["payload"])
@@ -590,6 +598,7 @@ def _with_clash(db):
 
 def test_coverage_flag_resolves_and_reopens(db):
     from streamlit.testing.v1 import AppTest
+
     from scheduler.storage import MAIN_ID
     pid, coach = _with_clash(db)
     at = AppTest.from_file("../app.py", default_timeout=180)

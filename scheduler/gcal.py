@@ -42,6 +42,7 @@ KINDS = ["Team", "Club", "Program"]
 
 @dataclass
 class Event:
+    """One event for a Google Calendar, with a stable key so a later sync updates it instead of adding a copy."""
     calendar_id: str
     target: str          # "Team: 16 Black", "Club: SDVBC", "Program: G HS L"
     key: str             # stable identity: target + what + when
@@ -284,6 +285,7 @@ class CalendarClient:
 
 @dataclass
 class Plan:
+    """What a sync would do: events to create, update and delete, and how many are already right."""
     create: list = field(default_factory=list)    # [Event]
     update: list = field(default_factory=list)    # [Event]
     delete: list = field(default_factory=list)    # [(calendar_id, event id, summary, start)]

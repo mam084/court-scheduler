@@ -40,6 +40,7 @@ WISH_OPTIONS = [
 
 
 def month_range(year: int, month: int) -> tuple[date, date]:
+    """The first and last day of a month."""
     return date(year, month, 1), date(year, month, calendar.monthrange(year, month)[1])
 
 
@@ -85,10 +86,12 @@ def simulate(
     for c in COLUMNS["Teams"]:
         if c not in teams:
             teams[c] = ""
-    staff = sorted({p for col in ("head_coach", "assistants") for v in teams[col] for p in str(v).split(";") if p.strip()})
+    staff = sorted({p for col in ("head_coach", "assistants") for v in teams[col]
+                    for p in str(v).split(";") if p.strip()})
 
     # Older girls start later, like the real season.
-    teams.loc[(teams["club"] == "Girls") & (teams["age"] >= 16), "start_date"] = (start + timedelta(days=13)).strftime("%m/%d/%Y")
+    late_start = (start + timedelta(days=13)).strftime("%m/%d/%Y")
+    teams.loc[(teams["club"] == "Girls") & (teams["age"] >= 16), "start_date"] = late_start
     teams.loc[teams["age"] <= 14, "weekend_pref"] = "AM"
     teams = teams[COLUMNS["Teams"]]
 
@@ -124,7 +127,8 @@ def simulate(
     loc = []
     for prog, days, time_, courts in LOCAL_TEMPLATES[:n_locals]:
         who = rng.sample(staff, k=min(len(staff), rng.choice([1, 2])))
-        loc.append({"program": prog, "side": "Girls" if prog.startswith("Girls") else "Boys" if prog.startswith("Boys") else "",
+        side = "Girls" if prog.startswith("Girls") else "Boys" if prog.startswith("Boys") else ""
+        loc.append({"program": prog, "side": side,
                     "days": days, "time": time_, "courts": courts,
                     "coaches": "; ".join(who), "on_site": "Yes", "dates": ""})
     locals_df = pd.DataFrame(loc, columns=COLUMNS["Locals"])

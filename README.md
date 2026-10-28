@@ -154,23 +154,31 @@ pytest              # checks every hard rule on solved schedules
 ## Project layout
 
 ```
-app.py                  Streamlit app
-scheduler/
-  config.py             courts, timeslots, weekend blocks, age rules, weights
-  data.py               input tables, validation, Excel IO
+app.py                  the Streamlit app (its docstring maps the sections)
+scheduler/              the scheduling engine, usable without Streamlit
+  data.py               input tables, parsing, validation (clean), spreadsheet import/merge
+  solver.py             two-stage CP-SAT scheduler (solve)
+  config.py             courts, timeslots, 2-hour blocks, age rules, rule weights
   closures.py           default holiday closures
-  simulate.py           simulated club data
-  solver.py             two-stage CP-SAT scheduler
-  views.py              court grid + month calendar (HTML)
-  export.py             Excel workbook + per-coach .ics
-  storage.py            saved schedules, users and the activity log (SQLite or Postgres via DATABASE_URL)
+  simulate.py           a made-up club for demos and tests
+  views.py              court grid, month calendar and printable pages (HTML)
+  paper.py              the board-style printable court sheets
+  export.py             Excel workbooks (full schedule, calendar, team dates) and .ics files
+  storage.py            the club's schedule and its runs of dates, users, activity log, requests
+                        (SQLite locally, Postgres via DATABASE_URL)
   access.py             roles: who can sign in and what they can change
-  gcal.py               Google Calendar sync: events to send, preview, apply
   changes.py            published versions, what changed, per-team burden counts
+  gcal.py               Google Calendar sync: events to send, preview, apply
+  google.py             the club's Google connection (sign-in, tokens)
+  mail.py               emails to coaches and admins
   pecking.py            read a pecking-order sheet and match it to the teams
   privates.py           private lessons: reading, conflict checks, per-coach spreadsheet
-tests/                  hard-rule and parsing tests
+tests/                  hard rules, parsing, app flows (Streamlit AppTest), Google
+docs/                   setup guides (sign-in, Google, calendars) and screenshots
+pyproject.toml          pytest and ruff (linter) settings
 ```
+
+Checks before pushing: `pytest` and `ruff check .`
 
 ## Roadmap
 

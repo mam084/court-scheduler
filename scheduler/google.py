@@ -23,7 +23,7 @@ import json
 import secrets as _secrets
 import time
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.message import EmailMessage
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -83,6 +83,7 @@ def redirect_uri(secrets, signin_redirect: str = "") -> str:
 
 
 def app_url(secrets) -> str:
+    """The app's address, as registered with Google for sign-in redirects."""
     cfg = client_config(secrets)
     return cfg["redirect_uri"] if cfg else ""
 
@@ -101,10 +102,12 @@ def _fernet(cfg: dict, secrets=None):
 
 
 def encrypt(cfg: dict, text: str, secrets=None) -> str:
+    """Encrypts a token before it's stored in the database."""
     return _fernet(cfg, secrets).encrypt(text.encode()).decode()
 
 
 def decrypt(cfg: dict, token: str, secrets=None) -> str:
+    """Decrypts a stored token."""
     return _fernet(cfg, secrets).decrypt(token.encode()).decode()
 
 
@@ -155,7 +158,7 @@ def finish(store, cfg: dict, code: str, state: str, email: str, allowed, http=No
     if not allowed(acct):
         raise ValueError(f"{acct} isn't a club account.")
     conn = {"email": acct, "name": info.get("name") or "", "scopes": sorted(granted),
-            "by": email or acct, "at": datetime.now(timezone.utc).isoformat(),
+            "by": email or acct, "at": datetime.now(UTC).isoformat(),
             "token": encrypt(cfg, refresh, secrets)}
     store.set_setting(KEY_CONN, json.dumps(conn))
     return {k: v for k, v in conn.items() if k != "token"}
@@ -172,10 +175,12 @@ def connection(store) -> dict | None:
 
 
 def can_email(conn: dict | None) -> bool:
+    """Does this Google connection allow sending email?"""
     return bool(conn) and any(s.endswith("gmail.send") for s in conn.get("scopes", []))
 
 
 def can_calendar(conn: dict | None) -> bool:
+    """Does this Google connection allow writing to calendars?"""
     return bool(conn) and any(s.endswith("/auth/calendar") for s in conn.get("scopes", []))
 
 
@@ -220,7 +225,8 @@ def _err(r) -> str:
 # ------------------------------------------------------------ email --
 
 def build_message(sender: str, to: list[str], subject: str, text: str, html: str | None = None,
-                  cc: list[str] | None = None, reply_to: str | None = None, sender_name: str = "Court Scheduler") -> dict:
+                  cc: list[str] | None = None, reply_to: str | None = None,
+                  sender_name: str = "Court Scheduler") -> dict:
     """The Gmail API body for one email."""
     m = EmailMessage()
     m["From"] = f"{sender_name} <{sender}>" if sender_name else sender

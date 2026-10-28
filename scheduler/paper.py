@@ -17,8 +17,14 @@ from datetime import date, timedelta
 import pandas as pd
 
 from .config import (
-    ALL_COURTS, COURTS, PRACTICE_COURT, SLOT_TIMES, WEEK_ORDER, WEEKDAY_KEYS, WEEKEND_KEYS,
-    blocked_by_local_tournament, court_name, week_start,
+    COURTS,
+    PRACTICE_COURT,
+    SLOT_TIMES,
+    WEEK_ORDER,
+    WEEKDAY_KEYS,
+    WEEKEND_KEYS,
+    blocked_by_local_tournament,
+    week_start,
 )
 
 HALVES = [([1, 2, 3, 4], "Courts 1–4"), ([5, 6, 7, PRACTICE_COURT], "Courts 5–7 & practice court")]
@@ -28,7 +34,8 @@ LABEL = {"3:30": "3:30-4:30", "4:30": "4:30-5:30", "3:45": "3:45-5:30", "5:30": 
          "9AM": "9-11", "11AM": "11-1", "1PM": "1-3", "3PM": "3-5", "5PM": "5-7", "7PM": "7-9"}
 
 CSS = """<style>
-body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; color: #1f2329; background: #fff; }
+body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; color: #1f2329;
+       background: #fff; }
 h1 { font-size: 20px; margin: 0 0 4px; }
 .cs-sub { color: #5b6475; font-size: 13px; margin-bottom: 8px; }
 .cs-tip { background: #eef1f6; border-radius: 6px; padding: 8px 12px; font-size: 13px; }
@@ -229,7 +236,8 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
 {PRINT_BUTTON}
 <h1>{html.escape(title)}</h1>
 <div class="cs-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y}</div>
-<div class="cs-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P). Each week prints on two landscape pages
+<div class="cs-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P).
+Each week prints on two landscape pages
 (courts 1–4, then courts 5–7 and the practice court). Every open time is a blank line to write in.</div>
 {''.join(parts)}
 {FIT_SCRIPT}

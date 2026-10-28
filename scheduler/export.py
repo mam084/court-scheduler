@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 from openpyxl import Workbook
@@ -15,8 +15,15 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .config import (
-    ALL_COURTS, COURTS, DAYS, PRACTICE_COURT, court_name, court_short, SLOT_KEYS, SLOT_TIMES, SLOTS, WEEK_ORDER,
+    ALL_COURTS,
+    PRACTICE_COURT,
+    SLOT_KEYS,
+    SLOT_TIMES,
+    SLOTS,
+    WEEK_ORDER,
     WEEKDAYS,
+    court_name,
+    court_short,
 )
 from .solver import ScheduleResult, week_start
 from .views import _hit
@@ -82,6 +89,7 @@ def _grid_sheet(wb, title, bookings, day_labels, closed=None, cols=None):
 
 
 def to_excel(result: ScheduleResult, closures: dict) -> bytes:
+    """The full schedule workbook: weekly template, calendar, one sheet per week, every booking, counts and review."""
     wb = Workbook()
     wb.remove(wb.active)
     a = result.assignments
@@ -218,7 +226,7 @@ def calendar_ics(result: ScheduleResult, highlight: set[str] | None = None, incl
 
 def _ics(a: pd.DataFrame, mine: pd.DataFrame, cal_name: str, tz: str, key_extra: str = "") -> bytes:
     mine = mine.drop_duplicates(subset=["date", "slot", "name"])  # locals span several courts
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//court-scheduler//EN",
              f"X-WR-CALNAME:{_ics_escape(cal_name)}", f"X-WR-TIMEZONE:{tz}"]
     coach = key_extra
@@ -231,11 +239,13 @@ def _ics(a: pd.DataFrame, mine: pd.DataFrame, cal_name: str, tz: str, key_extra:
         where = _courts_text(courts, long=True)
         key = f"{d:%Y%m%d}|{r['slot']}|{r['name']}|{coach}"
         uid = hashlib.md5(key.encode()).hexdigest() + "@court-scheduler"
+        who = r["coach"] if isinstance(r.get("coach"), str) and r["coach"] else ""
+        desc = SLOTS[r["slot"]] + " · " + where + (f" · {who}" if who else "")
         lines += ["BEGIN:VEVENT", f"UID:{uid}", f"DTSTAMP:{stamp}",
                   f"DTSTART;TZID={tz}:{dstart}", f"DTEND;TZID={tz}:{dend}",
                   f"SUMMARY:{_ics_escape(r['name'])} ({r['kind'].lower()})",
                   f"LOCATION:{_ics_escape(where)}",
-                  f"DESCRIPTION:{_ics_escape(SLOTS[r['slot']] + ' · ' + where + (' · ' + r['coach'] if isinstance(r.get('coach'), str) and r['coach'] else ''))}",
+                  f"DESCRIPTION:{_ics_escape(desc)}",
                   "END:VEVENT"]
     lines.append("END:VCALENDAR")
     return ("\r\n".join(lines) + "\r\n").encode()
@@ -565,7 +575,10 @@ def _add_circles(xlsx: bytes, sheet_path: str, cells: list[tuple[int, int]], col
                        f'r:id="{rid}"/>')
                 # <drawing> goes after the page setup elements, before any table parts.
                 m = re.search(r"<(legacyDrawing|tableParts|extLst)\b", xml)
-                xml = xml[:m.start()] + tag + xml[m.start():] if m else xml.replace("</worksheet>", tag + "</worksheet>")
+                if m:
+                    xml = xml[:m.start()] + tag + xml[m.start():]
+                else:
+                    xml = xml.replace("</worksheet>", tag + "</worksheet>")
                 data = xml.encode("utf-8")
             elif name == "[Content_Types].xml":
                 xml = data.decode("utf-8").replace(

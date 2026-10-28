@@ -4,8 +4,7 @@ from datetime import date
 
 import pandas as pd
 
-from scheduler import clean, simulate, solve
-from scheduler import gcal
+from scheduler import clean, gcal, simulate, solve
 from scheduler.data import COLUMNS
 
 S, E = date(2026, 11, 1), date(2026, 11, 30)
