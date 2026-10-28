@@ -36,6 +36,8 @@ from scheduler.data import (
 from scheduler import privates as pv
 from scheduler import access
 from scheduler import gcal
+from scheduler import google as gsvc
+from scheduler import mail
 from scheduler import pecking as pk
 from scheduler.export import calendar_excel, calendar_ics, team_dates_excel, to_excel, to_ics
 from scheduler.paper import paper_weeks_html
@@ -169,6 +171,66 @@ def _me() -> access.Person | None:
 
 
 ME = _me()
+
+# ------------------------------------------------- Google connection --
+# One club Google account (connected in Access) edits the calendars and
+# sends the app's emails. See scheduler/google.py and docs/SETUP_GOOGLE.md.
+GCFG = gsvc.client_config(SECRETS)
+APP_LINK = gsvc.app_url(SECRETS)
+
+
+def g_conn() -> dict | None:
+    """The connected Google account (re-read at most every 30 s)."""
+    c = st.session_state.get("_gconn")
+    if c and time_mod.time() - c[0] < 30:
+        return c[1]
+    conn = gsvc.connection(store)
+    st.session_state._gconn = (time_mod.time(), conn)
+    return conn
+
+
+def g_session():
+    try:
+        return gsvc.session(store, GCFG, SECRETS) if GCFG else None
+    except Exception:  # noqa: BLE001  (token no longer valid: shown in Access)
+        return None
+
+
+def send_mail(to: list[str], msg: tuple[str, str, str], reply_to: str | None = None) -> str | None:
+    """Sends one email as the connected account. Returns an error message, or None if sent."""
+    conn = g_conn()
+    if not gsvc.can_email(conn):
+        return "email isn't connected yet (Access → Google connection)"
+    sess = g_session()
+    if sess is None:
+        return "the Google connection needs to be redone (Access → Google connection)"
+    subject, text, html_ = msg
+    try:
+        gsvc.send(sess, conn["email"], to, subject, text, html_, reply_to=reply_to)
+        return None
+    except Exception as e:  # noqa: BLE001
+        return str(e)
+
+
+# Coming back from Google after pressing Connect: ?code=...&state=...
+if GCFG and "code" in st.query_params and "state" in st.query_params:
+    _code, _state = st.query_params["code"], st.query_params["state"]
+    st.query_params.clear()
+    try:
+        _c = gsvc.finish(store, GCFG, _code, _state, _email or "",
+                         lambda e: access.email_allowed(e, SECRETS), secrets=SECRETS)
+        st.session_state.pop("_gconn", None)
+        store.log(_email or "", "Google connection", f"connected {_c['email']}")
+        st.session_state.flash = (f"Connected {_c['email']}. The app can now use its Google Calendars"
+                                  + (" and send email" if gsvc.can_email(_c) else "") + ".")
+        st.session_state.nav = "Access"
+    except ValueError as e:
+        st.session_state.flash_warn = f"Google connection didn't work: {e}"
+    st.rerun()
+if "error" in st.query_params and "state" in st.query_params:  # declined on Google's page
+    st.query_params.clear()
+    st.session_state.flash_warn = "Google connection cancelled."
+    st.rerun()
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -356,10 +418,15 @@ with st.sidebar:
         switch_period(pick)
         st.rerun()
 
+    if CAN and ME is not None:
+        _n_req = len(store.requests("pending"))
+        if _n_req:
+            st.info(f"📬 **{plural(_n_req, 'change request')}** waiting on the **Requests** tab.")
     run = False
     if not CAN:
-        st.caption("You can change your teams' preferences in **Edit practices**; other changes go through the "
-                   "scheduling admins.")
+        st.caption("Change your teams' preferences in **Edit practices**, and ask for moves, extra practices, "
+                   "cancellations and privates there or in **Privates**. The scheduling admins approve those on "
+                   "the **Requests** tab.")
     else:
         with st.expander("Schedule new dates"):
             _ns = st.session_state.range_end + pd.Timedelta(days=1)
@@ -495,6 +562,23 @@ if end < start:
     st.stop()
 inp.start, inp.end = start, end
 
+def sched_admin_emails(exclude: str = "") -> list[str]:
+    return [u["email"] for u in store.users() if u.get("sched_admin") and u["email"] != (exclude or "").lower()]
+
+
+def decided(req: dict, status: str, note: str = "") -> str:
+    """Marks a request approved / declined and emails the coach. Returns the flash message."""
+    by = VIEWER.person.label if VIEWER.person else "A scheduling admin"
+    if not store.decide_request(req["id"], status, VIEWER.person.email if VIEWER.person else "", note):
+        return "Someone else already decided that request."
+    store.log(VIEWER.log_name, "Request " + ("approved" if status == "approved" else "declined"),
+              f"{req['who']}: {req['summary']}" + (f" ({note})" if note else ""), MAIN_ID)
+    word = "Approved" if status == "approved" else "Declined"
+    err = send_mail([req["email"]], mail.decision(req, status, by, note, APP_LINK)) if req.get("email") else None
+    return f"{word}: {req['summary']}." + (f" (Email to {req['who']} not sent: {err}.)" if err else
+                                           f" {req['who']} was emailed." if req.get("email") else "")
+
+
 # Auto-schedule button, or adding/removing a program or tournament, rebuilds.
 if run or st.session_state.pop("resolve", False):
     with st.spinner("Building the schedule…"):
@@ -521,6 +605,16 @@ if run or st.session_state.pop("resolve", False):
             st.session_state.pop("pending_rebuild", None)
             st.session_state.pending_prefs = []
             st.session_state.result_period = (start, end)
+            _appr = st.session_state.pop("approving", None)
+            if _appr is not None and st.session_state.result.ok:  # the change built fine: approved
+                st.session_state.flash = decided(_appr, "approved", st.session_state.pop("approving_note", ""))
+            elif _appr is not None:  # no schedule with it: take the change back out, keep the request waiting
+                if st.session_state.get("overrides_backup") is not None:
+                    inp.overrides = st.session_state.overrides_backup
+                    st.session_state.result = solve(inp, start, end, time_limit_s=time_limit, makeup_closures=makeup,
+                                                    previous=prev, previous_pattern=prev_pat)
+                st.session_state.pop("flash", None)
+                st.error("That request can't fit in the schedule, so it wasn't applied. It's still waiting.")
             sf = st.session_state.result.shortfalls if st.session_state.result.ok else None
             if sf is not None and len(sf):
                 st.toast(f"{plural(sf['team'].nunique(), 'team')} short of practices in {plural(sf['week_of'].nunique(), 'week')}. "
@@ -532,7 +626,11 @@ if run or st.session_state.pop("resolve", False):
             if backup is not None:  # a manual change that can't work: undo it, keep the schedule
                 inp.overrides = backup
                 st.session_state.pop("flash", None)  # its "done" message no longer applies
-                st.error(f"That change wasn't applied. {e}")
+                _appr = st.session_state.pop("approving", None)
+                st.session_state.pop("approving_note", None)
+                st.error(f"That change wasn't applied. {e}"
+                         + (" The request is still waiting; decline it with a note, or change something "
+                            "else first." if _appr else ""))
             else:
                 st.session_state.result = None
                 st.error(str(e))
@@ -762,10 +860,10 @@ if "flash" in st.session_state:
 # Navigation. Only the chosen section is built on each click (tabs would
 # build every section every time), and the choice is remembered, so saving a
 # program or removing something keeps you where you were.
-ALL_VIEWS = ["Court view", "Calendar", "Edit practices", "Programs", "Tournaments", "Open days", "Privates",
-             "Coaches", "Pecking order", "Publish", "Review", "Inputs", "Access"]
-(TAB_COURT, TAB_CAL, TAB_EDIT, TAB_PROG, TAB_TOURN, TAB_OPEN, TAB_PRIV, TAB_COACH, TAB_PECK, TAB_PUB, TAB_REVIEW,
- TAB_INPUTS, TAB_ACCESS) = ALL_VIEWS
+ALL_VIEWS = ["Court view", "Calendar", "Edit practices", "Requests", "Programs", "Tournaments", "Open days",
+             "Privates", "Coaches", "Pecking order", "Publish", "Review", "Inputs", "Access"]
+(TAB_COURT, TAB_CAL, TAB_EDIT, TAB_REQ, TAB_PROG, TAB_TOURN, TAB_OPEN, TAB_PRIV, TAB_COACH, TAB_PECK, TAB_PUB,
+ TAB_REVIEW, TAB_INPUTS, TAB_ACCESS) = ALL_VIEWS
 ADMIN_ONLY = {TAB_PROG, TAB_TOURN, TAB_OPEN, TAB_PECK, TAB_PUB, TAB_REVIEW, TAB_INPUTS}
 VIEWS = [v for v in ALL_VIEWS if (CAN or v not in ADMIN_ONLY)
          and (v != TAB_ACCESS or (ME is not None and VIEWER.can_manage_access and VIEWER.acting_as is None))]
@@ -1104,6 +1202,23 @@ def change_prefs(team: str, add_wish: dict | None, add_avoid: dict | None, drop_
     st.rerun()
 
 
+def submit_request(kind: str, team: str, summary: str, detail: dict, note: str = ""):
+    """A coach asks for a change. Saved for the scheduling admins (Requests tab) and emailed to them."""
+    me_ = VIEWER.person
+    who = VIEWER.who.label if VIEWER.who else "A coach"
+    email = me_.email if me_ else ""
+    rid = store.add_request(email, who, kind, team, period_key(start, end), summary, detail, note)
+    store.log(VIEWER.log_name, "Request", summary + (f" ({note})" if note else ""), MAIN_ID)
+    req = store.get_request(rid)
+    to = sched_admin_emails(exclude=email)
+    err = send_mail(to, mail.new_request(req, APP_LINK), reply_to=email or None) if to else "no scheduling admins"
+    st.session_state.flash = (f"Sent your request: {summary}. "
+                              + ("The scheduling admins were emailed." if not err else
+                                 "The scheduling admins will see it on the Requests tab.")
+                              + " You'll hear back by email when it's decided.")
+    st.rerun()
+
+
 if VIEW == TAB_EDIT:
     if result is None or cleaned is None:
         st.caption("Build the schedule first.")
@@ -1113,10 +1228,10 @@ if VIEW == TAB_EDIT:
                         "and fits everything else around them.")
             team_names = [t.name for t in cleaned.teams]
         else:
-            st.markdown("Tell the scheduler what your teams would rather have. Preferences save right away and "
-                        "are weighed against every other team's at the next rebuild. Your own no-dates and "
-                        "times are on the **Coaches** tab. To move, add or remove a "
-                        "practice, ask a scheduling admin (requests in the app are coming next).")
+            st.markdown("Tell the scheduler what your teams would rather have, or ask for a change. Preferences "
+                        "save right away and are weighed against every other team's at the next rebuild. Moves, "
+                        "extra practices and cancellations go to the scheduling admins to approve (you'll get an "
+                        "email either way). Your own no-dates and times are on the **Coaches** tab.")
             team_names = VIEWER.my_teams(cleaned.teams)
             if not team_names:
                 st.info("Your login isn't linked to a team yet. Ask an app admin to link it to your coach name."
@@ -1152,7 +1267,8 @@ if VIEW == TAB_EDIT:
         with c_right:
             mode = st.radio("What do you want to do?", ["Suggest a preference", "Move a practice", "Remove a practice",
                                                         "Add a practice", "Set usual days", "Practices per week"]
-                            if CAN else ["Suggest a preference"],
+                            if CAN else ["Suggest a preference", "Ask to move a practice", "Ask for an extra practice",
+                                         "Ask to cancel a practice"],
                             key="ed_mode",
                             help="A preference is weighed against everyone else's and kept when possible. "
                                  "The other options pin a practice exactly where you put it.")
@@ -1194,6 +1310,54 @@ if VIEW == TAB_EDIT:
                                             f"{'Removed' if act == 'Remove' else 'Cancelled'} {e_team}'s "
                                             f"{old['date']:%a %b %-d} practice.",
                                             replace_pin=(e_team, old["date"], old["slot"]))
+            elif mode.startswith("Ask to move") or mode.startswith("Ask to cancel"):
+                if not labels:
+                    st.caption("No practices to change.")
+                else:
+                    lab_i = st.selectbox("Practice", labels, key=f"rq_pick_{e_team}")
+                    old = tp.iloc[labels.index(lab_i) if lab_i in labels else 0]
+                    od = old["date"]
+                    rk = f"rq_{e_team}_{od}_{old['slot']}"
+                    if mode.startswith("Ask to move"):
+                        nd = st.date_input("New date", value=od, min_value=start, max_value=end, format="MM/DD/YYYY",
+                                           key=f"{rk}_nd")
+                        ns = st.selectbox("New time", TEAM_SLOT_CHOICES, format_func=team_slot_label,
+                                          index=TEAM_SLOT_CHOICES.index(old["slot"]) if old["slot"] in TEAM_SLOT_CHOICES
+                                          else 0, key=f"{rk}_ns")
+                        why = st.text_input("Why (helps the admins decide)", key=f"{rk}_why",
+                                            placeholder="e.g. gym conflict at school")
+                        same = nd == od and ns == old["slot"]
+                        if st.button("Send request", type="primary", width="stretch", disabled=same, key=f"{rk}_go"):
+                            submit_request("move", e_team,
+                                           f"Move {e_team} from {od:%a %b %-d} {old['slot']} to {nd:%a %b %-d} {ns}",
+                                           {"rows": [
+                                               {"team": e_team, "action": "Remove", "date": f"{od:%m/%d/%Y}", "days": "",
+                                                "time": old["slot"], "court": "", "note": f"moved to {nd:%a %-m/%-d} {ns} (request)"},
+                                               {"team": e_team, "action": "Add", "date": f"{nd:%m/%d/%Y}", "days": "",
+                                                "time": ns, "court": "", "note": f"moved from {od:%a %-m/%-d} (request)"}],
+                                            "replace_pin": [e_team, od.isoformat(), old["slot"]]}, why)
+                    else:
+                        how = st.radio("Then", ["Make it up another day that week if possible", "No makeup needed"],
+                                       key=f"{rk}_how")
+                        why = st.text_input("Why", key=f"{rk}_why", placeholder="e.g. team is at a school event")
+                        if st.button("Send request", type="primary", width="stretch", key=f"{rk}_go"):
+                            act = "Remove" if how.startswith("Make") else "Cancel"
+                            submit_request("cancel", e_team,
+                                           f"Cancel {e_team}'s {od:%a %b %-d} {old['slot']} practice"
+                                           + (" (with a makeup)" if act == "Remove" else " (no makeup)"),
+                                           {"rows": [{"team": e_team, "action": act, "date": f"{od:%m/%d/%Y}", "days": "",
+                                                      "time": old["slot"], "court": "", "note": "cancelled (request)"}],
+                                            "replace_pin": [e_team, od.isoformat(), old["slot"]]}, why)
+            elif mode.startswith("Ask for an extra"):
+                ad = st.date_input("Date", value=start, min_value=start, max_value=end, format="MM/DD/YYYY",
+                                   key=f"rq_x_d_{e_team}")
+                as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1,
+                                   key=f"rq_x_t_{e_team}")
+                why = st.text_input("Why", key=f"rq_x_why_{e_team}", placeholder="e.g. extra practice before a tournament")
+                if st.button("Send request", type="primary", width="stretch", key=f"rq_x_go_{e_team}"):
+                    submit_request("extra", e_team, f"Extra practice for {e_team} on {ad:%a %b %-d} at {as_}",
+                                   {"rows": [{"team": e_team, "action": "Extra", "date": f"{ad:%m/%d/%Y}", "days": "",
+                                              "time": as_, "court": "", "note": "extra practice (request)"}]}, why)
             elif mode == "Suggest a preference":
                 st.caption("Tell the scheduler what this team would rather have. It's weighed against every other "
                            "team's requests, so it's kept when it fits, not forced.")
@@ -1318,6 +1482,94 @@ if VIEW == TAB_EDIT:
                     st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
                     st.session_state.resolve = True
                     st.session_state.flash = f"Undid {plural(len(undo), 'change')}. Schedule rebuilt."
+                    st.rerun()
+
+# ------------------------------------------------------------ requests --
+def _req_when(r: dict) -> str:
+    ts = pd.Timestamp(r["created_at"])
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+    return ts.tz_convert("America/Los_Angeles").strftime("%b %-d, %-I:%M %p")
+
+
+def approve(req: dict, note: str):
+    """Puts a request's change into the schedule; it's marked approved once the rebuild works."""
+    d = req["detail"]
+    if req["kind"] == "private":
+        inp.privates = pd.concat([inp.privates, pd.DataFrame([d["private"]])], ignore_index=True)
+        st.session_state.flash = decided(req, "approved", note)
+        st.rerun()
+    st.session_state.approving = req
+    st.session_state.approving_note = note
+    rp = d.get("replace_pin")
+    apply_overrides(d["rows"], f"Applying: {req['summary']}…",
+                    replace_pin=(rp[0], date.fromisoformat(rp[1]), rp[2]) if rp else None)
+
+
+if VIEW == TAB_REQ:
+    me_email = VIEWER.person.email if VIEWER.person else ""
+    if CAN:
+        st.markdown("Coaches' requests: moves, extra practices, cancellations and privates. **Approve** puts the "
+                    "change in the schedule (it's rebuilt around it) and emails the coach; **Decline** emails "
+                    "them your note. Nobody approves their own request.")
+        conn_ = g_conn()
+        if not gsvc.can_email(conn_):
+            st.caption("Email isn't connected yet (Access → Google connection), so nobody gets emailed for now.")
+        pend = store.requests("pending")
+        if not pend:
+            st.success("No requests waiting.")
+        for r in pend:
+            with st.container(border=True):
+                same_period = r["period"] in ("", period_key(start, end))
+                st.markdown(f"**{r['summary']}**  \n{r['who']} · {r['email'] or 'no email'} · {_req_when(r)}"
+                            + (f"  \n_{r['note']}_" if r["note"] else ""))
+                own = bool(me_email) and r["email"] == me_email
+                if own:
+                    st.caption("You asked for this, so another scheduling admin has to decide it.")
+                c1, c2, c3 = st.columns([3, 1, 1], vertical_alignment="bottom")
+                note_ = c1.text_input("Note to the coach (optional)", key=f"rq_note_{r['id']}",
+                                      placeholder="e.g. moved to Court 5 instead")
+                if not same_period:
+                    try:
+                        ps, pe = (date.fromisoformat(x) for x in r["period"].split("_"))
+                        lab_ = range_label(ps, pe)
+                    except ValueError:
+                        lab_ = "its dates"
+                    if c2.button(f"Open {lab_}", key=f"rq_go_{r['id']}", width="stretch",
+                                 disabled=r["period"] not in st.session_state.periods):
+                        switch_period(r["period"])
+                        st.rerun()
+                    c3.caption("Approve it from its own dates.")
+                else:
+                    if c2.button("Approve", type="primary", key=f"rq_ok_{r['id']}", width="stretch", disabled=own):
+                        approve(r, note_.strip())
+                if c3.button("Decline", key=f"rq_no_{r['id']}", width="stretch", disabled=own):
+                    st.session_state.flash = decided(r, "denied", note_.strip())
+                    st.rerun()
+        done_ = [r for r in store.requests() if r["status"] != "pending"][:50]
+        if done_:
+            with st.expander(f"Decided ({len(done_)})"):
+                st.dataframe(pd.DataFrame([{
+                    "Asked": _req_when(r), "Who": r["who"], "Request": r["summary"],
+                    "Decision": {"approved": "Approved", "denied": "Declined", "withdrawn": "Withdrawn"}.get(
+                        r["status"], r["status"]),
+                    "By": r["decided_by"], "Note": r["decision_note"]} for r in done_]),
+                    hide_index=True, width="stretch")
+    else:
+        st.markdown("Your requests. Ask for a move, extra practice or cancellation in **Edit practices**, and for a "
+                    "private in **Privates**. You'll get an email when a scheduling admin decides.")
+        mine_ = store.requests(email=me_email) if me_email else []
+        if not mine_:
+            st.caption("No requests yet.")
+        for r in mine_:
+            badge = {"pending": "⏳ Waiting", "approved": "✅ Approved", "denied": "✖ Declined",
+                     "withdrawn": "Withdrawn"}.get(r["status"], r["status"])
+            with st.container(border=True):
+                st.markdown(f"**{r['summary']}**  \n{badge} · asked {_req_when(r)}"
+                            + (f"  \n{r['decided_by']}: _{r['decision_note']}_" if r["decision_note"] else ""))
+                if r["status"] == "pending" and st.button("Withdraw", key=f"rq_wd_{r['id']}"):
+                    store.decide_request(r["id"], "withdrawn", me_email)
+                    store.log(VIEWER.log_name, "Request withdrawn", r["summary"], MAIN_ID)
+                    st.session_state.flash = "Withdrawn."
                     st.rerun()
 
 # ------------------------------------------------------------ programs --
@@ -1924,13 +2176,20 @@ if VIEW == TAB_PRIV:
                 "or coach that's already busy then is flagged. Privates show on the weekly court view.")
     coach_opts = cleaned.coaches if cleaned else sorted({p["coach"] for p in privs})
     a_now = result.assignments if result is not None else None
-    if not CAN:
-        st.info("To book a private, ask a scheduling admin for now. Booking requests in the app are coming next.")
-    if CAN:
+    if not CAN and not MY_COACH:
+        st.info("Your login isn't linked to a coach name yet, so you can't ask for a private here. Ask an app "
+                "admin to link it.")
+    if CAN or MY_COACH:
+        if not CAN:
+            st.caption("Ask for a private: the scheduling admins approve it (you'll get an email), then it's booked.")
         with st.container(border=True):
             c1, c2, h1, h2, h3 = st.columns([2.2, 1.3, 0.9, 0.9, 1.2], vertical_alignment="bottom")
-            p_coach = c1.selectbox("Coach", coach_opts + ["Someone else…"], key="pv_coach",
-                                   index=None, placeholder="Choose a coach")
+            if CAN:
+                p_coach = c1.selectbox("Coach", coach_opts + ["Someone else…"], key="pv_coach",
+                                       index=None, placeholder="Choose a coach")
+            else:
+                p_coach = MY_COACH
+                c1.text_input("Coach", value=MY_COACH, disabled=True, key="pv_coach_me")
             p_date = c2.date_input("Date", value=start, format="MM/DD/YYYY", key="pv_date")
             p_hr = h1.selectbox("Start hour", list(range(1, 13)), index=3, key="pv_hour",
                                 help="Any start time; privates are always 1 hour.")
@@ -1964,7 +2223,14 @@ if VIEW == TAB_PRIV:
             clash = pv.conflicts(privs + [trial], a_now, closures).get(-1, []) if p_coach else []
             if clash:
                 st.warning("Heads up: " + "; ".join(clash) + ".")
-            if st.button("Book private", type="primary", disabled=not p_coach):
+            if not CAN and st.button("Send request", type="primary", key="pv_request"):
+                row = {"coach": p_coach, "date": f"{p_date:%m/%d/%Y}", "time": p_time, "court": court_short(p_court),
+                       "type": trial["type"], "team": p_team, "player": p_player.strip(), "note": p_note.strip()}
+                submit_request("private", p_team,
+                               f"{trial['type']} private for {p_coach}: {p_date:%a %b %-d} {p_time}, {court_name(p_court)}"
+                               + (f" ({p_team})" if p_team else ""), {"private": row},
+                               ("; ".join(clash) + ". " if clash else "") + p_note.strip())
+            if CAN and st.button("Book private", type="primary", disabled=not p_coach):
                 row = {"coach": p_coach, "date": f"{p_date:%m/%d/%Y}", "time": p_time, "court": court_short(p_court),
                        "type": trial["type"], "team": p_team, "player": p_player.strip(), "note": p_note.strip()}
                 inp.privates = pd.concat([inp.privates, pd.DataFrame([row])], ignore_index=True)
@@ -2244,6 +2510,48 @@ if VIEW == TAB_PECK:
                              + ". Schedule rebuilt.")
 
 # ------------------------------------------------------------- publish --
+def coach_list() -> list[str]:
+    """Coaches on at least one team, in the order teams are listed."""
+    out = []
+    for t in (cleaned.teams if cleaned else []):
+        for c in t.staff:
+            if c not in out:
+                out.append(c)
+    return out
+
+
+def email_practices(ver: dict, coaches: list[str], only_me: bool, progress=None) -> tuple[int, list[str]]:
+    """Emails each coach their teams' practices in a published version (sorted by team, then date).
+    only_me: every one of those emails goes to the signed-in admin instead, for testing.
+    Returns (emails sent, problems)."""
+    emails = access.coach_emails(store.users(), cleaned.roster if cleaned else {})
+    me_ = VIEWER.person.email if VIEWER.person else ""
+    pr_ = practices_of(ver)
+    sent, problems = 0, []
+    for i, c in enumerate(coaches):
+        teams_ = mail.teams_of(c, cleaned.teams)
+        to = me_ if only_me else emails.get(c, "")
+        if not to:
+            problems.append(f"{c}: no email (add them in Access)")
+            continue
+        subj, text, html_ = mail.practices_email(c, teams_, pr_, range_label(start, end), ver["label"], APP_LINK,
+                                                 [t for t in cleaned.tournaments if t.kind == "travel"])
+        if only_me:
+            subj = f"[Test: {c}'s email] {subj}"
+        err = send_mail([to], (subj, text, html_))
+        if err:
+            problems.append(f"{c}: {err}")
+            if "connected" in err or "redone" in err:
+                break
+        else:
+            sent += 1
+        if progress:
+            progress((i + 1) / max(1, len(coaches)))
+    store.log(VIEWER.log_name, "Practice emails", f"{ver['label']}: {sent} sent"
+              + (" (test, to me)" if only_me else "") + (f", {len(problems)} not sent" if problems else ""), MAIN_ID)
+    return sent, problems
+
+
 if VIEW == TAB_PUB:
     st.markdown("Publish the schedule when you send it to coaches. Later rebuilds keep practices where the "
                 "published version had them where possible, and this page lists everything that changed since.")
@@ -2255,11 +2563,28 @@ if VIEW == TAB_PUB:
             p_label = c1.text_input("Version name", value=f"{range_label(start, end)} · v{len(published) + 1}",
                                     key=f"pub_label_{len(published)}")
             p_note = c2.text_input("Note (optional)", placeholder="e.g. sent to coaches Friday", key="pub_note")
+            c1, c2 = st.columns([1, 2])
+            p_mail = c1.toggle("Email coaches their practices", key="pub_mail",
+                               help="Each coach gets an email listing their teams' practices, by team and date.")
+            p_me = c2.radio("Send to", ["Only me (test)", "Every coach"], horizontal=True, key="pub_mail_to",
+                            disabled=not p_mail,
+                            help="Only me: you get the email your own coach name would get (or the first coach's, if "
+                                 "your login isn't linked), so you can check it first.") == "Only me (test)"
             if st.button("Publish this schedule", type="primary"):
-                st.session_state.published = add_version(published, snapshot(result, p_label.strip() or "Published",
-                                                                             p_note.strip()))
+                ver_new = snapshot(result, p_label.strip() or "Published", p_note.strip())
+                st.session_state.published = add_version(published, ver_new)
                 st.session_state.base_version = None
-                st.session_state.flash = f"Published “{p_label.strip() or 'Published'}”."
+                msg_ = f"Published “{p_label.strip() or 'Published'}”."
+                if p_mail and cleaned is not None:
+                    who_ = coach_list()
+                    if p_me:
+                        who_ = [MY_COACH] if MY_COACH in who_ else who_[:1]
+                    with st.spinner("Emailing coaches…"):
+                        n_, probs_ = email_practices(ver_new, who_, p_me)
+                    msg_ += f" Emailed {plural(n_, 'coach', 'coaches')}" + (" (to you, as a test)" if p_me else "") + "."
+                    if probs_:
+                        msg_ += " Not sent: " + "; ".join(probs_[:8]) + (" …" if len(probs_) > 8 else "")
+                st.session_state.flash = msg_
                 st.rerun()
         if not published:
             st.info("Nothing published yet.")
@@ -2309,6 +2634,50 @@ if VIEW == TAB_PUB:
                         st.session_state.base_version = None
                     st.rerun()
 
+# --------------------------------------------------- emails to coaches --
+if VIEW == TAB_PUB and result is not None and cleaned is not None and published:
+    st.subheader("Email coaches their practices")
+    conn_ = g_conn()
+    if not gsvc.can_email(conn_):
+        st.info("Connect a Google account in **Access → Google connection** to send emails.")
+    st.caption("Each coach gets one email: their teams' practices in a published version, by team and then date, "
+               "with their travel tournaments. Test it on yourself first.")
+    vlab_ = {i: f"{v['label']} · {published_at(v):%b %-d, %-I:%M %p}" for i, v in enumerate(published)}
+    c1, c2 = st.columns([2, 1])
+    e_vi = c1.selectbox("Version", list(reversed(range(len(published)))), format_func=vlab_.get, key="em_ver")
+    e_me = c2.radio("Send to", ["Only me (test)", "Every coach"], key="em_to") == "Only me (test)"
+    all_c = coach_list()
+    emails_ = access.coach_emails(store.users(), cleaned.roster)
+    if e_me:
+        e_who = st.multiselect("Send me the emails these coaches would get", all_c,
+                               default=[MY_COACH] if MY_COACH in all_c else all_c[:1], key="em_who")
+    else:
+        e_who = all_c
+        no_mail = [c for c in all_c if c not in emails_]
+        st.caption(f"{plural(len(all_c) - len(no_mail), 'coach', 'coaches')} will get an email."
+                   + (f" No email for: {', '.join(no_mail)} (add them in **Access**)." if no_mail else ""))
+    with st.expander("Preview"):
+        pc_ = st.selectbox("Coach", all_c, index=all_c.index(e_who[0]) if e_who and e_who[0] in all_c else 0,
+                           key="em_prev")
+        if pc_:
+            subj_, _t, html_p = mail.practices_email(pc_, mail.teams_of(pc_, cleaned.teams),
+                                                     practices_of(published[e_vi]), range_label(start, end),
+                                                     published[e_vi]["label"], APP_LINK,
+                                                     [t for t in cleaned.tournaments if t.kind == "travel"])
+            st.caption(f"To: {emails_.get(pc_, '(no email)')} · Subject: {subj_}")
+            st.html(html_p)
+    sure_ = e_me or st.checkbox(f"Yes, email {plural(len([c for c in e_who if c in emails_]), 'coach', 'coaches')}",
+                                key="em_sure")
+    me_mail = VIEWER.person.email if VIEWER.person else ""
+    if st.button("Send " + (f"{plural(len(e_who), 'test email')} to {me_mail or 'me'}" if e_me else "to every coach"),
+                 type="primary", disabled=not (gsvc.can_email(conn_) and e_who and sure_ and (me_mail or not e_me)),
+                 key="em_go"):
+        bar = st.progress(0.0)
+        n_, probs_ = email_practices(published[e_vi], e_who, e_me, bar.progress)
+        st.session_state.flash = (f"Sent {plural(n_, 'email')}" + (f" to {me_mail}" if e_me else "") + "."
+                                  + (" Not sent: " + "; ".join(probs_[:10]) if probs_ else ""))
+        st.rerun()
+
 # ------------------------------------------------------ google calendar --
 if VIEW == TAB_PUB and result is not None and cleaned is not None:
     st.subheader("Google Calendar")
@@ -2316,18 +2685,30 @@ if VIEW == TAB_PUB and result is not None and cleaned is not None:
                 "and tournaments, each club calendar gets every practice and tournament on that side, and each "
                 "program's calendar gets its sessions. Only events this app made are ever changed or removed; "
                 "anything added by hand is left alone.")
+    client, g_cals = None, []
+    conn_ = g_conn()
+    if gsvc.can_calendar(conn_):
+        sess_ = g_session()
+        if sess_ is not None:
+            client = gcal.CalendarClient({"client_email": conn_["email"]}, session=sess_)
+            try:
+                if "g_cals" not in st.session_state or st.session_state.g_cals[0] != conn_["email"]:
+                    st.session_state.g_cals = (conn_["email"], gsvc.calendars(sess_))
+                g_cals = st.session_state.g_cals[1]
+            except Exception as e:  # noqa: BLE001
+                st.warning(f"Couldn't list {conn_['email']}'s calendars: {e}")
     sa = gcal.service_account_info(SECRETS)
-    client = None
-    if sa:
+    if client is None and sa:  # older setup: a service account key in the secrets
         try:
             client = gcal.CalendarClient(sa)
         except Exception as e:  # noqa: BLE001
             st.error(f"The Google key in the secrets didn't work: {e}")
     if client is None:
-        st.info("Google Calendar isn't connected yet. You can link calendars below now; previews and syncing "
-                "start working once the app's Google key is added (steps in `docs/SETUP_CALENDAR.md`).")
+        st.info("Google Calendar isn't connected yet. Connect a club Google account in **Access → Google "
+                "connection**; you can link calendars below now.")
     else:
-        st.caption(f"Share each calendar with **{client.robot}** (\u201cMake changes to events\u201d).")
+        st.caption(f"Syncing as **{client.robot}**: it can change any calendar it owns or that's shared with it "
+                   "(\u201cMake changes to events\u201d).")
 
     with st.expander("Calendar links", expanded=not gcal.links_from(inp.calendars)):
         st.caption("Paste each calendar's ID (Google Calendar → the calendar's ⋮ → Settings and sharing → "
@@ -2335,6 +2716,36 @@ if VIEW == TAB_PUB and result is not None and cleaned is not None:
         clubs_ = sorted({t.club for t in cleaned.teams if t.club})
         progs_ = sorted({lp.name for lp in cleaned.locals})
         rows_ = gcal.link_rows([t.name for t in cleaned.teams], clubs_, progs_, inp.calendars)
+        if g_cals:
+            st.markdown("**Link from your Google calendars**")
+            cal_name = {c["id"]: c["name"] + (" (main calendar)" if c["primary"] else "") for c in g_cals}
+            l1, l2, l3 = st.columns([2, 2, 1], vertical_alignment="bottom")
+            tgt = l1.selectbox("Calendar for", [f"{k}: {n}" for k, n in zip(rows_["kind"], rows_["name"])],
+                               key="cal_pick_t")
+            gid = l2.selectbox("Google calendar", list(cal_name), format_func=cal_name.get, key="cal_pick_c")
+            if l3.button("Link", width="stretch", key="cal_pick_go"):
+                k_, n_ = tgt.split(": ", 1)
+                cur_ = gcal.links_from(inp.calendars)
+                cur_[k_, n_] = gid
+                inp.calendars = pd.DataFrame([{"kind": a, "name": b, "calendar_id": c} for (a, b), c in cur_.items()],
+                                             columns=COLUMNS["Calendars"])
+                st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+                st.session_state.flash = f"Linked {tgt} to {cal_name[gid]}."
+                st.rerun()
+            guess = gsvc.match_calendars([(k, n) for k, n, c in zip(rows_["kind"], rows_["name"], rows_["calendar_id"])
+                                          if not str(c).strip()], g_cals)
+            if guess:
+                st.caption("Matched by name: " + "; ".join(f"{n} → {cal_name[c]}" for (_k, n), c in list(guess.items())[:8])
+                           + (f" and {len(guess) - 8} more" if len(guess) > 8 else ""))
+                if st.button(f"Link {plural(len(guess), 'match', 'matches')}", key="cal_guess"):
+                    cur_ = gcal.links_from(inp.calendars)
+                    cur_.update(guess)
+                    inp.calendars = pd.DataFrame([{"kind": a, "name": b, "calendar_id": c} for (a, b), c in cur_.items()],
+                                                 columns=COLUMNS["Calendars"])
+                    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+                    st.session_state.flash = f"Linked {plural(len(guess), 'calendar')} by name."
+                    st.rerun()
+            st.markdown("**All links** (or paste Calendar IDs here)")
         ed_links = st.data_editor(rows_, hide_index=True, width="stretch", disabled=["kind", "name"],
                                   key=f"cal_links_{st.session_state.get('locals_ver', 0)}",
                                   column_config={"kind": "Calendar for", "name": "Name",
@@ -2368,6 +2779,12 @@ if VIEW == TAB_PUB and result is not None and cleaned is not None:
                                    "gone to in front of each title. Nothing real is touched.")
         test_cal = st.text_input("Test calendar ID", key="cal_test_id",
                                  placeholder="ID of a throwaway calendar shared with the app") if test_mode else ""
+        only_ = st.multiselect("Only sync these", [f"{k}: {n}" for k, n in links], key="cal_only",
+                               placeholder="All linked calendars",
+                               help="Pick one or a few to try a sync on just them (e.g. your own team's), "
+                                    "leaving every other calendar alone.")
+        if only_:
+            links = {k: v for k, v in links.items() if f"{k[0]}: {k[1]}" in only_}
         ver_ = published[vi_]
         pr_ = practices_of(ver_)
         loc_ = result.assignments[result.assignments["kind"] == "Local"]
@@ -2375,12 +2792,12 @@ if VIEW == TAB_PUB and result is not None and cleaned is not None:
         evs, missing = gcal.desired_events(pr_, loc_, cleaned.tournaments, cleaned.teams, links, start, end,
                                            test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
                                            side_)
-        if missing:
+        if missing and not only_:
             st.caption(f"No calendar linked (skipped): {', '.join(missing[:12])}"
                        + (f" and {len(missing) - 12} more" if len(missing) > 12 else ""))
         all_cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else set(links.values()))
         ready = client is not None and (not test_mode or bool(test_cal.strip())) and bool(evs)
-        sig_ = (ver_["id"], test_mode, test_cal.strip(), tuple(sorted(links.items())))
+        sig_ = (ver_["id"], test_mode, test_cal.strip(), tuple(sorted(links.items())), tuple(only_))
         if st.button(f"Preview changes ({plural(len(evs), 'event')})", disabled=not ready, key="cal_preview",
                      help=None if ready else "Connect Google, link calendars (and a test calendar in test mode) first."):
             with st.spinner("Reading the calendars…"):
@@ -2525,12 +2942,56 @@ if VIEW == TAB_INPUTS:
 
 # -------------------------------------------------------------- access --
 if VIEW == TAB_ACCESS:
-    st.markdown("Who can use the app and what they can do. **Coaches** see the whole schedule and change their own "
-                "teams' preferences. **Scheduling admins** edit the schedule, rebuild, publish and (next) approve "
-                "coaches' requests. **App admins** manage this page and can use *View as* to test any role.")
+    st.markdown("Who can use the app and what they can do. **Coaches** see the whole schedule, change their own "
+                "teams' preferences and ask for changes. **Scheduling admins** edit the schedule, rebuild, publish "
+                "and approve coaches' requests (and get emailed about new ones). **App admins** manage this page and "
+                "can use *View as* to test any role.")
     if not AUTH_ON:
         st.warning("Google sign-in isn't set up on this copy of the app yet, so anyone with the link can still do "
                    "everything. The setup steps are in `docs/SETUP_LOGINS.md`.")
+    # ---- Google connection (calendars + email)
+    st.subheader("Google connection")
+    conn_ = g_conn()
+    if GCFG is None:
+        st.caption("Set up Google sign-in first (`docs/SETUP_LOGINS.md`); the connection uses the same Google client.")
+    elif conn_:
+        caps = [x for x, ok in (("Google Calendar", gsvc.can_calendar(conn_)), ("email", gsvc.can_email(conn_))) if ok]
+        when_ = pd.Timestamp(conn_["at"]).tz_convert("America/Los_Angeles").strftime("%b %-d, %Y")
+        st.success(f"Connected: **{conn_['email']}** (by {conn_['by']}, {when_}). The app uses it for "
+                   + (" and ".join(caps) or "nothing yet: reconnect and allow calendar and email") + ".")
+        c1, c2, c3 = st.columns([2, 1, 1], vertical_alignment="bottom")
+        t_to = c1.text_input("Send a test email to", value=ME.email if ME else "", key="g_test_to")
+        if c2.button("Send test", width="stretch", key="g_test", disabled=not (gsvc.can_email(conn_) and "@" in t_to)):
+            err = send_mail([t_to], ("Court Scheduler test email",
+                                     f"This is a test from the Court Scheduler, sent as {conn_['email']}.",
+                                     mail._wrap("Test email", f"<p>This is a test from the Court Scheduler, sent as "
+                                                              f"{html_escape(conn_['email'])}.</p>", APP_LINK)))
+            if err:
+                st.error(f"Not sent: {err}")
+            else:
+                st.success(f"Sent to {t_to}.")
+        if c3.button("Disconnect", width="stretch", key="g_disc"):
+            gsvc.disconnect(store, GCFG, secrets=SECRETS)
+            st.session_state.pop("_gconn", None)
+            st.session_state.pop("g_cals", None)
+            store.log(VIEWER.log_name, "Google connection", f"disconnected {conn_['email']}")
+            st.session_state.flash = f"Disconnected {conn_['email']}."
+            st.rerun()
+        if g_session() is None:
+            st.error("Google no longer accepts this connection (it was removed or expired). Connect again.")
+    else:
+        st.markdown("Connect the club Google account that should **send the app's emails** and **edit the club's "
+                    "Google Calendars**. You'll sign in with Google and allow both. No key files: the app keeps "
+                    "Google's access token encrypted, and you can disconnect any time.")
+    if GCFG is not None and ME is not None:
+        if st.button("Connect a different account" if conn_ else "Connect a Google account", key="g_connect"):
+            st.session_state.g_url = gsvc.start(store, GCFG, ME.email, access.allowed_domains(SECRETS)[0])
+        if st.session_state.get("g_url"):
+            st.link_button("Continue to Google →", st.session_state.g_url, type="primary")
+            st.caption("Opens Google in a new tab. Choose the account, allow access, and you'll land back in the app. "
+                       f"If Google says *redirect_uri_mismatch*, add `{GCFG['redirect_uri']}` to the sign-in client's "
+                       "Authorized redirect URIs (steps in `docs/SETUP_GOOGLE.md`).")
+
     always = set(access.app_admins(SECRETS))
     people = store.users()
     names_ = _coach_names()
@@ -2579,6 +3040,50 @@ if VIEW == TAB_ACCESS:
                                          "club can't get locked out)." if kept else ""))
             st.rerun()
 
+    # ---- every coach on the schedule, at firstname@club
+    _dom = access.allowed_domains(SECRETS)[0]
+    sugg = access.suggest_people(names_, people, cleaned.roster if cleaned else {}, _dom)
+    todo_ = [r for r in sugg if r["status"] != "linked"]
+    with st.expander(f"Add coaches from the schedule ({len(todo_)} not in Access yet)" if todo_ else
+                     "Add coaches from the schedule (everyone's linked)", expanded=bool(todo_) and len(people) <= 3):
+        st.caption(f"Every coach on the schedule, at `firstname@{_dom}`. Check the emails (two coaches with the same "
+                   "first name are left blank to fill in), untick anyone to skip, then **Add**. They're added as "
+                   "coaches already linked to their name, so they can use the app the first time they sign in.")
+        if todo_:
+            tbl = pd.DataFrame([{"add": r["status"] in ("new", "link"), "coach": r["coach"], "email": r["email"],
+                                 "status": {"new": "Add", "link": "Link existing login", "check": "Needs an email",
+                                            "taken": "Email used by another coach"}[r["status"]], "why": r["why"]}
+                                for r in todo_])
+            ed_s = st.data_editor(tbl, hide_index=True, width="stretch", key=f"acc_sugg_{st.session_state.get('access_ver', 0)}",
+                                  disabled=["coach", "status", "why"],
+                                  column_config={"add": st.column_config.CheckboxColumn("Add", width="small"),
+                                                 "coach": "Coach", "email": st.column_config.TextColumn("Email"),
+                                                 "status": "Status", "why": "Why"})
+            pick_ = [r for r in ed_s.to_dict("records") if r["add"] and "@" in str(r["email"])]
+            if st.button(f"Add {plural(len(pick_), 'coach', 'coaches')}", type="primary", disabled=not pick_,
+                         key="acc_sugg_go"):
+                added, skipped = [], []
+                linked_to = {u["email"]: u["coach"] for u in people if u.get("coach")}
+                for r in pick_:
+                    e_ = str(r["email"]).strip().lower()
+                    if not access.email_allowed(e_, SECRETS):
+                        skipped.append(f"{r['coach']} ({e_} isn't a club address)")
+                        continue
+                    if linked_to.get(e_) and linked_to[e_] != r["coach"]:
+                        skipped.append(f"{r['coach']} ({e_} is {linked_to[e_]}'s)")
+                        continue
+                    ex = store.get_user(e_)
+                    store.save_user(e_, (ex or {}).get("name") or r["coach"], r["coach"],
+                                    bool((ex or {}).get("app_admin")), bool((ex or {}).get("sched_admin")))
+                    added.append(r["coach"])
+                if added:
+                    store.log(VIEWER.log_name, "Access", f"added from the schedule: {', '.join(added)}")
+                st.session_state.pop("_me", None)
+                st.session_state.access_ver = st.session_state.get("access_ver", 0) + 1
+                st.session_state.flash = (f"Added {plural(len(added), 'coach', 'coaches')}."
+                                          + (" Skipped: " + "; ".join(skipped) if skipped else ""))
+                st.rerun()
+
     with st.expander("Add someone before they sign in"):
         with st.form("access_add", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
@@ -2618,8 +3123,8 @@ if VIEW == TAB_ACCESS:
             st.rerun()
 
     st.subheader("Activity")
-    st.caption("Every role change and every preference a coach changes, newest first. Approvals will be listed "
-               "here too, and nobody will be able to approve their own request.")
+    st.caption("Every role change, coach preference, request and decision, newest first. Nobody can approve "
+               "their own request.")
     log_ = store.activity(300)
     if not log_:
         st.caption("Nothing yet.")

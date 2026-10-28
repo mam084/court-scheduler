@@ -387,7 +387,8 @@ def test_first_sign_in_seeds_admins_and_coach_sees_limited_app(db, monkeypatch):
     at, _ = _as(db, monkeypatch, "newcoach@sdvbc.org", pid=pid)
     at.radio(key="nav").set_value("Edit practices").run()
     assert team in at.selectbox(key="ed_team").options
-    assert at.radio(key="ed_mode").options == ["Suggest a preference"]
+    assert at.radio(key="ed_mode").options == ["Suggest a preference", "Ask to move a practice",
+                                               "Ask for an extra practice", "Ask to cancel a practice"]
 
 
 def test_coach_preference_saves_without_rebuild_or_overwriting(db, monkeypatch):
@@ -669,3 +670,76 @@ def test_new_dates_show_programs_before_auto_schedule(db):
     assert not at.exception, at.exception
     assert any("cs-cal" in m.value or "<table" in m.value for m in at.markdown)
     assert at.session_state["result"] is None    # nothing was auto-scheduled
+
+
+
+# ----------------------------------------------------------- requests --
+
+def test_coach_request_then_another_admin_approves(db, monkeypatch):
+    pid = _save(db, "Roles", 31)
+    head, team = _head_of_first_team(db, pid)
+    db.save_user("coach@sdvbc.org", "Coach", head)
+    at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Edit practices").run()
+    at.selectbox(key="ed_team").set_value(team).run()
+    at.radio(key="ed_mode").set_value("Ask for an extra practice").run()
+    at.date_input(key=f"rq_x_d_{team}").set_value(date(2026, 11, 4)).run()
+    next(b for b in at.button if b.key == f"rq_x_go_{team}").click().run()
+    assert not at.exception, at.exception
+    reqs = db.requests("pending")
+    assert len(reqs) == 1 and reqs[0]["email"] == "coach@sdvbc.org" and reqs[0]["kind"] == "extra"
+    at.radio(key="nav").set_value("Requests").run()
+    assert any(team in m.value for m in at.markdown)
+    # Cliff (scheduling admin) approves it: the extra practice is in the rebuilt schedule.
+    db.save_user("cliff@sdvbc.org", "Cliff", "", False, True)
+    at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Requests").run()
+    rid = reqs[0]["id"]
+    next(b for b in at.button if b.key == f"rq_ok_{rid}").click().run()
+    assert not at.exception, at.exception
+    assert db.get_request(rid)["status"] == "approved"
+    a = at.session_state["result"].assignments
+    assert ((a["name"] == team) & (a["date"] == date(2026, 11, 4)) & (a["extra"] == True)).any()  # noqa: E712
+
+
+def test_nobody_approves_their_own_request(db, monkeypatch):
+    pid = _save(db, "Roles", 32)
+    head, team = _head_of_first_team(db, pid)
+    db.save_user("cliff@sdvbc.org", "Cliff", head, False, True)
+    rid = db.add_request("cliff@sdvbc.org", "Cliff", "extra", team, "", "Extra practice", {"rows": []})
+    at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Requests").run()
+    assert next(b for b in at.button if b.key == f"rq_ok_{rid}").disabled
+
+
+def test_coach_requests_a_private(db, monkeypatch):
+    pid = _save(db, "Roles", 33)
+    head, team = _head_of_first_team(db, pid)
+    db.save_user("coach@sdvbc.org", "Coach", head)
+    at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Privates").run()
+    next(b for b in at.button if b.key == "pv_request").click().run()
+    assert not at.exception, at.exception
+    r = db.requests("pending")[0]
+    assert r["kind"] == "private" and r["detail"]["private"]["coach"] == head
+
+
+def test_add_coaches_from_schedule(db, monkeypatch):
+    at, pid = _as(db, monkeypatch, "matthew@sdvbc.org", seed=34)
+    at.radio(key="nav").set_value("Access").run()
+    next(b for b in at.button if b.key == "acc_sugg_go").click().run()
+    assert not at.exception, at.exception
+    linked = [u for u in db.users() if u["coach"]]
+    assert len(linked) >= 4 and all(u["email"].endswith("@sdvbc.org") for u in linked)
+    assert all(u["email"].split("@")[0] == u["coach"].split()[0].lower() for u in linked)
+
+
+def test_publish_email_needs_a_connection(db, monkeypatch):
+    at, pid = _as(db, monkeypatch, "cliff@sdvbc.org", seed=35)
+    db.save_user("cliff@sdvbc.org", "Cliff", "", False, True)
+    at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Publish").run()
+    at.toggle(key="pub_mail").set_value(True).run()
+    next(b for b in at.button if b.label == "Publish this schedule").click().run()
+    assert not at.exception, at.exception
+    assert any("email isn't connected" in s.value or "Not sent" in s.value for s in at.success)

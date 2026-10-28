@@ -159,3 +159,69 @@ def auth_configured(secrets) -> bool:
                                                      for v in a.values())))
     except Exception:  # noqa: BLE001
         return False
+
+
+# ------------------------------------------------- coaches' addresses --
+
+def _first(name: str) -> str:
+    import re
+    tok = str(name).strip().split()
+    return re.sub(r"[^a-z]", "", tok[0].lower()) if tok else ""
+
+
+def suggest_people(coach_names: list[str], users: list[dict], roster: dict | None = None,
+                   domain: str = "sdvbc.org") -> list[dict]:
+    """One row per coach on the schedule, with the email to add them under.
+
+    The club's addresses are firstname@domain. Where that's ambiguous (two
+    coaches with the same first name), only a coach listed by first name
+    alone gets the guess ("Tyler" -> tyler@), and the others are left blank
+    to fill in ("Tyler Lyons"). An email already in the coaches roster wins
+    over the guess. Status says what adding the row would do:
+      linked   - already in Access and linked to this coach (nothing to do)
+      link     - that email is in Access but not linked yet: links it
+      new      - adds them as a coach, linked
+      check    - no email to use yet (fill it in)
+      taken    - that email is linked to a different coach name
+    """
+    roster = roster or {}
+    by_email = {u["email"].lower(): u for u in users}
+    linked = {u["coach"]: u["email"] for u in users if u.get("coach")}
+    firsts: dict[str, list[str]] = {}
+    for c in coach_names:
+        firsts.setdefault(_first(c), []).append(c)
+    rows = []
+    for c in coach_names:
+        if c in linked:
+            rows.append({"coach": c, "email": linked[c], "status": "linked", "why": "already linked"})
+            continue
+        listed = str((roster.get(c) or {}).get("email") or "").strip().lower()
+        f = _first(c)
+        same = firsts.get(f, [])
+        why = ""
+        if listed and "@" in listed:
+            email, why = listed, "from the coaches roster"
+        elif not f:
+            email, why = "", "no first name to go on"
+        elif len(same) > 1 and (len(c.split()) > 1 or sum(len(x.split()) == 1 for x in same) != 1):
+            email, why = "", "same first name as " + ", ".join(x for x in same if x != c) + ": enter their email"
+        else:
+            email, why = f"{f}@{domain}", "firstname@" + domain
+        if not email:
+            status = "check"
+        elif email in by_email and by_email[email].get("coach") and by_email[email]["coach"] != c:
+            status, why = "taken", f"{email} is linked to {by_email[email]['coach']}"
+        elif email in by_email:
+            status = "link"
+        else:
+            status = "new"
+        rows.append({"coach": c, "email": email, "status": status, "why": why})
+    return rows
+
+
+def coach_emails(users: list[dict], roster: dict | None = None) -> dict[str, str]:
+    """Coach name -> email, from Access (linked people) first, then the roster."""
+    out = {c: str(v.get("email")).strip().lower() for c, v in (roster or {}).items()
+           if v.get("email") and "@" in str(v.get("email"))}
+    out.update({u["coach"]: u["email"] for u in users if u.get("coach")})
+    return out

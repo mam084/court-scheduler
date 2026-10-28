@@ -1580,3 +1580,15 @@ def test_flags_coach_at_two_travel_tournaments_the_same_weekend():
     assert {c["travel"], c["travel2"]} == {"Vegas Classic", "Desert Duel"}
     assert c["teams"] == ["16-Bea"] and c["teams2"] == ["15 Black"]      # sorted by tournament name
     assert c["id"] == tournament_conflicts(data.teams, data.tournaments)[0]["id"]   # stable
+
+
+def test_hand_practice_in_other_dates_doesnt_block_this_run():
+    teams = [{"team": "16-Bea", "age": 16}]
+    inp = _inp(teams)
+    inp.overrides = pd.DataFrame([{"team": "16-Bea", "action": "Add", "date": "12/08/2026", "days": "",
+                                   "time": "5:30", "court": "", "note": ""}], columns=COLUMNS["Overrides"])
+    r = solve(inp, *NOV, time_limit_s=10)
+    assert r.ok
+    dec = solve(inp, date(2026, 12, 1), date(2026, 12, 20), time_limit_s=10)
+    pr = dec.assignments[dec.assignments["kind"] == "Practice"]
+    assert ((pr["date"] == date(2026, 12, 8)) & (pr["slot"] == "5:30")).any()

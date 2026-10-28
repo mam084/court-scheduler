@@ -1,5 +1,7 @@
 # Connecting Google Calendar
 
+> **Easier now: connect a club Google account in the app instead (no key file): see [`SETUP_GOOGLE.md`](SETUP_GOOGLE.md).** The service-account steps below still work if a key is ever allowed.
+
 The app pushes a **published** schedule to the club's Google Calendars:
 
 | Calendar | Gets |

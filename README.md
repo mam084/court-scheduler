@@ -180,8 +180,8 @@ tests/                  hard-rule and parsing tests
 - [x] Excel export, per-coach calendar files
 - [x] Any date range; saved schedules that survive refreshes (Postgres via `DATABASE_URL`)
 - [x] Google sign-in with coach / scheduling admin / app admin roles, View as, activity log
-- [ ] Coaches request changes (moves, privates, no-dates) and a scheduling admin approves them, with the solver checking each change; nobody approves their own
-- [ ] Email notifications for new requests and decisions
+- [x] Coaches request changes (moves, extra practices, cancellations, privates) and a scheduling admin approves them, with the solver checking each change; nobody approves their own
+- [x] Email notifications for new requests and decisions (connected Google account, `docs/SETUP_GOOGLE.md`)
 - [x] Google Calendar sync of published schedules (team, club and program calendars; test mode and preview)
 - [ ] Monthly prompt for coaches to submit next month's no-dates
 - [x] Local and travel tournaments, court quality ranking

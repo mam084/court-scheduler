@@ -5,7 +5,7 @@ Sign-in lets coaches open the app with their club Google account. What each pers
 | Role | Who (to start) | Can |
 |---|---|---|
 | Coach | everyone with an @sdvbc.org account | see the whole schedule; change their own teams' preferences (saved right away, fitted in at the next rebuild) |
-| Scheduling admin | Cliff | everything on the schedule: edit, rebuild, publish, programs, tournaments, privates, inputs; approve requests (next stage) |
+| Scheduling admin | Cliff | everything on the schedule: edit, rebuild, publish, programs, tournaments, privates, inputs; approve coaches' requests (emailed about new ones) |
 | App admin | Matthew | the **Access** tab (who has which role, activity log) and **View as**, to see the app as any role |
 
 Roles combine: an app admin can also be a scheduling admin (one checkbox in the Access tab). Nobody will be able to approve their own request, and every role change and coach preference change is in the Access tab's activity log.

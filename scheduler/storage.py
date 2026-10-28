@@ -60,6 +60,32 @@ activity = Table(
     Column("detail", Text, nullable=False, default=""),
     Column("project", String(32), nullable=False, default=""),
 )
+# Small app settings: the connected Google account (its token encrypted),
+# sign-in handshakes in progress.
+settings_kv = Table(
+    "court_scheduler_settings", _meta,
+    Column("key", String(100), primary_key=True),
+    Column("value", Text, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+# Coaches' change requests (move / add / cancel a practice, book a private).
+requests_t = Table(
+    "court_scheduler_requests", _meta,
+    Column("id", String(32), primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("email", String(200), nullable=False),          # who asked (their sign-in)
+    Column("who", String(200), nullable=False, default=""),  # their name / coach name
+    Column("kind", String(30), nullable=False),            # move | extra | cancel | private
+    Column("team", String(200), nullable=False, default=""),
+    Column("period", String(40), nullable=False, default=""),
+    Column("summary", Text, nullable=False, default=""),
+    Column("detail", Text, nullable=False, default="{}"),  # JSON: what to do when approved
+    Column("note", Text, nullable=False, default=""),
+    Column("status", String(20), nullable=False, default="pending"),  # pending | approved | denied | withdrawn
+    Column("decided_by", String(200), nullable=False, default=""),
+    Column("decided_at", DateTime(timezone=True), nullable=True),
+    Column("decision_note", Text, nullable=False, default=""),
+)
 
 
 def _normalize_url(url: str) -> str:
@@ -89,7 +115,7 @@ class Store:
         it, while this app (connecting as the table's owner) still can."""
         if not self.permanent:
             return
-        for tbl in (projects, users, activity):
+        for tbl in (projects, users, activity, settings_kv, requests_t):
             try:
                 with self.engine.begin() as c:
                     c.execute(text(f"ALTER TABLE {tbl.name} ENABLE ROW LEVEL SECURITY"))
@@ -189,6 +215,68 @@ class Store:
             q = q.where(activity.c.project.in_([project, ""]))
         with self.engine.connect() as c:
             return [dict(r._mapping) for r in c.execute(q).all()]
+
+
+    # --------------------------------------------------------- settings --
+    def get_setting(self, key: str) -> str | None:
+        self._ensure()
+        with self.engine.connect() as c:
+            r = c.execute(select(settings_kv.c.value).where(settings_kv.c.key == key)).first()
+        return r.value if r else None
+
+    def set_setting(self, key: str, value: str | None) -> None:
+        """Saves a setting (None deletes it)."""
+        self._ensure()
+        with self.engine.begin() as c:
+            c.execute(delete(settings_kv).where(settings_kv.c.key == key))
+            if value is not None:
+                c.execute(insert(settings_kv).values(key=key, value=value, updated_at=datetime.now(timezone.utc)))
+
+    # --------------------------------------------------------- requests --
+    def add_request(self, email: str, who: str, kind: str, team: str, period: str, summary: str,
+                    detail: dict, note: str = "") -> str:
+        self._ensure()
+        rid = new_id()
+        with self.engine.begin() as c:
+            c.execute(insert(requests_t).values(
+                id=rid, created_at=datetime.now(timezone.utc), email=email.strip().lower(), who=who or "",
+                kind=kind, team=team or "", period=period or "", summary=summary or "",
+                detail=json.dumps(detail, default=str), note=note or "", status="pending", decided_by="",
+                decision_note=""))
+        return rid
+
+    def requests(self, status: str | None = None, email: str | None = None, limit: int = 300) -> list[dict]:
+        self._ensure()
+        q = select(requests_t).order_by(requests_t.c.created_at.desc()).limit(limit)
+        if status:
+            q = q.where(requests_t.c.status == status)
+        if email:
+            q = q.where(requests_t.c.email == email.strip().lower())
+        with self.engine.connect() as c:
+            rows = [dict(r._mapping) for r in c.execute(q).all()]
+        for r in rows:
+            r["detail"] = json.loads(r["detail"] or "{}")
+        return rows
+
+    def get_request(self, rid: str) -> dict | None:
+        self._ensure()
+        with self.engine.connect() as c:
+            r = c.execute(select(requests_t).where(requests_t.c.id == rid)).first()
+        if r is None:
+            return None
+        out = dict(r._mapping)
+        out["detail"] = json.loads(out["detail"] or "{}")
+        return out
+
+    def decide_request(self, rid: str, status: str, by: str, note: str = "") -> bool:
+        """Approve / deny / withdraw a pending request. False if it wasn't pending any more
+        (someone else got to it first)."""
+        self._ensure()
+        with self.engine.begin() as c:
+            res = c.execute(update(requests_t).where((requests_t.c.id == rid) & (requests_t.c.status == "pending"))
+                            .values(status=status, decided_by=by or "", decided_at=datetime.now(timezone.utc),
+                                    decision_note=note or ""))
+        return bool(res.rowcount)
 
 
 def new_id() -> str:

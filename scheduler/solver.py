@@ -187,7 +187,7 @@ def solve(
         t, d, s = idx[pn.team], pn.day, pn.slot
         label = f"{pn.team} on {d:%a %-m/%-d} at {s}"
         if not (start <= d <= end):
-            problems.append(f"{label}: outside this schedule's dates")
+            continue  # another run of dates: placed when those dates are built
         elif d in data.closures:
             problems.append(f"{label}: the club is closed ({data.closures[d] or 'closure'})")
         elif d.weekday() >= 5 and (d not in data.weekends or s not in data.weekends[d].blocks):
