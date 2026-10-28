@@ -126,9 +126,10 @@ def render():
                                 "(courts 1-4, then 5-7 and the practice court). "
                                 "With **Show open court times** on, every open court time prints with a line to "
                                 "write a name in. Open it in your browser, then print or save as PDF.")
+        # Worked out now: the file itself is only built when the button is clicked, after this run.
+        order, sections, title_ = team_order(), team_sections(), st.session_state.get("project_name") or ""
         st.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
-                               result, closures, team_order(), st.session_state.get("project_name") or "",
-                               team_sections()),
+                               result, closures, order, title_, sections),
                            f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", width="stretch",
                            help="One row per team (girls, then boys, each in the pecking order) with every "
                                 "practice (time and court) and tournament date; tournament days are circled. "

@@ -55,9 +55,10 @@ def render():
         d3.download_button("Calendar (Excel)", lambda: calendar_excel(result, closures, hl or None, show_locals),
                            f"{fname}.xlsx", width="stretch",
                            help="The club's calendar layout: a block per week, each day with time · what · courts.")
+        # Worked out now: the file itself is only built when the button is clicked, after this run.
+        order, sections, title_ = team_order(), team_sections(), st.session_state.get("project_name") or ""
         st.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
-                               result, closures, team_order(), st.session_state.get("project_name") or "",
-                               team_sections()),
+                               result, closures, order, title_, sections),
                            f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", key="team_dates_cal",
                            help="One row per team with every practice and tournament date; tournament days are "
                                 "circled.")

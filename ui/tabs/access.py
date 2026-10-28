@@ -9,7 +9,7 @@ import streamlit as st
 
 from scheduler import access, mail
 from scheduler import google as gsvc
-from ui.common import _coach_names, g_conn, g_session, plural, send_mail
+from ui.common import coach_names, g_conn, g_session, plural, send_mail
 from ui.state import S
 
 
@@ -76,7 +76,7 @@ def render():
 
     always = set(access.app_admins(SECRETS))
     people = store.users()
-    names_ = _coach_names()
+    names_ = coach_names()
     link_opts = [""] + sorted(set(names_) | {p_["coach"] for p_ in people if p_["coach"]})
     table = pd.DataFrame([{"email": p_["email"], "name": p_["name"], "coach": p_["coach"],
                            "app_admin": bool(p_["app_admin"]) or p_["email"] in always,

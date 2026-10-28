@@ -48,7 +48,7 @@ def open_project(pid: str = MAIN_ID, key: str | None = None) -> bool:
     return True
 
 
-def _period_entry() -> dict:
+def period_entry() -> dict:
     """The period being viewed, in the stored shape."""
     from scheduler.storage import result_to_dict
     return {"start": st.session_state.range_start.isoformat(), "end": st.session_state.range_end.isoformat(),
@@ -65,7 +65,7 @@ def switch_period(key: str, new: tuple[date, date] | None = None):
     CAN = S.CAN
     cur = period_key(st.session_state.range_start, st.session_state.range_end)
     periods_ = st.session_state.periods
-    periods_[cur] = _period_entry()
+    periods_[cur] = period_entry()
     if CAN:
         st.session_state.periods_dirty.add(cur)
     if new is not None:

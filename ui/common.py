@@ -47,7 +47,7 @@ def secret(name: str):
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _saved_list(url: str | None, ver: int) -> list[dict]:
+def saved_list(url: str | None, ver: int) -> list[dict]:
     """The saved-schedule menu. Cached so clicking around doesn't query the
     database every time; refreshed whenever a schedule is created, renamed
     or deleted (ver), and at least once a minute."""
@@ -78,7 +78,7 @@ def bound(widget, label: str, key: str, **kw):
     return widget(label, key=wk, on_change=_copy, **kw)
 
 
-def _coach_names() -> list[str]:
+def coach_names() -> list[str]:
     """Coach names in the open schedule (for linking logins and "View as")."""
     i = st.session_state.get("inp")
     if i is None:

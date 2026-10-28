@@ -12,8 +12,8 @@ from scheduler import ScheduleInput, access
 from scheduler.data import merge_import
 from scheduler.storage import MAIN_ID, current_period, database_url, period_key
 from scheduler.views import range_label
-from ui.common import _coach_names, _saved_list, blank_template, bound, plural
-from ui.session import _period_entry, period_label, switch_period
+from ui.common import blank_template, bound, coach_names, plural, saved_list
+from ui.session import period_entry, period_label, switch_period
 from ui.state import S
 
 
@@ -27,7 +27,7 @@ def render():
             st.caption(f"Signed in as **{ME.label}** · {', '.join(ME.roles)}"
                        + ("" if ME.coach or ME.sched_admin else " · not linked to a coach name yet"))
             if ME.app_admin:
-                _opts = ["Myself", "Scheduling admin", "Coach (not linked)"] + [f"Coach: {c}" for c in _coach_names()]
+                _opts = ["Myself", "Scheduling admin", "Coach (not linked)"] + [f"Coach: {c}" for c in coach_names()]
                 _va = st.selectbox("View as", _opts, key="view_as",
                                    help="See the app exactly as someone with that role does, to test it. "
                                         "Only you see this.")
@@ -43,13 +43,13 @@ def render():
         st.caption("🌙 Dark mode: **⋮** (top right) → **Settings** → theme.")
         CAN = VIEWER.can_schedule
         S.update(VIEWER=VIEWER, CAN=CAN)  # switch_period below needs them
-        saved = _saved_list(database_url(), st.session_state.get("saved_ver", 0))
+        saved = saved_list(database_url(), st.session_state.get("saved_ver", 0))
         names = {p["id"]: p["name"] for p in saved}
         if not CAN and not st.session_state.get("_coach_default"):
             # A coach opens on the dates covering today (else the latest published ones).
             st.session_state._coach_default = True
             _cur = period_key(st.session_state.range_start, st.session_state.range_end)
-            _all = dict(st.session_state.periods, **{_cur: _period_entry()})
+            _all = dict(st.session_state.periods, **{_cur: period_entry()})
             _today = date.today()
             _pick = next((k for k, v in _all.items() if v.get("published")
                           and date.fromisoformat(v["start"]) <= _today <= date.fromisoformat(v["end"])), None)
