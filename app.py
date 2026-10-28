@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+from html import escape as html_escape
 import json
 import os
 import re
@@ -30,7 +31,7 @@ from scheduler.config import (
 )
 from scheduler.data import (
     ATTRS, COLUMNS, blank, empty, keep_programs, merge_import, parse_courts, parse_date_ranges, parse_days, parse_names, parse_rank,
-    parse_times, program_coach_conflicts, program_side, span_text, tournament_conflicts,
+    parse_list, parse_times, program_coach_conflicts, program_side, span_text, to_date, tournament_conflicts,
 )
 from scheduler import privates as pv
 from scheduler import access
@@ -471,7 +472,7 @@ if not CAN:  # an admin saved a newer version: show it
 
 inp: ScheduleInput = st.session_state.inp
 for _sheet, _attr in (("Tournaments", "tournaments"), ("Coaches", "coaches"), ("Overrides", "overrides"),
-                      ("Privates", "privates"), ("Calendars", "calendars")):
+                      ("Privates", "privates"), ("Calendars", "calendars"), ("Resolved", "resolved")):
     if not isinstance(getattr(inp, _attr, None), pd.DataFrame):  # schedules saved before these sheets existed
         setattr(inp, _attr, empty(_sheet))
 for _sheet, _attr in (("Locals", "locals"), ("Teams", "teams"), ("Tournaments", "tournaments"),
@@ -567,7 +568,8 @@ def mine(team_text) -> bool:
 
 t_conflicts = tournament_conflicts(cleaned.teams, cleaned.tournaments) if cleaned else []
 if COACH_VIEW:
-    t_conflicts = [c for c in t_conflicts if (MY_COACH and c["coach"] == MY_COACH) or set(c["teams"]) & MY_TEAMS]
+    t_conflicts = [c for c in t_conflicts if (MY_COACH and c["coach"] == MY_COACH)
+                   or set(c["teams"]) & MY_TEAMS or set(c.get("teams2", [])) & MY_TEAMS]
 p_conflicts = program_coach_conflicts(cleaned.locals, start, end, closures) if cleaned else []
 if COACH_VIEW:
     p_conflicts = [c for c in p_conflicts if MY_COACH and c["coach"] == MY_COACH]
@@ -580,16 +582,95 @@ def p_conflict_text(c: dict) -> str:
     return f"**{c['coach']}** is on **{pa}** ({sa}) and **{pb}** ({sb}) at the same time: {when}"
 
 
+# ---------------------------------------------------- coverage flags --
+# A coach who can't be in two places at once (tournaments, programs). Each
+# can be marked resolved once coverage is found, and stays resolved while
+# the clash is the same (a changed date or team makes a new flag).
+def _span(a, b) -> str:
+    return f"{a:%a %b %-d}" + ("" if a == b else f"–{b:%a %b %-d}")
+
+
+def coverage_flags() -> list[dict]:
+    out = []
+    for c in t_conflicts:
+        if c["end"] < date.today() and not (c["start"] <= end and c["end"] >= start):
+            continue  # over and done, and not in the dates being looked at
+        if c["kind"] == "two_travel":
+            text = (f"**{c['coach']}** has two travel tournaments: **{c['travel']}** "
+                    f"({', '.join(c['teams'])}) and **{c['travel2']}** ({', '.join(c['teams2'])})")
+            tag = "Two travel tournaments"
+        else:
+            text = (f"**{c['coach']}** is working **{c['local']}** (local) and coaching "
+                    f"{', '.join(c['teams'])} at **{c['travel']}**")
+            tag = "Local + travel"
+        out.append({"id": c["id"], "when": _span(c["start"], c["end"]), "sort": c["start"], "text": text,
+                    "tag": tag, "area": "tournament"})
+    for c in p_conflicts:
+        (pa, pb), (sa, sb) = c["programs"], c["slots"]
+        ds = c["dates"]
+        when = (_span(ds[0], ds[0]) if len(ds) == 1 else f"{ds[0]:%b %-d} + {len(ds) - 1} more")
+        out.append({"id": f"pp|{c['coach']}|{pa}|{pb}|{sa}|{sb}", "when": when, "sort": ds[0],
+                    "text": f"**{c['coach']}** is on **{pa}** ({sa}) and **{pb}** ({sb}) at the same time",
+                    "tag": "Two programs", "area": "program"})
+    return sorted(out, key=lambda f: (f["sort"], f["text"]))
+
+
+FLAGS = coverage_flags()
+_res = inp.resolved.dropna(how="all") if len(inp.resolved) else inp.resolved
+RESOLVED = {str(r["flag"]): r for _, r in _res.iterrows()} if len(_res) else {}
+OPEN_FLAGS = [f for f in FLAGS if f["id"] not in RESOLVED]
+
+
+def resolve_flag(fid: str, note: str):
+    row = {"flag": fid, "note": note.strip(), "who": VIEWER.log_name if ME is not None else "",
+           "at": f"{date.today():%m/%d/%Y}"}
+    inp.resolved = pd.concat([inp.resolved[inp.resolved["flag"] != fid], pd.DataFrame([row])], ignore_index=True)
+    if ME is not None:
+        store.log(VIEWER.log_name, "Flag resolved", f"{fid}" + (f" · {note.strip()}" if note.strip() else ""),
+                  MAIN_ID)
+
+
+def reopen_flag(fid: str):
+    inp.resolved = inp.resolved[inp.resolved["flag"] != fid].reset_index(drop=True)
+
+
+def flags_panel(area: str | None = None, key: str = "flags", expanded: bool = False):
+    """A collapsible list of coverage flags, one line each, with a Resolve
+    button per flag (admins) and the resolved ones tucked underneath."""
+    flags = [f for f in FLAGS if area is None or f["area"] == area]
+    if not flags:
+        return
+    open_ = [f for f in flags if f["id"] not in RESOLVED]
+    done = [f for f in flags if f["id"] in RESOLVED]
+    label = (f"🚩 {plural(len(open_), 'coverage flag')} to sort out" if open_ else "✅ Coverage flags all sorted out") \
+        + (f" · {len(done)} resolved" if done else "")
+    with st.expander(label, expanded=expanded and bool(open_), key=f"{key}_box"):
+        if open_:
+            st.caption("A coach who can't be in two places at once. Once you've found coverage, mark it resolved.")
+        for f in open_:
+            c1, c2 = st.columns([5, 1], vertical_alignment="center")
+            c1.markdown(f"🔴 **{f['when']}** · {f['text']}  \n<small>{f['tag']}</small>", unsafe_allow_html=True)
+            if CAN:
+                with c2.popover("Resolve", width="stretch"):
+                    note = st.text_input("How it's covered (optional)", key=f"{key}_note_{f['id']}",
+                                         placeholder="e.g. Cliff subs for the local")
+                    if st.button("Mark resolved", key=f"{key}_ok_{f['id']}", type="primary"):
+                        resolve_flag(f["id"], note)
+                        st.rerun()
+        if done and st.toggle(f"Show resolved ({len(done)})", key=f"{key}_showdone"):
+            for f in done:
+                r = RESOLVED[f["id"]]
+                extra = " · ".join(str(v) for v in (r.get("note"), r.get("who"), r.get("at")) if not blank(v))
+                c1, c2 = st.columns([5, 1], vertical_alignment="center")
+                c1.markdown(f"✅ ~~{f['when']}~~ · {f['text']}" + (f"  \n<small>{html_escape(extra)}</small>"
+                                                                   if extra else ""), unsafe_allow_html=True)
+                if CAN and c2.button("Reopen", key=f"{key}_re_{f['id']}", width="stretch"):
+                    reopen_flag(f["id"])
+                    st.rerun()
+
+
 # Everything that needs a look goes in one collapsible box: (st.error | st.warning, markdown).
 alerts: list[tuple] = []
-if t_conflicts:
-    alerts.append((st.error, "🚩 **Tournament conflict:** " + "; ".join(
-        f"{c['coach']} is working {c['local']} and coaching {', '.join(c['teams'])} at {c['travel']} "
-        f"({span_text(c['start'], c['end'])})" for c in t_conflicts)))
-if p_conflicts:
-    alerts.append((st.error, f"🚩 **{plural(len(p_conflicts), 'coach is', 'coaches are')} double-booked in "
-                             "programs.** Find a sub or take them off one:\n"
-                   + "\n".join(f"- {p_conflict_text(c)}" for c in p_conflicts)))
 
 if CAN and inp.teams.dropna(how="all").empty:
     st.info("**Getting these dates ready:** 1) set up the locals in **Programs**, tournaments in **Tournaments** and "
@@ -665,6 +746,8 @@ else:
         st.info(f"**{st.session_state.pending_rebuild}** since the last build. Press **Auto-schedule** "
                 "when you're done making changes.")
 
+flags_panel(key="flags_top")
+
 if alerts:
     n_red = sum(f is st.error for f, _ in alerts)
     with st.expander(f"{plural(len(alerts), 'warning')}" + (f" · {n_red} to fix" if n_red else ""),
@@ -724,6 +807,42 @@ def people_options(a: pd.DataFrame) -> list[str]:
     return clubs + teams_ + coaches
 
 
+# ------------------------------------------- every date (court/calendar) --
+# The court view and calendar can show every date scheduled so far, not just
+# the dates being worked on: each other run of dates shows its latest build.
+def season_result():
+    from scheduler.solver import ScheduleResult
+    from scheduler.storage import period_bookings
+    cache = st.session_state.setdefault("_season_cache", {})
+    parts, wk = [], set(result.weekend_dates if result is not None else [])
+    s_all, e_all = start, end
+    for k, ent in st.session_state.get("periods", {}).items():
+        sig = (k, len(json.dumps(ent.get("result") or {}, default=str)))
+        if sig not in cache:
+            cache[sig] = period_bookings(ent)
+        a_, wd_ = cache[sig]
+        if not len(a_):
+            continue
+        a_ = a_[a_["date"].map(lambda d: not (start <= d <= end))]  # these dates' own build wins
+        parts.append(a_)
+        wk |= set(wd_)
+        s_all, e_all = min(s_all, min(a_["date"], default=s_all)), max(e_all, max(a_["date"], default=e_all))
+    if result is None or not parts:
+        return result, start, end
+    a_all = pd.concat([result.assignments] + parts, ignore_index=True)
+    return ScheduleResult(status=result.status, assignments=a_all, pattern=result.pattern, issues=result.issues,
+                          metrics=result.metrics, warnings=result.warnings, start=s_all, end=e_all,
+                          weekend_dates=sorted(wk), tournaments=result.tournaments,
+                          practice_counts=result.practice_counts, broken=result.broken), s_all, e_all
+
+
+_view_saved = (result, start, end)
+if VIEW in (TAB_COURT, TAB_CAL) and result is not None and st.session_state.get("periods"):
+    if st.toggle("Show every date scheduled", key="all_dates",
+                 help="Include the other dates in the Dates menu (each as last built), so you can look back or "
+                      "ahead while working on these."):
+        result, start, end = season_result()
+
 # ---------------------------------------------------------- court view --
 if VIEW == TAB_COURT:
     if result is None:
@@ -758,7 +877,8 @@ if VIEW == TAB_COURT:
         if not show_moved:
             a = a.assign(on_pattern=True)
         if published:
-            ch = diff(practices_of(published[-1]), a, cleaned, start, end)
+            _s0, _e0 = _view_saved[1], _view_saved[2]
+            ch = diff(practices_of(published[-1]), a[a["date"].map(lambda d: _s0 <= d <= _e0)], cleaned, _s0, _e0)
             if len(ch):
                 st.caption(f"{plural(len(ch), 'change')} since “{published[-1]['label']}” was published. "
                            "See **Publish** for the list.")
@@ -865,6 +985,8 @@ if VIEW == TAB_CAL:
                            help="One row per team with every practice and tournament date; tournament days are "
                                 "circled.")
 
+
+result, start, end = _view_saved  # back to the dates being worked on
 
 # ------------------------------------------------------ edit practices --
 TEAM_SLOT_CHOICES = WEEKDAY_KEYS + WEEKEND_KEYS
@@ -1384,8 +1506,7 @@ def done_msg(what: str) -> str:
 if VIEW == TAB_PROG:
     st.markdown("Programs (locals, JumpStart, leagues…) are blocked off on their courts, and the practice "
                 "schedule is rebuilt around them when you save.")
-    for c in p_conflicts:
-        st.error("🚩 " + p_conflict_text(c), icon=None)
+    flags_panel("program", key="flags_prog", expanded=True)
     st.toggle("Rebuild the schedule each time I save a program", value=True, key="prog_autobuild",
               help="Turn off to change several programs in a row, then press Auto-schedule once at the end.")
     ver = st.session_state.get("locals_ver", 0)
@@ -1537,39 +1658,89 @@ if VIEW == TAB_TOURN:
     ages_all = sorted({t.age for t in team_list})
     program_names = sorted({lp.name for lp in cleaned.locals}) if cleaned else []
 
+    # Add a new tournament, or pick one to edit (the form fills in with it).
+    _trows = inp.tournaments.fillna("")
+    _tlab = [f"{r['name']} · {r['type']} · {r['start_date']}" for _, r in _trows.iterrows()]
+    _tlab = [lab if _tlab.count(lab) == 1 else f"{lab} (#{i + 1})" for i, lab in enumerate(_tlab)]
+    t_sel = st.selectbox("Tournament", ["__new__"] + list(range(len(_trows))),
+                         format_func=lambda o: "➕ New tournament" if o == "__new__" else f"Edit: {_tlab[o]}",
+                         key=f"t_sel_{len(_trows)}")
+    editing = t_sel != "__new__"
+    cur_t = _trows.iloc[t_sel] if editing else None
+    sfx = f"_{t_sel}_{st.session_state.get('locals_ver', 0)}" if editing else ""
+
+    def _tval(col, default=""):
+        return str(cur_t[col]).strip() if editing and not blank(cur_t[col]) else default
+
+    def _tdate(col, default):
+        try:
+            return to_date(_tval(col), start.year) if _tval(col) else default
+        except (ValueError, TypeError):
+            return default
+
     with st.container(border=True):
         c1, c2 = st.columns([2, 1])
-        t_name = c1.text_input("Tournament name", placeholder="e.g. Boys 14 Local Tournament", key="t_name")
-        t_kind = c2.radio("Type", ["Local", "Travel"], horizontal=True, key="t_kind")
+        t_name = c1.text_input("Tournament name", value=_tval("name"), placeholder="e.g. Boys 14 Local Tournament",
+                               key=f"t_name{sfx}")
+        _kinds = ["Local", "Travel"]
+        t_kind = c2.radio("Type", _kinds, horizontal=True, key=f"t_kind{sfx}",
+                          index=1 if _tval("type").lower().startswith(("trav", "away")) else 0)
         c1, c2 = st.columns(2)
-        t_start = c1.date_input("Start date", value=start, format="MM/DD/YYYY", key="t_start")
-        t_end = c2.date_input("End date", value=t_start, format="MM/DD/YYYY", key="t_end")
+        t_start = c1.date_input("Start date", value=_tdate("start_date", start), format="MM/DD/YYYY",
+                                key=f"t_start{sfx}")
+        t_end = c2.date_input("End date", value=_tdate("end_date", t_start), format="MM/DD/YYYY", key=f"t_end{sfx}")
         if t_kind == "Local":
             c1, c2 = st.columns(2)
-            t_prog = c1.selectbox("Locals program", ["(none)"] + program_names, key="t_prog",
+            _prog_opts = ["(none)"] + program_names + ([_tval("program")] if _tval("program") and
+                                                       _tval("program") not in program_names else [])
+            t_prog = c1.selectbox("Locals program", _prog_opts, key=f"t_prog{sfx}",
+                                  index=_prog_opts.index(_tval("program")) if _tval("program") in _prog_opts else 0,
                                   help="Its coaches are blocked for the day.")
-            t_courts = c2.multiselect("Courts used", ALL_COURTS, default=COURTS, key="t_courts",
-                                      format_func=court_name)
+            _c_def = parse_courts(_tval("courts")) if _tval("courts") else list(COURTS)
+            t_courts = c2.multiselect("Courts used", ALL_COURTS, default=[c for c in _c_def if c in ALL_COURTS],
+                                      key=f"t_courts{sfx}", format_func=court_name)
             prog_coaches = sorted({c for lp in (cleaned.locals if cleaned else []) if lp.name == t_prog
                                    for c in lp.coaches})
-            t_coaches = st.multiselect("Coaches working it", cleaned.coaches if cleaned else [],
-                                       default=[c for c in prog_coaches if cleaned and c in cleaned.coaches],
-                                       key=f"t_coaches_{t_prog}",
+            _all_c = cleaned.coaches if cleaned else []
+            _c_now = parse_names(_tval("coaches")) if editing else prog_coaches
+            t_coaches = st.multiselect("Coaches working it", sorted(set(_all_c) | set(_c_now)),
+                                       default=[c for c in _c_now if c in set(_all_c) | set(_c_now)],
+                                       key=f"t_coaches_{t_prog}{sfx}",
                                        help="Busy until 7 PM that day. A coach also going to a travel tournament "
                                             "then gets flagged.")
             t_club, t_ages, t_teams = "", [], []
         else:
             c1, c2 = st.columns(2)
-            t_club = c1.selectbox("Club", ["Any"] + clubs, key="t_club")
-            t_ages = c2.multiselect("Age groups", ages_all, key="t_ages", format_func=lambda a: f"{a}s")
+            _club_opts = ["Any"] + clubs
+            t_club = c1.selectbox("Club", _club_opts, key=f"t_club{sfx}",
+                                  index=_club_opts.index(_tval("club")) if _tval("club") in _club_opts else 0)
+            _ages_now = [a for a in ages_all if str(a) in re.findall(r"\d+", _tval("ages"))] if editing else []
+            t_ages = c2.multiselect("Age groups", ages_all, default=_ages_now, key=f"t_ages{sfx}",
+                                    format_func=lambda a: f"{a}s")
             match = [] if (t_club == "Any" and not t_ages) else [
                 t.name for t in team_list if (t_club == "Any" or t.club == t_club) and (not t_ages or t.age in t_ages)]
-            t_teams = st.multiselect("Teams going", [t.name for t in team_list], default=match,
-                                     key=f"t_teams_{t_club}_{'-'.join(map(str, t_ages))}",
+            _names = [t.name for t in team_list]
+            _listed = [n for n in parse_list(_tval("teams")) if n in _names] if editing else []
+            if editing and not _listed:  # saved by club + ages: the teams that matched
+                _listed = next((tn.teams for tn in (cleaned.tournaments if cleaned else [])
+                                if tn.name == _tval("name") and tn.kind == "travel"), [])
+            t_teams = st.multiselect("Teams going", _names, default=_listed if editing else match,
+                                     key=f"t_teams_{t_club}_{'-'.join(map(str, t_ages))}{sfx}",
                                      help="Filled in from the club and ages; remove teams that aren't going.")
             t_prog, t_courts, t_coaches = "(none)", [], []
-        add_t = st.button("Add tournament", type="primary")
+        if editing:
+            c1, c2, c3 = st.columns([2, 2, 1])
+            add_t = c1.button("Save changes", type="primary", width="stretch")
+            rm_t = c3.button("Delete", width="stretch", key="t_delete")
+        else:
+            add_t, rm_t = st.button("Add tournament", type="primary"), False
 
+    if rm_t:
+        inp.tournaments = inp.tournaments.drop(inp.tournaments.index[t_sel]).reset_index(drop=True)
+        st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+        st.session_state.resolve = True
+        st.session_state.flash = f"Deleted {_tval('name')}. Schedule rebuilt."
+        st.rerun()
     if add_t:
         problems = []
         if not t_name.strip():
@@ -1589,21 +1760,25 @@ if VIEW == TAB_TOURN:
                    "ages": ", ".join(map(str, t_ages)), "teams": ", ".join(t_teams),
                    "program": "" if t_prog == "(none)" else t_prog,
                    "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(t_courts))
-                   if t_kind == "Local" else "", "coaches": "; ".join(t_coaches), "note": ""}
-            inp.tournaments = pd.concat([inp.tournaments, pd.DataFrame([row])], ignore_index=True)
+                   if t_kind == "Local" else "", "coaches": "; ".join(t_coaches),
+                   "note": _tval("note") if editing else ""}
+            span = f"{t_start:%b %-d}" + ("" if t_end == t_start else f"–{t_end:%b %-d}")
+            if editing:
+                tdf = inp.tournaments.copy().astype(object)
+                for k_, v_ in row.items():
+                    tdf.at[tdf.index[t_sel], k_] = v_
+                inp.tournaments = tdf
+                st.session_state.flash = f"Saved {row['name']} ({t_kind.lower()}, {span}). Schedule rebuilt."
+            else:
+                inp.tournaments = pd.concat([inp.tournaments, pd.DataFrame([row])], ignore_index=True)
+                st.session_state.flash = f"Added {row['name']} ({t_kind.lower()}, {span}). Schedule rebuilt around it."
+                st.session_state.pop("t_name", None)  # clear the form for the next one
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
             st.session_state.resolve = True
-            span = f"{t_start:%b %-d}" + ("" if t_end == t_start else f"–{t_end:%b %-d}")
-            st.session_state.flash = f"Added {row['name']} ({t_kind.lower()}, {span}). Schedule rebuilt around it."
-            st.session_state.pop("t_name", None)  # clear the form for the next one
             st.rerun()
 
     st.subheader("Tournaments")
-    if t_conflicts:
-        for c in t_conflicts:
-            st.error(f"🚩 **{c['coach']}** is working **{c['local']}** (local) and coaching "
-                     f"**{', '.join(c['teams'])}** at **{c['travel']}** (travel), {span_text(c['start'], c['end'])}. "
-                     "Find another coach for one of them.")
+    flags_panel("tournament", key="flags_tourn", expanded=True)
     if inp.tournaments.empty:
         st.caption("None yet.")
     else:
@@ -2280,8 +2455,11 @@ if VIEW == TAB_INPUTS:
                   "only). Times like `5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend `9AM-1PM`. "
                   "Courts like `1-4`, `P` for the practice court; blank/TBD until known. skip = single dates it doesn't "
                   "run (`11/12; 11/26`). Easier: use the Programs tab.",
-        "Weekends": "Open weekend days. open like `9AM-9PM`. Days sharing a group with required = Yes mean "
-                    "'at least one of these must be used'.",
+        "Weekends": "Open days in 2-hour blocks (easier: the Open days tab): weekends, and weekdays over a school "
+                    "break. date like `11/7` or a range `12/21-1/2`; open like `9AM-9PM`. Days sharing a group with "
+                    "required = Yes mean 'at least one of these must be used'.",
+        "Resolved": "Coverage flags marked resolved (easier: Resolve on the flag). flag = the flag's id; note = how "
+                    "it's covered.",
         "Closures": "Club closed all day.",
         "Coaches": "Coach roster: anyone not on a team yet (e.g. coaches who only work programs), plus contact info.",
         "Overrides": "Manual changes the scheduler always keeps (easier from the Edit practices tab). action = Add "
@@ -2299,7 +2477,7 @@ if VIEW == TAB_INPUTS:
     sig_key = abs(hash((st.session_state.get("inp_sig"), st.session_state.get("locals_ver", 0)))) % 10**8
     for sheet, attr in ATTRS.items():
         st.subheader(sheet)
-        st.caption(help_[sheet])
+        st.caption(help_.get(sheet, ""))
         df = getattr(inp, attr).copy()
         for c in COLUMNS[sheet]:
             if c not in df.columns:

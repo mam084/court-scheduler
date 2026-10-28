@@ -364,3 +364,11 @@ def database_url() -> str | None:
     except Exception:  # noqa: BLE001  (no secrets file locally)
         pass
     return os.environ.get("DATABASE_URL")
+
+
+def period_bookings(entry: dict) -> tuple[pd.DataFrame, list[date]]:
+    """A stored period's bookings and open weekend/break days, without
+    rebuilding the whole result (quick, for showing every date at once)."""
+    r = entry.get("result") or {}
+    a = _frame_in(r.get("assignments", []))
+    return a, [date.fromisoformat(x) for x in r.get("weekend_dates", [])]

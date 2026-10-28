@@ -565,3 +565,82 @@ def test_coach_opens_on_the_published_dates_covering_today(db, monkeypatch):
                                       periods={"live": live}))
     at, _ = _as(db, monkeypatch, "somecoach@sdvbc.org", pid=pid)
     assert at.session_state["range_start"] == today - timedelta(days=3)
+
+
+def _with_clash(db):
+    """The club's schedule with one coach at two travel tournaments one weekend."""
+    from scheduler.storage import MAIN_ID, make_payload, read_payload
+    from scheduler import clean
+    pid = _save(db, "Flags", 40)
+    rec = db.get(pid)
+    inp, s_, e_, settings, r = read_payload(rec["payload"])
+    t = clean(inp, s_, e_).teams
+    coach = t[0].heads[0]
+    other = next(x for x in t[1:] if coach not in x.staff)
+    inp.teams.loc[inp.teams["team"] == other.name, "assistants"] = coach
+    inp.tournaments = pd.DataFrame([
+        {"name": "Vegas Classic", "type": "Travel", "start_date": "11/14/2026", "end_date": "11/15/2026",
+         "teams": t[0].name},
+        {"name": "Desert Duel", "type": "Travel", "start_date": "11/14/2026", "end_date": "11/15/2026",
+         "teams": other.name}])
+    db.save(pid, "Flags", make_payload(inp, s_, e_, settings, r))
+    return pid, coach
+
+
+def test_coverage_flag_resolves_and_reopens(db):
+    from streamlit.testing.v1 import AppTest
+    from scheduler.storage import MAIN_ID
+    pid, coach = _with_clash(db)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    assert not at.exception
+    assert any("1 coverage flag to sort out" in e.label for e in at.expander)
+    next(b for b in at.button if b.label == "Mark resolved").click().run()
+    assert not at.exception, at.exception
+    assert any("all sorted out" in e.label and "1 resolved" in e.label for e in at.expander)
+    res = db.get(MAIN_ID)["payload"]["inputs"]["Resolved"]
+    assert len(res) == 1 and res[0]["flag"].startswith(f"tt|{coach}|")
+    at.toggle(key="flags_top_showdone").set_value(True).run()
+    next(b for b in at.button if b.label == "Reopen").click().run()
+    assert any("1 coverage flag to sort out" in e.label for e in at.expander)
+
+
+def test_edit_a_tournament(db):
+    from streamlit.testing.v1 import AppTest
+    _with_clash(db)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    at.radio(key="nav").set_value("Tournaments").run()
+    sel = next(sb for sb in at.selectbox if sb.label == "Tournament")
+    sel.set_value(1).run()                           # Desert Duel
+    name = next(ti for ti in at.text_input if ti.label == "Tournament name")
+    assert name.value == "Desert Duel"
+    name.set_value("Desert Duel 2").run()
+    next(d for d in at.date_input if d.label == "Start date").set_value(date(2026, 11, 21)).run()
+    next(d for d in at.date_input if d.label == "End date").set_value(date(2026, 11, 22)).run()
+    next(b for b in at.button if b.label == "Save changes").click().run()
+    assert not at.exception, at.exception
+    t = at.session_state["inp"].tournaments
+    assert list(t["name"]) == ["Vegas Classic", "Desert Duel 2"] and t.iloc[1]["start_date"] == "11/21/2026"
+    assert not any("coverage flag to sort out" in e.label for e in at.expander)   # no longer the same weekend
+
+
+def test_show_every_date_scheduled(db):
+    from streamlit.testing.v1 import AppTest
+    _save(db, "November", 41)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    at.sidebar.date_input(key="new_from").set_value(date(2026, 12, 1))
+    at.sidebar.date_input(key="new_to").set_value(date(2026, 12, 14))
+    next(b for b in at.sidebar.button if b.label == "Start these dates").click().run()
+    assert not at.exception
+    at.radio(key="nav").set_value("Court view").run()
+    at.toggle(key="all_dates").set_value(True).run()
+    assert not at.exception, at.exception
+    show = next(sb for sb in at.selectbox if sb.label == "Show")
+    assert "Week of Nov 1" in show.options and "Week of Dec 6" in show.options
+    show.set_value("Week of Nov 1").run()
+    assert not at.exception
+    at.radio(key="nav").set_value("Calendar").run()
+    assert not at.exception
+    assert at.session_state["range_start"] == date(2026, 12, 1)    # still working on December

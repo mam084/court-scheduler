@@ -950,8 +950,11 @@ def solve(
         issues = pd.concat([pd.DataFrame([{
             "severity": "High", "team": ", ".join(c["teams"]), "week_of": week_start(c["start"]),
             "issue": f"Tournament conflict: {c['coach']} {span_text(c['start'], c['end'])}",
-            "detail": f"{c['coach']} is working {c['local']} (local) and coaching {', '.join(c['teams'])} at "
-                      f"{c['travel']} (travel) at the same time"}]), issues], ignore_index=True)
+            "detail": (f"{c['coach']} is working {c['local']} (local) and coaching {', '.join(c['teams'])} at "
+                       f"{c['travel']} (travel) at the same time") if c["kind"] == "local_travel" else
+                      (f"{c['coach']} coaches {', '.join(c['teams'])} at {c['travel']} and "
+                       f"{', '.join(c['teams2'])} at {c['travel2']} at the same time")}]), issues],
+            ignore_index=True)
     warnings = list(data.warnings) + [n["text"] for n in restore_notes if not n["kept"]]
     return ScheduleResult(status_name, assignments, pattern, issues, metrics, warnings, start, end,
                           shown_weekends, data.tournaments, practice_counts, broken_rows)

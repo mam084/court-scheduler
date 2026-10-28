@@ -1560,3 +1560,23 @@ def test_break_days_run_in_blocks_with_a_morning_camp():
     nine = pr[(pr["slot"] == "9AM") & pr["date"].isin(set(camp["date"]))]
     assert not set(nine["court"]) & {1, 2, 3, 4}
     assert r.metrics["missed_practices"] == 0
+
+
+def test_flags_coach_at_two_travel_tournaments_the_same_weekend():
+    teams = [{"team": "15 Black", "club": "Boys", "age": 15, "head_coach": "Al"},
+             {"team": "16-Bea", "age": 16, "assistants": "Al"},
+             {"team": "14-Cy", "age": 14}]
+    inp = _with_tournaments(_inp(teams), [
+        {"name": "Vegas Classic", "type": "Travel", "start_date": "11/14/2026", "end_date": "11/15/2026",
+         "teams": "15 Black"},
+        {"name": "Desert Duel", "type": "Travel", "start_date": "11/15/2026", "end_date": "11/16/2026",
+         "teams": "16-Bea, 14-Cy"},
+        {"name": "Later Cup", "type": "Travel", "start_date": "11/21/2026", "teams": "16-Bea"}])
+    data = clean(inp, *NOV)
+    conf = tournament_conflicts(data.teams, data.tournaments)
+    assert len(conf) == 1
+    c = conf[0]
+    assert c["kind"] == "two_travel" and c["coach"] == "Al" and c["start"] == c["end"] == date(2026, 11, 15)
+    assert {c["travel"], c["travel2"]} == {"Vegas Classic", "Desert Duel"}
+    assert c["teams"] == ["16-Bea"] and c["teams2"] == ["15 Black"]      # sorted by tournament name
+    assert c["id"] == tournament_conflicts(data.teams, data.tournaments)[0]["id"]   # stable

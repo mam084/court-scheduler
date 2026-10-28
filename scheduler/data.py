@@ -78,11 +78,14 @@ COLUMNS = {
                     "note"],
     "Privates": ["coach", "date", "time", "court", "type", "team", "player", "note"],
     "Calendars": ["kind", "name", "calendar_id"],
+    # Coverage flags marked as sorted out (a coach double-booked at
+    # tournaments or programs): the flag's id, how it was covered, by whom.
+    "Resolved": ["flag", "note", "who", "at"],
 }
 ATTRS = {"Teams": "teams", "Availability": "availability", "Wishlist": "wishlist",
          "Locals": "locals", "Weekends": "weekends", "Closures": "closures", "Tournaments": "tournaments",
          "Coaches": "coaches", "Overrides": "overrides", "Privates": "privates",
-         "Calendars": "calendars"}
+         "Calendars": "calendars", "Resolved": "resolved"}
 
 
 def empty(sheet: str) -> pd.DataFrame:
@@ -116,6 +119,7 @@ class ScheduleInput:
     overrides: pd.DataFrame = field(default_factory=lambda: empty("Overrides"))
     privates: pd.DataFrame = field(default_factory=lambda: empty("Privates"))
     calendars: pd.DataFrame = field(default_factory=lambda: empty("Calendars"))
+    resolved: pd.DataFrame = field(default_factory=lambda: empty("Resolved"))
 
     def sheets(self) -> dict[str, pd.DataFrame]:
         out = {}
@@ -185,9 +189,10 @@ class ScheduleInput:
 
 # Tables that belong to the club rather than to one spreadsheet: importing a
 # spreadsheet keeps them, and a new schedule starts with them.
-KEPT_TABLES = {"Locals": "locals", "Tournaments": "tournaments", "Privates": "privates", "Calendars": "calendars"}
+KEPT_TABLES = {"Locals": "locals", "Tournaments": "tournaments", "Privates": "privates", "Calendars": "calendars",
+               "Resolved": "resolved"}
 _KEPT_LABEL = {"Locals": "programs", "Tournaments": "tournaments", "Privates": "privates",
-               "Calendars": "calendar links"}
+               "Calendars": "calendar links", "Resolved": "resolved flags"}
 
 
 def keep_programs(new: "ScheduleInput", old: "ScheduleInput | None", use_file: bool = False) -> list[str]:
@@ -749,21 +754,45 @@ class Tournament:
 
 
 def tournament_conflicts(teams: list["Team"], tournaments: list["Tournament"]) -> list[dict]:
-    """Coaches booked to work a local tournament while coaching a team at a
-    travel tournament on the same day(s). One dict per coach per pair:
-    coach, local, travel, teams (the coach's teams going), start, end."""
+    """Coaches who can't be in two places at once at tournaments:
+
+    - kind "local_travel": working a local tournament while coaching a team
+      at a travel tournament on the same day(s): coach, local, travel, teams
+      (the coach's teams going), start, end.
+    - kind "two_travel": coaching teams at two different travel tournaments
+      on the same day(s), e.g. one weekend: coach, travel, teams, travel2,
+      teams2, start, end.
+    Each has an "id" that stays the same while the clash does (for marking
+    it resolved)."""
     staff = {t.name: t.staff for t in teams}
     out = []
+    travel = [tn for tn in tournaments if tn.kind == "travel"]
     for lt in (tn for tn in tournaments if tn.kind == "local" and tn.coaches):
-        for tt in (tn for tn in tournaments if tn.kind == "travel"):
+        for tt in travel:
             a, b = max(lt.start, tt.start), min(lt.end, tt.end)
             if a > b:
                 continue
             for c in lt.coaches:
                 going = [n for n in tt.teams if c in staff.get(n, [])]
                 if going:
-                    out.append({"coach": c, "local": lt.name, "travel": tt.name, "teams": going, "start": a, "end": b})
-    return out
+                    out.append({"kind": "local_travel", "coach": c, "local": lt.name, "travel": tt.name,
+                                "teams": going, "start": a, "end": b,
+                                "id": f"lt|{c}|{lt.name}|{tt.name}|{a.isoformat()}"})
+    for i, t1 in enumerate(travel):
+        for t2 in travel[i + 1:]:
+            if t1.name == t2.name:
+                continue
+            a, b = max(t1.start, t2.start), min(t1.end, t2.end)
+            if a > b:
+                continue
+            coaches = {c for n in t1.teams for c in staff.get(n, [])} & {c for n in t2.teams for c in staff.get(n, [])}
+            for c in sorted(coaches):
+                x, y = sorted([t1, t2], key=lambda t: t.name)
+                out.append({"kind": "two_travel", "coach": c, "travel": x.name, "travel2": y.name,
+                            "teams": [n for n in x.teams if c in staff.get(n, [])],
+                            "teams2": [n for n in y.teams if c in staff.get(n, [])], "start": a, "end": b,
+                            "id": f"tt|{c}|{x.name}|{y.name}|{a.isoformat()}"})
+    return sorted(out, key=lambda f: (f["start"], f["coach"]))
 
 
 def program_coach_conflicts(locals_: list["LocalProgram"], start: date, end: date,
