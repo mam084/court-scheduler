@@ -773,3 +773,61 @@ def test_page_values_are_kept_per_visitor(db):
     coach.run()
     assert admin.session_state["_page_state"] is not coach.session_state["_page_state"]
     assert admin.session_state["_page_state"].CAN is True
+
+
+def test_two_admins_on_different_dates_keep_each_others_work(db):
+    """Saving skips re-reading the schedule only when nobody else saved; when
+    someone did, their dates are kept."""
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.storage import MAIN_ID, all_periods
+    _save(db, "November", 44)
+    a = AppTest.from_file("../app.py", default_timeout=180)
+    a.run()
+    b = AppTest.from_file("../app.py", default_timeout=180)
+    b.run()
+    # B starts December (and saves it).
+    b.sidebar.date_input(key="new_from").set_value(date(2026, 12, 1))
+    b.sidebar.date_input(key="new_to").set_value(date(2026, 12, 14))
+    next(x for x in b.sidebar.button if x.label == "Start these dates").click().run()
+    assert "2026-12-01_2026-12-14" in all_periods(db.get(MAIN_ID)["payload"])
+    # A, still on November, changes something: December must survive A's save.
+    a.session_state["makeup"] = False
+    a.run()
+    assert not a.exception
+    periods = all_periods(db.get(MAIN_ID)["payload"])
+    assert {"2026-11-01_2026-11-30", "2026-12-01_2026-12-14"} <= set(periods)
+    assert db.get(MAIN_ID)["payload"]["settings"]["makeup"] is False
+    # A's next change (nobody else saved in between) is saved too.
+    a.session_state["time_limit"] = 15
+    a.run()
+    assert db.get(MAIN_ID)["payload"]["settings"]["time_limit"] == 15
+    assert "2026-12-01_2026-12-14" in all_periods(db.get(MAIN_ID)["payload"])
+
+
+def test_clicking_around_does_not_query_the_database(db):
+    """Switching sections makes no database round trips (each one is network
+    time on Supabase); a change saves with a handful."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+    from streamlit.testing.v1 import AppTest
+    _save(db, "November", 45)
+    n = {"q": 0}
+
+    def count(*_a):
+        n["q"] += 1
+    event.listen(Engine, "before_cursor_execute", count)
+    try:
+        at = AppTest.from_file("../app.py", default_timeout=180)
+        at.run()
+        for tab in ("Calendar", "Court view", "Edit practices", "Review"):
+            n["q"] = 0
+            at.radio(key="nav").set_value(tab).run()
+            assert not at.exception
+            assert n["q"] == 0, (tab, n["q"])
+        n["q"] = 0
+        at.session_state["makeup"] = False
+        at.run()
+        assert 0 < n["q"] <= 6
+    finally:
+        event.remove(Engine, "before_cursor_execute", count)

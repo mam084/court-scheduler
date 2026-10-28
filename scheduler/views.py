@@ -341,24 +341,28 @@ def court_grid_html(
     # Each court is three rows, one per weekday time band (JumpStart/3:45, 5:30, 7:20), so a
     # time sits at the same height every day. Weekend days span all three with their blocks.
     n_bands = len(BAND_STARTS)
+    # Bookings by (court, day), as plain records: grouped once instead of filtering
+    # the table for every box.
+    by_cell: dict = {}
+    for r in (bookings.to_dict("records") if len(bookings) else []):
+        by_cell.setdefault((r["court"], r["day"]), []).append(r)
     for i, c in enumerate(rows_):
         pc = c not in COURTS
-        court_rows = bookings[bookings["court"] == c] if len(bookings) else bookings
         cells: dict[str, list] = {}  # wd -> [(band, minutes, html)]
         for wd in cols:
             if wd in blocked:
                 continue
             weekend = block_day(wd)
-            cell = court_rows[court_rows["day"] == wd] if len(court_rows) else court_rows
+            cell = by_cell.get((c, wd), [])
             items = [(0, -1, _tourn_chip(tn, compact=True)) for tn in partial.get(wd, []) if c in tn.courts]
-            for _, r in (cell.iterrows() if len(cell) else []):
+            for r in cell:
                 m = _minutes(r["slot"])
                 items.append((0 if weekend else _band(m), m, _chip(r, stripes, highlight, local_coaches=local_coaches)))
             here_pv = [pv for pv in (privates or []) if pv["day"] == wd and pv["court"] == c]
             for pv in here_pv:
                 items.append((0 if weekend else _band(pv["start"]), pv["start"] + 0.25, _private_chip(pv)))
             if open_slots:
-                taken = list(cell["slot"]) if len(cell) else []
+                taken = [r["slot"] for r in cell]
                 free = [sl for sl, cs in (open_slots.get(wd) or {}).items()
                         if c in cs and not any(slots_overlap(sl, x) for x in taken)
                         and not any(pv["start"] < _minutes_end(sl) and _minutes(sl) < pv["end"] for pv in here_pv)]
@@ -506,8 +510,14 @@ def month_calendar_html(
             df = df.merge(cts, left_on=["date", "slot", "name"], right_index=True, how="left")
         df = df.drop_duplicates(subset=["date", "slot", "name"])
     if highlight and len(df):
-        df = df[df.apply(lambda r: _hit(r, highlight), axis=1)]
-    by_date = {d: g for d, g in df.groupby("date")} if len(df) else {}
+        df = df[[_hit(r, highlight) for r in df.to_dict("records")]]
+    # Each day's chips in time order, then court. Sorted once and grouped as plain
+    # records: much faster than sorting and walking a table day by day.
+    by_date: dict = {}
+    if len(df):
+        df = df.assign(o=df["slot"].map(SLOT_KEYS.index)).sort_values(["date", "o", "court"], kind="stable")
+        for r in df.to_dict("records"):
+            by_date.setdefault(r["date"], []).append(r)
 
     show_days = list(WEEK_ORDER)
     out = [CSS, '<div class="cs-wrap"><table class="cs-grid cs-cal"><thead><tr>']
@@ -529,13 +539,10 @@ def month_calendar_html(
             if d.weekday() >= 5 and d not in weekend_dates and d not in by_date and not has_tourn:
                 out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.5">{d:%-d}</div></td>')
                 continue
-            g = by_date.get(d)
             chips = "".join(_tourn_chip(tn, compact=True) for tn in (tournaments or []) if tn.covers(d)
                             and (not highlight or tn.kind == "local" or set(tn.teams) & set(highlight)))
-            if g is not None:
-                g = g.assign(o=g["slot"].map(SLOT_KEYS.index)).sort_values(["o", "court"])
-                chips += "".join(_chip(r, stripes, None, compact=True, local_coaches=local_coaches)
-                                 for _, r in g.iterrows())
+            chips += "".join(_chip(r, stripes, None, compact=True, local_coaches=local_coaches)
+                             for r in by_date.get(d, []))
             cls = ' class="cs-wkend"' if d.weekday() >= 5 or d in weekend_dates else ""
             out.append(f'<td{cls}><div class="cs-datenum">{_daynum(d, start)}</div>{chips}</td>')
         out.append("</tr>")

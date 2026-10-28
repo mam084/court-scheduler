@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import date
 
@@ -11,7 +10,7 @@ import streamlit as st
 from scheduler import ScheduleInput
 from scheduler.storage import MAIN_ID, all_periods, ensure_main, make_payload, period_key, read_period
 from scheduler.views import range_label
-from ui.common import next_month, payload_hash
+from ui.common import inputs_fingerprint, next_month, payload_hash
 from ui.state import S
 
 
@@ -33,6 +32,7 @@ def _load_into_session(rec: dict, key: str | None = None):
         keep_prev=bool(settings.get("keep_prev", True)), published=published_,
         base_version=settings.get("base_version"), pending_prefs=list(settings.get("pending_prefs") or []),
         periods=periods_, periods_dirty=set(), periods_deleted=set(),
+        _db_stamp=str(rec["updated_at"]),
         last_saved=payload_hash(make_payload(inp_, s_, e_, settings, result_, published_, periods=periods_)),
     )
     st.session_state.pop("_save_sig", None)
@@ -129,19 +129,25 @@ def autosave():
     # dates or any input table.
     _sig = (id(st.session_state.get("result")), len(st.session_state.get("published", [])),
             tuple(v["id"] for v in st.session_state.get("published", [])), json.dumps(_settings), str(start), str(end),
-            hashlib.sha1(json.dumps(inp.to_records(), sort_keys=True, default=str).encode()).hexdigest(),
-            tuple(sorted(st.session_state.get("periods", {}))))
+            inputs_fingerprint(inp), tuple(sorted(st.session_state.get("periods", {}))))
     if CAN and (_sig != st.session_state.get("_save_sig") or st.session_state.pop("_force_save", False)):
         try:
-            _db = store.get(MAIN_ID)
+            # The other dates are only re-read from the database when someone else
+            # saved since this page last did (otherwise this page already has them).
+            stamp = store.updated_at(MAIN_ID)
+            if stamp is not None and str(stamp) == st.session_state.get("_db_stamp"):
+                others = periods_for_save(None)
+            else:
+                _db = store.get(MAIN_ID)
+                others = periods_for_save(_db["payload"] if _db else None)
             _payload = make_payload(inp, start, end, _settings, st.session_state.get("result"),
-                                    st.session_state.get("published", []),
-                                    periods=periods_for_save(_db["payload"] if _db else None))
+                                    st.session_state.get("published", []), periods=others)
             _h = payload_hash(_payload)
             if _h == st.session_state.get("last_saved"):
                 st.session_state._save_sig = _sig
             else:
                 store.save(MAIN_ID, st.session_state.project_name, _payload)
+                st.session_state._db_stamp = str(store.updated_at(MAIN_ID))
                 st.session_state.last_saved = _h
                 st.session_state._save_sig = _sig
                 st.session_state.periods_dirty = set()

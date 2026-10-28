@@ -148,9 +148,12 @@ class Store:
         return "database" if self.permanent else "local file"
 
     def _ensure(self):
-        """Recreate the table if it vanished (e.g. the SQLite file was wiped
-        while the app was running)."""
-        _meta.create_all(self.engine)
+        """Recreate the tables if a local SQLite file was wiped while the app
+        was running. The tables are created when the Store starts, so on
+        Postgres this does nothing: checking them on every call cost several
+        database round trips per click."""
+        if not self.permanent and not os.path.exists(self.engine.url.database or ""):
+            _meta.create_all(self.engine)
 
     # ------------------------------------------------------------- CRUD --
     def list(self) -> list[dict]:
@@ -167,6 +170,12 @@ class Store:
         if r is None:
             return None
         return {"id": r.id, "name": r.name, "updated_at": r.updated_at, "payload": json.loads(r.payload)}
+
+    def updated_at(self, pid: str):
+        """When a saved schedule last changed (a tiny query, to skip re-reading it if nobody else saved)."""
+        self._ensure()
+        with self.engine.connect() as c:
+            return c.execute(select(projects.c.updated_at).where(projects.c.id == pid)).scalar()
 
     def save(self, pid: str, name: str, payload: dict) -> None:
         self._ensure()

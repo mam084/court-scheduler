@@ -78,13 +78,50 @@ def bound(widget, label: str, key: str, **kw):
     return widget(label, key=wk, on_change=_copy, **kw)
 
 
+def inputs_fingerprint(inp) -> str:
+    """A quick fingerprint of every input table, to tell whether anything changed
+    (much faster than writing the tables out as text)."""
+    tables = [(sheet, list(df.columns), df.values.tolist()) for sheet, attr in ATTRS.items()
+              if isinstance(df := getattr(inp, attr, None), pd.DataFrame)]
+    return hashlib.sha1(repr(tables).encode()).hexdigest()
+
+
+def cleaned_inputs(inp, start, end):
+    """clean(inp, start, end), worked out once per change instead of on every click.
+    Raises ValueError like clean() does."""
+    key = (inputs_fingerprint(inp), str(start), str(end))
+    hit = st.session_state.get("_clean_cache")
+    if hit and hit[0] == key:
+        if isinstance(hit[1], ValueError):
+            raise hit[1]
+        return hit[1]
+    try:
+        out = clean(inp, start, end)
+    except ValueError as e:
+        st.session_state._clean_cache = (key, e)
+        raise
+    st.session_state._clean_cache = (key, out)
+    return out
+
+
+def pending_requests_count() -> int:
+    """How many change requests are waiting, re-checked at most every 20 seconds
+    (or right away on the Requests tab) instead of on every click."""
+    c = st.session_state.get("_n_pending")
+    if c and time_mod.time() - c[0] < 20 and st.session_state.get("nav") != "Requests":
+        return c[1]
+    n = len(S.store.requests("pending"))
+    st.session_state._n_pending = (time_mod.time(), n)
+    return n
+
+
 def coach_names() -> list[str]:
     """Coach names in the open schedule (for linking logins and "View as")."""
     i = st.session_state.get("inp")
     if i is None:
         return []
     try:
-        return clean(i, st.session_state.get("range_start"), st.session_state.get("range_end")).coaches
+        return cleaned_inputs(i, st.session_state.get("range_start"), st.session_state.get("range_end")).coaches
     except Exception:  # noqa: BLE001
         return []
 
@@ -99,6 +136,7 @@ def decided(req: dict, status: str, note: str = "") -> str:
     """Marks a request approved / declined and emails the coach. Returns the flash message."""
     store, APP_LINK, VIEWER = S.store, S.APP_LINK, S.VIEWER
     by = VIEWER.person.label if VIEWER.person else "A scheduling admin"
+    st.session_state.pop("_n_pending", None)  # the waiting count changes
     if not store.decide_request(req["id"], status, VIEWER.person.email if VIEWER.person else "", note):
         return "Someone else already decided that request."
     store.log(VIEWER.log_name, "Request " + ("approved" if status == "approved" else "declined"),

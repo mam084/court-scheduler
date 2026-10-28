@@ -5,11 +5,10 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from scheduler import clean
 from scheduler import privates as pv
 from scheduler.data import program_coach_conflicts, tournament_conflicts
 from scheduler.views import range_label, short_list_text
-from ui.common import mine, plural
+from ui.common import cleaned_inputs, mine, plural
 from ui.flags import compute, flags_panel
 from ui.nav import ADMIN_ONLY, ALL_VIEWS, TAB_ACCESS
 from ui.state import S
@@ -28,7 +27,7 @@ def render():
     st.header(f"{st.session_state.project_name} · {range_label(start, end)}")
 
     try:
-        cleaned = clean(inp, start, end)
+        cleaned = cleaned_inputs(inp, start, end)
         closures = cleaned.closures
     except ValueError as e:
         st.error(str(e))

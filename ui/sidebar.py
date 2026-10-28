@@ -12,7 +12,7 @@ from scheduler import ScheduleInput, access
 from scheduler.data import merge_import
 from scheduler.storage import MAIN_ID, current_period, database_url, period_key
 from scheduler.views import range_label
-from ui.common import blank_template, bound, coach_names, plural, saved_list
+from ui.common import blank_template, bound, coach_names, pending_requests_count, plural, saved_list
 from ui.session import period_entry, period_label, switch_period
 from ui.state import S
 
@@ -71,7 +71,7 @@ def render():
             st.rerun()
 
         if CAN and ME is not None:
-            _n_req = len(store.requests("pending"))
+            _n_req = pending_requests_count()
             if _n_req:
                 st.info(f"📬 **{plural(_n_req, 'change request')}** waiting on the **Requests** tab.")
         run = False
