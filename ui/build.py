@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import pandas as pd
 import streamlit as st
 
@@ -9,9 +11,28 @@ from scheduler import ScheduleInput, solve
 from scheduler.changes import pattern_of, practices_of
 from scheduler.data import COLUMNS, empty
 from scheduler.storage import MAIN_ID
+from scheduler.views import range_label
 from ui.common import decided, plural
 from ui.session import open_project
 from ui.state import S
+
+
+def _held(assignments: pd.DataFrame, req: dict) -> pd.DataFrame:
+    """The practices to keep exactly as they are while a request goes in: all of them, minus the
+    ones the request moves or cancels."""
+    from datetime import date as _date
+    p = assignments[assignments["kind"] == "Practice"]
+    det = req.get("detail") or {}
+    gone = set()
+    for r in det.get("rows") or []:
+        if str(r.get("action", "")).strip().lower() in ("remove", "cancel"):
+            with contextlib.suppress(ValueError, TypeError, KeyError):
+                gone.add((r["team"], pd.to_datetime(str(r["date"])).date(), str(r["time"]).strip()))
+    rp = det.get("replace_pin")
+    if rp:
+        gone.add((rp[0], _date.fromisoformat(rp[1]), rp[2]))
+    keep = [(n, d, s) not in gone for n, d, s in zip(p["name"], p["date"], p["slot"])]
+    return p[keep]
 
 
 def run():
@@ -52,8 +73,19 @@ def run():
         st.stop()
     inp.start, inp.end = start, end
 
-    # Auto-schedule button, or adding/removing a program or tournament, rebuilds.
-    if S.run_pressed or st.session_state.pop("resolve", False):
+    # Auto-schedule rebuilds. So does a change (a program, a tournament, a hand edit, an approved
+    # request), but only on dates that have been scheduled: picking or changing dates never
+    # schedules practices by itself.
+    resolve = st.session_state.pop("resolve", False)
+    built = (st.session_state.get("result") is not None
+             and st.session_state.get("result_period") == (start, end))
+    if resolve and not built and not S.run_pressed:
+        resolve = False
+        st.session_state.pop("overrides_backup", None)
+        _appr = st.session_state.pop("approving", None)
+        if _appr is not None:  # nothing built on its dates yet: it goes in when they're scheduled
+            st.session_state.flash = decided(_appr, "approved", st.session_state.pop("approving_note", ""))
+    if S.run_pressed or resolve:
         with st.spinner("Building the schedule…"):
             try:
                 prev = prev_pat = restore = None
@@ -67,10 +99,17 @@ def run():
                     restore = practices_of(restore_ver)
                     prev, prev_pat = restore, pattern_of(restore_ver)
                 elif keep_prev:
+                    seed = st.session_state.pop("seed_prev", None)
                     if base is not None:
                         prev, prev_pat = practices_of(base), pattern_of(base)
                     elif st.session_state.get("result") is not None and st.session_state.result.ok:
                         prev, prev_pat = st.session_state.result.assignments, st.session_state.result.pattern
+                    elif seed is not None:  # new dates: start from what was there (and the usual week before)
+                        prev, prev_pat = seed
+                if restore is None and st.session_state.get("approving") is not None and built:
+                    # Approving a coach's request: every other practice stays exactly where it is (same
+                    # time, same court), so the request never pushes anyone out.
+                    restore = _held(st.session_state.result.assignments, st.session_state.approving)
                 st.session_state.result = solve(inp, start, end, time_limit_s=time_limit, makeup_closures=makeup,
                                                 previous=prev, previous_pattern=prev_pat, restore=restore)
                 if restore_ver is not None:
@@ -110,6 +149,29 @@ def run():
                     st.error(str(e))
             else:
                 st.session_state.pop("overrides_backup", None)
+        # Auto-schedule pressed and it built: start the page again so everything (the sidebar's dates
+        # too) shows the new schedule.
+        _r = st.session_state.get("result")
+        if S.run_pressed and _r is not None and _r.ok and not st.session_state.get("rebuild_queue"):
+            sf = _r.shortfalls
+            st.session_state.flash = (f"Scheduled {range_label(start, end)}. "
+                                      + (f"{plural(sf['team'].nunique(), 'team')} short of practices in "
+                                         f"{plural(sf['week_of'].nunique(), 'week')}: see the warning above."
+                                         if len(sf) else "Every team got all its practices."))
+            st.rerun()
+        # A change that touched other scheduled dates too (e.g. a practice moved into the next run of
+        # dates): rebuild those next.
+        queue = st.session_state.get("rebuild_queue") or []
+        if queue and st.session_state.get("result") is not None and st.session_state.result.ok:
+            nxt = queue.pop(0)
+            st.session_state.rebuild_queue = queue
+            if nxt in st.session_state.periods:
+                from ui.session import switch_period
+                switch_period(nxt)
+                st.session_state.resolve = True
+                st.rerun()
+        elif queue:
+            st.session_state.rebuild_queue = []
 
     result = st.session_state.get("result")
     if result is not None and st.session_state.get("result_period") != (start, end):

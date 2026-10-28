@@ -160,6 +160,16 @@ def solve(
     for d in open_dates:
         weeks[week_start(d)].append(d)
 
+    # Open weeks (school breaks): every open weekday that week runs in 2-hour
+    # blocks. Nothing is scheduled automatically then; coaches add the
+    # practices they want by hand (those are placed like any hand-placed one).
+    def is_break_week(ws):
+        days_ = [day_in_week(ws, wd) for wd in WEEKDAYS]
+        open_ = [d for d in days_ if start <= d <= end and d not in data.closures]
+        return bool(open_) and all(d in data.weekends for d in open_)
+
+    break_weeks = {ws for ws in weeks if is_break_week(ws)}
+
     def week_target(ws, per_week=PRACTICES_PER_WEEK):
         """Practices a team should get that week. A week cut off by the
         schedule's start or end is prorated: 3+ weekdays inside the range
@@ -167,6 +177,8 @@ def solve(
         day just follows the usual pattern."""
         span = [day_in_week(ws, wd) for wd in WEEKDAYS]  # Mon-Fri of that Sun-Sat week
         inside = sum(start <= d <= end for d in span)
+        if ws in break_weeks:
+            return 0
         if not makeup_closures and any(d in data.closures for d in span):
             return 0
         return per_week if inside >= 3 else (min(1, per_week) if inside == 2 else 0)
@@ -291,7 +303,7 @@ def solve(
                     y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
                     m.Add(y[t, d, s] == 1)
                 else:
-                    if off_day or not team.allowed(s) or not courts_on(d, s):
+                    if off_day or not team.allowed(s) or not courts_on(d, s) or week_start(d) in break_weeks:
                         continue
                     if d.weekday() >= 5 and team.weekend_only and not any(w.matches(d, s) for w in team.weekend_only):
                         continue
@@ -555,6 +567,8 @@ def solve(
             vs = [y[t, d, s] for t in T if (t, d, s) in y]
             if not vs:
                 continue
+            if all((t, d, s) in pinned for t in T if (t, d, s) in y):
+                continue  # only practices placed by hand (e.g. over a break): a coach's call, alone or not
             u = m.NewBoolVar(f"wb_{d}_{s}")
             m.Add(sum(vs) >= 2 * u)
             m.Add(sum(vs) <= len(vs) * u)

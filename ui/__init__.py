@@ -4,7 +4,7 @@ main.run() is the whole page, top to bottom:
 
     setup.run()        password / Google sign-in, the database, the Google connection
     session            the club's one schedule and its runs of dates (st.session_state)
-    sidebar.render()   Dates menu, new dates, import, solver settings, Auto-schedule
+    sidebar.render()   follows the day looked at; Auto-schedule some dates, import, settings
     build.run()        these dates' inputs and settings; the solver when asked
     header.render()    title, summary numbers, coverage flags, warnings, section menu
     tabs.<x>.render()  the chosen section (only that one runs)

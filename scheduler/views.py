@@ -78,7 +78,9 @@ CSS = """
 .cs-cal .cs-datenum { font-weight: 700; color: #1F2A44; margin-bottom: 3px; }
 .cs-cal .cs-out { background: #F1F2F4; }
 .cs-cal .cs-chip { padding: 2px 5px; margin-bottom: 3px; font-size: 11.5px; }
-.cs-tourn { background: #FFF1D6; color: #7A4B00; border-left-color: #E8A33D !important; font-weight: 600; }
+.cs-tourn { background-color: #ECEFF3; color: #3B4250; font-weight: 700;
+            background-image: repeating-linear-gradient(135deg, transparent, transparent 6px,
+                                                        rgba(0,0,0,.04) 6px, rgba(0,0,0,.04) 12px); }
 .cs-travel { background: #E8F0FF; color: #1F3F7A; border-left-color: #4A7BD0 !important; font-weight: 600; }
 .cs-notes { font-family: system-ui, sans-serif; font-size: 12.5px; margin: 2px 0 8px; display:flex; flex-wrap:wrap;
             gap:6px; }
@@ -252,6 +254,15 @@ def _private_chip(p) -> str:
             f' Private · {who}' + (f'<br><span>{what}</span>' if what else "") + "</div>")
 
 
+def _tourn_style(tn) -> str:
+    """A local tournament wears its program's colors (girls blue, boys green), like the program itself."""
+    if tn.kind != "local":
+        return ""
+    bg, fg = SIDE_COLORS.get(getattr(tn, "side", "") or "", LOCAL_COLORS)
+    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(getattr(tn, "side", "") or "", "#9AA3B2")
+    return f' style="background:{bg};color:{fg};border-left-color:{stripe}"'
+
+
 def _tourn_chip(tn, compact=False) -> str:
     cls = "cs-tourn" if tn.kind == "local" else "cs-travel"
     extra = ""
@@ -263,7 +274,8 @@ def _tourn_chip(tn, compact=False) -> str:
     span = f"{tn.start:%a %-m/%-d}" + ("" if not tn.multi_day else f"–{tn.end:%a %-m/%-d}")
     kind = ("local until 7 PM, " + ", ".join(court_name(c) for c in tn.courts)) if tn.kind == "local" else "travel"
     title = f"{tn.name} ({kind}) {span}"
-    return f'<div class="cs-chip {cls}" title="{html.escape(title)}">{html.escape(tn.label())}{extra}</div>'
+    return (f'<div class="cs-chip {cls}"{_tourn_style(tn)} title="{html.escape(title)}">'
+            f'{html.escape(tn.label())}{extra}</div>')
 
 
 def _tourn_head_chip(tn) -> str:
@@ -275,7 +287,7 @@ def _tourn_head_chip(tn) -> str:
         sub = "Travel" + (f" · {', '.join(tn.teams)}" if tn.teams else "")
     span = f"{tn.start:%a %-m/%-d}" + ("" if not tn.multi_day else f"–{tn.end:%a %-m/%-d}")
     title = f"{tn.name} · {sub} · {span}"
-    return (f'<div class="cs-chip {cls}" title="{html.escape(title)}">{html.escape(tn.label())}'
+    return (f'<div class="cs-chip {cls}"{_tourn_style(tn)} title="{html.escape(title)}">{html.escape(tn.label())}'
             f'<span>{html.escape(sub)}</span></div>')
 
 

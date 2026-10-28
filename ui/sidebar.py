@@ -1,19 +1,20 @@
-"""The sidebar: who's signed in, View as, the Dates menu and the admins' tools
-(new dates, import, solver settings, Auto-schedule)."""
+"""The sidebar: who's signed in, View as, and the admins' tools (Auto-schedule some dates, import,
+solver settings)."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
-import pandas as pd
 import streamlit as st
 
 from scheduler import ScheduleInput, access
 from scheduler.data import merge_import
+from scheduler.solver import week_start
 from scheduler.storage import MAIN_ID, current_period, database_url, period_key
 from scheduler.views import range_label
+from ui import dates
 from ui.common import blank_template, bound, coach_names, pending_requests_count, plural, saved_list
-from ui.session import period_entry, period_label, switch_period
+from ui.session import period_label, schedule_dates
 from ui.state import S
 
 
@@ -45,30 +46,7 @@ def render():
         S.update(VIEWER=VIEWER, CAN=CAN)  # switch_period below needs them
         saved = saved_list(database_url(), st.session_state.get("saved_ver", 0))
         names = {p["id"]: p["name"] for p in saved}
-        if not CAN and not st.session_state.get("_coach_default"):
-            # A coach opens on the dates covering today (else the latest published ones).
-            st.session_state._coach_default = True
-            _cur = period_key(st.session_state.range_start, st.session_state.range_end)
-            _all = dict(st.session_state.periods, **{_cur: period_entry()})
-            _today = date.today()
-            _pick = next((k for k, v in _all.items() if v.get("published")
-                          and date.fromisoformat(v["start"]) <= _today <= date.fromisoformat(v["end"])), None)
-            _pick = _pick or max((k for k, v in _all.items() if v.get("published")), default=None)
-            if _pick and _pick != _cur:
-                switch_period(_pick)
-
-        # ------------------------------------------------------------- dates --
-        current = MAIN_ID
-        cur_key = period_key(st.session_state.range_start, st.session_state.range_end)
-        p_opts = sorted(list(st.session_state.periods) + [cur_key])
-        p_lab = {k: period_label(v) for k, v in st.session_state.periods.items()}
-        p_lab[cur_key] = period_label((st.session_state.range_start, st.session_state.range_end))
-        pick = st.selectbox("Dates", p_opts, index=p_opts.index(cur_key), format_func=p_lab.get,
-                            key=f"period_{cur_key}_{len(p_opts)}",
-                            help="The schedule is built a run of dates at a time. Pick which dates to see.")
-        if pick != cur_key:
-            switch_period(pick)
-            st.rerun()
+        dates.follow()  # work on the dates holding the day being looked at
 
         if CAN and ME is not None:
             _n_req = pending_requests_count()
@@ -80,23 +58,7 @@ def render():
                        "cancellations and privates there or in **Privates**. The scheduling admins approve those on "
                        "the **Requests** tab.")
         else:
-            with st.expander("Schedule new dates"):
-                _ns = st.session_state.range_end + pd.Timedelta(days=1)
-                n_start = st.date_input("From", value=_ns, format="MM/DD/YYYY", key="new_from")
-                n_end = st.date_input("To", value=n_start + pd.Timedelta(days=13), format="MM/DD/YYYY", key="new_to")
-                st.caption("Starts a new set of dates with the club's teams, coaches, programs and tournaments. "
-                           "The dates you've already scheduled stay in the **Dates** menu.")
-                if st.button("Start these dates", width="stretch"):
-                    nk = period_key(n_start, n_end)
-                    if n_end < n_start:
-                        st.error("The end date is before the start date.")
-                    elif nk == cur_key or nk in st.session_state.periods:
-                        st.error("Those dates are already in the Dates menu.")
-                    else:
-                        switch_period(nk, (n_start, n_end))
-                        st.session_state.resolve = True
-                        st.session_state.flash = f"Started {range_label(n_start, n_end)}."
-                        st.rerun()
+            run = _auto_schedule()
             _no_teams = st.session_state.inp.teams.dropna(how="all").empty
             with st.expander("Import coaches' spreadsheet", expanded=_no_teams):
                 st.caption("Adds any new teams and coaches (the ones already here stay as they are) and brings in "
@@ -113,8 +75,7 @@ def render():
                         notes = merge_import(new_inp, st.session_state.inp, st.session_state.range_start,
                                              use_file_programs=use_file)
                         st.session_state.inp = new_inp
-                        st.session_state.inp_sig = ("project", current, rep.name, rep.size)
-                        st.session_state.result = None
+                        st.session_state.inp_sig = ("project", MAIN_ID, rep.name, rep.size)
                         st.session_state.pending_prefs = []   # those coaches' changes are in the file now
                         st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
                         st.session_state.resolve = True
@@ -140,23 +101,6 @@ def render():
                       help="Rebuilding moves only the practices that have to move, starting from the last "
                            "published schedule (or the version you restored, or the current one if nothing's "
                            "published). Turn off to start fresh.")
-            run = st.button("Auto-schedule", type="primary", width="stretch")
-            with st.expander("Change or remove these dates"):
-                bound(st.date_input, "From", "range_start", format="MM/DD/YYYY")
-                bound(st.date_input, "To", "range_end", format="MM/DD/YYYY")
-                if p_opts != [cur_key]:
-                    _these = range_label(st.session_state.range_start, st.session_state.range_end)
-                    sure = st.checkbox(f"Yes, remove {_these} for everyone", key=f"del_{cur_key}")
-                    if st.button("Remove these dates", disabled=not sure, width="stretch"):
-                        gone = cur_key
-                        other = next(k for k in p_opts if k != cur_key)
-                        switch_period(other)
-                        st.session_state.periods.pop(gone, None)
-                        st.session_state.periods_dirty.discard(gone)
-                        st.session_state.periods_deleted.add(gone)
-                        st.session_state._force_save = True
-                        st.session_state.flash = "Removed those dates."
-                        st.rerun()
             old = [p for p in saved if p["id"] != MAIN_ID]
             if old:
                 with st.expander("Old saved schedules"):
@@ -168,15 +112,74 @@ def render():
                         if rec_o is not None:
                             ent = current_period(rec_o["payload"])
                             k = period_key(date.fromisoformat(ent["start"]), date.fromisoformat(ent["end"]))
-                            if k == cur_key or k in st.session_state.periods:
-                                st.error("Those dates are already in the Dates menu.")
+                            if k == dates.active_key() or k in st.session_state.periods:
+                                st.error("Those dates are already on the calendar.")
                             else:
                                 st.session_state.periods[k] = ent
                                 st.session_state.periods_dirty.add(k)
                                 st.session_state._force_save = True
-                                st.session_state.flash = f"Added {period_label(ent)} to the Dates menu."
+                                st.session_state.flash = f"Added {period_label(ent)} to the calendar."
                                 st.rerun()
             if not store.permanent:
                 st.caption("⚠️ Saved on the app server only: it survives refreshes but can be cleared when the app "
                            "restarts. Connect a database (see README) to keep schedules permanently.")
     S.update(VIEWER=VIEWER, CAN=CAN, saved=saved, names=names, run_pressed=run)
+
+
+def _auto_schedule() -> bool:
+    """Pick dates and Auto-schedule them; the dates being looked at are filled in. Also: take
+    scheduled dates off the calendar. Returns whether Auto-schedule was pressed (and the dates are
+    ready for it)."""
+    d = dates.view_day()
+    hit = dates.run_at(d)
+    st.markdown("**Auto-schedule**")
+    if hit:
+        k, a0, b0 = hit
+        st.caption(f"Looking at {d:%b %-d}: scheduled with **{range_label(a0, b0)}**"
+                   + ("" if dates.is_published(k) else " (not published)") + ".")
+    else:
+        # Not scheduled yet: two weeks from that week's Sunday, up to the next scheduled dates.
+        rs = dates.runs()
+        a0 = max([week_start(d)] + [e_ + timedelta(days=1) for _, _, e_ in rs if e_ < d])
+        b0 = min([a0 + timedelta(days=13)] + [s_ - timedelta(days=1) for _, s_, _ in rs if s_ > a0])
+        st.caption(f"Looking at {d:%b %-d}: not scheduled yet.")
+    c1, c2 = st.columns(2)
+    a = c1.date_input("From", value=a0, format="MM/DD/YYYY", key=f"as_from_{a0}_{b0}")
+    b = c2.date_input("To", value=b0, format="MM/DD/YYYY", key=f"as_to_{a0}_{b0}")
+    rebuild = hit is not None and (a, b) == (hit[1], hit[2])
+    pressed = st.button("Rebuild these dates" if rebuild else "Auto-schedule these dates", type="primary",
+                        width="stretch", key="as_go",
+                        help="Builds practices for exactly these dates around the programs, tournaments and "
+                             "open days. Dates already scheduled inside them are rebuilt, keeping practices "
+                             "where they are unless something has to move. Weeks that are all open days "
+                             "(school breaks) get no practices; coaches add the ones they want.")
+    if pressed:
+        problem = schedule_dates(a, b)
+        if problem:
+            st.error(problem)
+            return False
+        dates.set_day(a if not (a <= d <= b) else d)
+        return True
+    if hit:
+        with st.expander(f"Take {range_label(hit[1], hit[2])} off the calendar"):
+            st.caption("Removes these dates' practices and published versions. Programs, tournaments and "
+                       "everything else stay.")
+            sure = st.checkbox("Yes, remove them", key=f"del_{hit[0]}")
+            if st.button("Remove these dates", disabled=not sure, width="stretch", key="as_del"):
+                _unschedule(hit[0])
+    return False
+
+
+def _unschedule(key: str):
+    """Takes a run of dates off the calendar."""
+    from ui.dates import active_key
+    if key == active_key():
+        st.session_state.update(result=None, result_period=None, published=[], base_version=None)
+        st.session_state.periods_deleted.add(key)
+    else:
+        st.session_state.periods.pop(key, None)
+        st.session_state.periods_dirty.discard(key)
+        st.session_state.periods_deleted.add(key)
+    st.session_state._force_save = True
+    st.session_state.flash = "Removed those dates from the calendar."
+    st.rerun()

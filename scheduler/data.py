@@ -716,6 +716,16 @@ def program_side(value, name: str = "") -> str:
     return ""
 
 
+def club_side(club: str) -> str:
+    """'SDVBC' / girls club -> 'Girls'; 'Seaside' / boys club -> 'Boys'; else ''."""
+    c = (club or "").strip().lower()
+    if "sdvbc" in c or "girl" in c:
+        return "Girls"
+    if "seaside" in c or "boy" in c:
+        return "Boys"
+    return ""
+
+
 def ranges_overlap(r1: list[tuple[date, date]], r2: list[tuple[date, date]]) -> bool:
     """Empty means 'every week'."""
     if not r1 or not r2:
@@ -765,6 +775,7 @@ class Tournament:
     club: str = ""
     ages: list[int] = field(default_factory=list)
     program: str = ""         # local: the locals program running it
+    side: str = ""            # local: "Girls" / "Boys" (its program's side), for its colors
 
     def covers(self, d: date) -> bool:
         return self.start <= d <= self.end
@@ -1227,9 +1238,12 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 coaches = sorted(set(coaches) | set(parse_names(r.get("coaches"))))
             if prog and not any(lp.name.lower() == prog.lower() for lp in locals_):
                 warnings.append(f"{row}: program '{prog}' isn't on the Locals sheet")
+            side = next((lp.side for lp in locals_ if prog and lp.name.lower() == prog.lower() and lp.side), "")
+            side = side or club_side(club) or program_side("", prog or name)
             tournaments.append(Tournament(name, kind, t_start, t_end, t_teams,
                                           courts if kind == "local" else [], coaches, club, ages,
-                                          next((lp.name for lp in locals_ if lp.name.lower() == prog.lower()), prog)))
+                                          next((lp.name for lp in locals_ if lp.name.lower() == prog.lower()), prog),
+                                          side if kind == "local" else ""))
         except (ValueError, TypeError, KeyError) as e:
             errors.append(f"{row}: {e}")
 
@@ -1273,8 +1287,10 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 if not times or len(times) != 1:
                     raise ValueError("needs exactly one time")
                 slot = next(iter(times))
-                if (d.weekday() >= 5) != (slot in WEEKEND_KEYS):
-                    raise ValueError(f"{d:%a %-m/%-d} needs a {'weekend' if d.weekday() >= 5 else 'weekday'} time")
+                block = d.weekday() >= 5 or d in weekends  # weekends and break days run in 2-hour blocks
+                if block != (slot in WEEKEND_KEYS):
+                    raise ValueError(f"{d:%a %-m/%-d} needs a {'2-hour block' if block else 'weekday'} time"
+                                     + (" (it's an open day)" if block and d.weekday() < 5 else ""))
                 if slot in PROGRAM_KEYS:
                     raise ValueError("JumpStart times are for programs, not team practices")
                 if not team.allowed(slot):

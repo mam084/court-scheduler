@@ -1566,17 +1566,24 @@ def test_break_days_run_in_blocks_with_a_morning_camp():
     inp.locals = pd.concat([inp.locals, pd.DataFrame([{
         "program": "Winter Camp", "side": "Girls", "days": "Mon-Fri, Weekdays", "time": "9AM-11AM", "courts": "1-4",
         "on_site": "Yes", "dates": "12/21/2026-1/2/2027"}])], ignore_index=True)
+    # The weeks are all open days: nothing's scheduled on its own, so coaches add their practices.
+    team = inp.teams["team"].iloc[0]
+    inp.overrides = pd.DataFrame([{"team": team, "action": "Extra", "date": "12/22/2026", "days": "",
+                                   "time": "11AM", "court": "", "note": ""},
+                                  {"team": team, "action": "Extra", "date": "12/29/2026", "days": "",
+                                   "time": "9AM", "court": "", "note": ""}])
     r = solve(inp, s, e, time_limit_s=20)
     _check_hard_rules(inp, r)
     a = r.assignments
     pr = a[a["kind"] == "Practice"]
     wk = pr[pr["date"].map(lambda d: d.weekday() < 5)]
     assert len(wk) and set(wk["slot"]) <= {"9AM", "11AM", "1PM", "3PM", "5PM", "7PM"}
+    assert set(pr["name"]) == {team}
     assert not (pr["date"] == date(2026, 12, 25)).any()
     camp = a[a["name"] == "Winter Camp"]
     assert set(camp["slot"]) == {"9AM"} and date(2026, 12, 21) in set(camp["date"])
     nine = pr[(pr["slot"] == "9AM") & pr["date"].isin(set(camp["date"]))]
-    assert not set(nine["court"]) & {1, 2, 3, 4}
+    assert len(nine) and not set(nine["court"]) & {1, 2, 3, 4}
     assert r.metrics["missed_practices"] == 0
 
 
@@ -1610,3 +1617,28 @@ def test_hand_practice_in_other_dates_doesnt_block_this_run():
     dec = solve(inp, date(2026, 12, 1), date(2026, 12, 20), time_limit_s=10)
     pr = dec.assignments[dec.assignments["kind"] == "Practice"]
     assert ((pr["date"] == date(2026, 12, 8)) & (pr["slot"] == "5:30")).any()
+
+
+def test_open_weeks_get_no_automatic_practices():
+    """A week whose weekdays are all open days (a school break) gets no practices from the solver
+    and no shortfall; a practice added by hand still goes in."""
+    from datetime import date
+
+    import pandas as pd
+
+    from scheduler import simulate, solve
+    from scheduler.solver import week_start
+    inp = simulate(3, 2, 1, seed=3, start=date(2026, 12, 6), end=date(2027, 1, 9))
+    inp.weekends = pd.concat([inp.weekends, pd.DataFrame([{
+        "date": "12/21/2026-01/02/2027", "open": "9AM-9PM", "courts": "", "group": "", "required": "",
+        "note": "Winter break"}])], ignore_index=True)
+    team = inp.teams["team"].iloc[0]
+    inp.overrides = pd.DataFrame([{"team": team, "action": "Extra", "date": "12/22/2026", "days": "",
+                                   "time": "11AM", "court": "", "note": "coach added"}])
+    r = solve(inp, date(2026, 12, 6), date(2027, 1, 9), time_limit_s=20)
+    assert r.ok
+    p = r.assignments[r.assignments["kind"] == "Practice"]
+    brk = p[p["date"].map(week_start).isin([date(2026, 12, 20), date(2026, 12, 27)])]
+    assert list(zip(brk["name"], brk["date"])) == [(team, date(2026, 12, 22))]
+    assert (p["date"].map(week_start) == date(2026, 12, 13)).sum() > 0
+    assert r.shortfalls.empty or not r.shortfalls["week_of"].isin([date(2026, 12, 20), date(2026, 12, 27)]).any()

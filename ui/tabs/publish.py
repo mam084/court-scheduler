@@ -11,19 +11,31 @@ from scheduler.changes import add_version, diff, practices_of, published_at, sna
 from scheduler.data import COLUMNS
 from scheduler.storage import MAIN_ID
 from scheduler.views import range_label
+from ui import dates
 from ui.common import g_conn, g_session, plural, secret, send_mail
 from ui.state import S
 
 
-def coach_list() -> list[str]:
-    """Coaches on at least one team, in the order teams are listed."""
+def coach_list(ver: dict | None = None) -> list[str]:
+    """Coaches on at least one team, in the order teams are listed. With a published version: only
+    the coaches whose teams have travel practices in it (a coach who only works locals programs
+    gets no email)."""
     cleaned = S.cleaned
     out = []
     for t in (cleaned.teams if cleaned else []):
         for c in t.staff:
             if c not in out:
                 out.append(c)
+    if ver is not None and cleaned is not None:
+        pr_ = practices_of(ver)
+        out = [c for c in out if len(mail.coach_rows(pr_, mail.teams_of(c, cleaned.teams)))]
     return out
+
+
+def skipped_coaches(ver: dict) -> list[str]:
+    """Coaches on a team who get no practices email for this version (no travel practices in it)."""
+    keep = set(coach_list(ver))
+    return [c for c in coach_list() if c not in keep]
 
 
 def email_practices(ver: dict, coaches: list[str], only_me: bool, progress=None) -> tuple[int, list[str]]:
@@ -37,6 +49,8 @@ def email_practices(ver: dict, coaches: list[str], only_me: bool, progress=None)
     sent, problems = 0, []
     for i, c in enumerate(coaches):
         teams_ = mail.teams_of(c, cleaned.teams)
+        if not len(mail.coach_rows(pr_, teams_)):
+            continue  # no travel practices in this version (e.g. only works locals programs): no email
         to = me_ if only_me else emails.get(c, "")
         if not to:
             problems.append(f"{c}: no email (add them in Access)")
@@ -87,7 +101,7 @@ def _main():
                 st.session_state.base_version = None
                 msg_ = f"Published “{p_label.strip() or 'Published'}”."
                 if p_mail and cleaned is not None:
-                    who_ = coach_list()
+                    who_ = coach_list(ver_new)
                     if p_me:
                         who_ = [MY_COACH] if MY_COACH in who_ else who_[:1]
                     with st.spinner("Emailing coaches…"):
@@ -168,7 +182,8 @@ def _emails():
     c1, c2 = st.columns([2, 1])
     e_vi = c1.selectbox("Version", list(reversed(range(len(published)))), format_func=vlab_.get, key="em_ver")
     e_me = c2.radio("Send to", ["Only me (test)", "Every coach"], key="em_to") == "Only me (test)"
-    all_c = coach_list()
+    all_c = coach_list(published[e_vi])
+    skipped_ = skipped_coaches(published[e_vi])
     emails_ = access.coach_emails(store.users(), cleaned.roster)
     if e_me:
         e_who = st.multiselect("Send me the emails these coaches would get", all_c,
@@ -177,7 +192,8 @@ def _emails():
         e_who = all_c
         no_mail = [c for c in all_c if c not in emails_]
         st.caption(f"{plural(len(all_c) - len(no_mail), 'coach', 'coaches')} will get an email."
-                   + (f" No email for: {', '.join(no_mail)} (add them in **Access**)." if no_mail else ""))
+                   + (f" No email for: {', '.join(no_mail)} (add them in **Access**)." if no_mail else "")
+                   + (f" Skipped, no travel practices in this version: {', '.join(skipped_)}." if skipped_ else ""))
     with st.expander("Preview"):
         pc_ = st.selectbox("Coach", all_c, index=all_c.index(e_who[0]) if e_who and e_who[0] in all_c else 0,
                            key="em_prev")
@@ -371,6 +387,7 @@ def _calendars():
 
 def render():
     """Publish section."""
+    dates.run_picker("pub_run")
     _main()
     if S.result is not None and S.cleaned is not None and S.published:
         _emails()

@@ -35,6 +35,7 @@ def blank_template(start: date, end: date) -> bytes:
     ex = simulate(2, 1, 1, seed=1, start=start, end=end)
     for attr in ATTRS.values():
         setattr(ex, attr, getattr(ex, attr).head(2))
+    ex.locals = ex.locals.assign(dates=f"{start:%m/%d/%Y}-{end:%m/%d/%Y}")  # every program has its dates
     return ex.to_excel_bytes()
 
 

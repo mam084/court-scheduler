@@ -7,12 +7,14 @@ import streamlit as st
 
 from scheduler.changes import burden, practices_of
 from scheduler.views import practice_counts_html
+from ui import dates
 from ui.common import mine
 from ui.state import S
 
 
 def render():
     """Review section."""
+    dates.run_picker("rev_run")
     published = S.published
     result = S.result
     cleaned = S.cleaned

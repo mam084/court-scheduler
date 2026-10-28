@@ -24,7 +24,7 @@ def render():
     end = S.end
     time_limit = S.time_limit
     result = S.result
-    st.header(f"{st.session_state.project_name} · {range_label(start, end)}")
+    st.header(st.session_state.project_name)
 
     try:
         cleaned = cleaned_inputs(inp, start, end)
@@ -53,20 +53,22 @@ def render():
     alerts: list[tuple] = []
 
     if CAN and inp.teams.dropna(how="all").empty:
-        st.info("**Getting these dates ready:** 1) set up the locals in **Programs**, tournaments in "
+        st.info("**Getting started:** 1) set up the locals in **Programs**, tournaments in "
                 "**Tournaments** and any weekends or school-break days in **Open days**; 2) **Import coaches' "
-                "spreadsheet** in the sidebar for the teams, no-dates and wishlists; 3) **Auto-schedule**.")
+                "spreadsheet** in the sidebar for the teams, no-dates and wishlists; 3) pick dates under "
+                "**Auto-schedule** in the sidebar.")
     elif result is None:
         if st.session_state.get("nav") not in ("Court view", "Calendar"):  # those show their own note
-            st.info("Press **Auto-schedule** in the sidebar to build the schedule for these dates. "
-                    "You can review and edit the inputs in the **Inputs** tab first." if CAN else
-                    "These dates haven't been scheduled yet.")
+            st.info("These dates aren't scheduled yet. Pick them under **Auto-schedule** in the sidebar to build "
+                    "their practices." if CAN else "These dates haven't been scheduled yet.")
     elif not result.ok:
         st.error(f"No schedule found ({result.status}). Check for more teams than open courts, "
                  "or a coach whose no-dates block every slot.")
         result = None
     else:
         m = result.metrics
+        st.caption(f"**{range_label(start, end)}** (the scheduled dates you're looking at)"
+                   + ("" if st.session_state.get("published") else " · not published yet"))
         c = st.columns(6)
         c[0].metric("Practices", m["practices_scheduled"])
         c[1].metric("Missed", m["missed_practices"], help="Practices short of each team's weekly target")

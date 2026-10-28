@@ -7,6 +7,7 @@ import streamlit as st
 
 from scheduler import privates as pv
 from scheduler.config import ALL_COURTS, COURTS, DAYS, PRACTICE_COURT, court_name, court_short
+from ui import dates
 from ui.common import plural
 from ui.edits import submit_request
 from ui.state import S
@@ -26,7 +27,9 @@ def render():
     st.markdown("Book **private lessons** as 1-hour sessions. Each one is checked against the schedule, so a court "
                 "or coach that's already busy then is flagged. Privates show on the weekly court view.")
     coach_opts = cleaned.coaches if cleaned else sorted({p["coach"] for p in privs})
-    a_now = result.assignments if result is not None else None
+    _span = dates.season()  # every scheduled date, so a private on any of them is checked
+    _all = dates.window(*_span, with_preview=False)[0] if _span else None
+    a_now = _all.assignments if _all is not None else (result.assignments if result is not None else None)
     if not CAN and not MY_COACH:
         st.info("Your login isn't linked to a coach name yet, so you can't ask for a private here. Ask an app "
                 "admin to link it.")
@@ -41,7 +44,7 @@ def render():
             else:
                 p_coach = MY_COACH
                 c1.text_input("Coach", value=MY_COACH, disabled=True, key="pv_coach_me")
-            p_date = c2.date_input("Date", value=start, format="MM/DD/YYYY", key="pv_date")
+            p_date = c2.date_input("Date", value=dates.view_day(), format="MM/DD/YYYY", key="pv_date")
             p_hr = h1.selectbox("Start hour", list(range(1, 13)), index=3, key="pv_hour",
                                 help="Any start time; privates are always 1 hour.")
             p_mn = h2.selectbox("Minutes", list(range(0, 60, 5)), format_func=lambda x: f":{x:02d}", key="pv_min")
@@ -50,7 +53,9 @@ def render():
                 p_coach = st.text_input("Coach name", key="pv_coach_new").strip() or None
             p_start = (p_hr % 12 + (12 if p_ap == "PM" else 0)) * 60 + p_mn
             p_time = pv.clock(p_start)
-            free = pv.free_courts(p_date, p_start, a_now, privs, ALL_COURTS)
+            _day = dates.window(p_date, p_date)[0]  # whatever's on the calendar that day
+            a_day = _day.assignments if _day is not None else None
+            free = pv.free_courts(p_date, p_start, a_day, privs, ALL_COURTS)
             c1, c2, c3 = st.columns([1, 1, 2])
             p_team_private = c1.toggle("Team private", key="pv_is_team",
                                        help="On: a private for one of the club's teams. "
@@ -72,7 +77,7 @@ def render():
                      "end": p_start + 60, "time": p_time, "end_label": pv.clock(p_start + 60), "court": p_court,
                      "type": "Team" if p_team_private else "Personal", "team": p_team, "player": p_player,
                      "note": p_note, "what": ""}
-            clash = pv.conflicts(privs + [trial], a_now, closures).get(-1, []) if p_coach else []
+            clash = pv.conflicts(privs + [trial], a_day, closures).get(-1, []) if p_coach else []
             if clash:
                 st.warning("Heads up: " + "; ".join(clash) + ".")
             if not CAN and st.button("Send request", type="primary", key="pv_request"):

@@ -16,8 +16,9 @@ from scheduler.config import (
     WEEKEND_KEYS,
 )
 from scheduler.data import COLUMNS
+from ui import dates
 from ui.common import plural
-from ui.edits import apply_overrides, change_prefs, pref_key, submit_request
+from ui.edits import apply_overrides, change_prefs, open_courts, pref_key, submit_request
 from ui.state import S
 
 TEAM_SLOT_CHOICES = WEEKDAY_KEYS + WEEKEND_KEYS
@@ -32,12 +33,42 @@ def team_slot_label(k: str) -> str:
 
 
 
+def _from_view(tp: pd.DataFrame) -> int:
+    """The practice list opens on the first practice on or after the day being looked at."""
+    d = dates.view_day()
+    after = [i for i, x in enumerate(tp["date"]) if x >= d] if len(tp) else []
+    return after[0] if after else max(0, len(tp) - 1)
+
+
+def court_pick(d, slot: str, key: str, team: str, moving: tuple | None = None):
+    """A court for a request: 'Any' or a court number, with which courts are open then."""
+    free = open_courts(d, slot, team, moving)
+    opts = ["Any"] + COURTS
+    lab = {c: ("Any open court" if c == "Any" else f"Court {c}" + ("" if free is None or c in free else " (taken)"))
+           for c in opts}
+    c = st.selectbox("Court", opts, format_func=lab.get, key=key,
+                     help="Ask for a particular court if it matters. Your request never bumps another team: if the "
+                          "court's taken then, the admins put it on an open one or get back to you.")
+    if free is not None:
+        st.caption("Open then: " + (", ".join(f"Court {x}" for x in free) if free else
+                                    "no courts (everything's booked then, so the admins may suggest another time)"))
+    return c
+
+
+def _not_scheduled(d):
+    if dates.run_at(d) is None:
+        st.caption(f"{d:%b %-d} isn't scheduled yet: this goes in when it is.")
+
+
 def render():
     """Edit practices section."""
-    VIEWER, CAN, inp, start, end, result, cleaned = S.VIEWER, S.CAN, S.inp, S.start, S.end, S.result, S.cleaned
-    if result is None or cleaned is None:
-        st.caption("Build the schedule first.")
+    VIEWER, CAN, inp, result, cleaned = S.VIEWER, S.CAN, S.inp, S.result, S.cleaned
+    span = dates.season()
+    if span is None or cleaned is None:
+        st.caption("Nothing's scheduled yet.")
     else:
+        everything = dates.window(*span, with_preview=False)[0]
+        start = dates.view_day()
         if CAN:
             st.markdown("Change practices by hand. The scheduler **keeps these changes every time it rebuilds**, "
                         "and fits everything else around them.")
@@ -54,12 +85,13 @@ def render():
                 st.stop()
         e_team = st.selectbox("Team", team_names, key="ed_team")
         e_per_week = next((t.per_week for t in cleaned.teams if t.name == e_team), PRACTICES_PER_WEEK)
-        a = result.assignments
+        a = everything.assignments
         tp = a[(a["kind"] == "Practice") & (a["name"] == e_team)].copy()
         if len(tp):
             tp["o"] = tp["slot"].map(SLOT_KEYS.index)
             tp = tp.sort_values(["date", "o"])
-        usual_rows = result.pattern[result.pattern["team"] == e_team] if len(result.pattern) else result.pattern
+        pat = result.pattern if result is not None else pd.DataFrame(columns=["team", "day", "slot", "court"])
+        usual_rows = pat[pat["team"] == e_team] if len(pat) else pat
         usual_txt = ", ".join(f"{r.day} {r.slot}" for r in usual_rows.itertuples()) or "none"
         _hc = "home_court" if "home_court" in usual_rows.columns else "court"  # schedules saved before home_court
         home = f" · home Court {usual_rows[_hc].iloc[0]}" if len(usual_rows) else ""
@@ -92,12 +124,12 @@ def render():
                 if not labels:
                     st.caption("No practices to change.")
                 else:
-                    lab_i = st.selectbox("Practice", labels, key=f"ed_pick_{e_team}")
+                    lab_i = st.selectbox("Practice", labels, key=f"ed_pick_{e_team}", index=_from_view(tp))
                     old = tp.iloc[labels.index(lab_i) if lab_i in labels else 0]
                     if mode == "Move a practice":
                         pk = f"{e_team}_{old['date']}_{old['slot']}"  # fields reset to the chosen practice
-                        nd = st.date_input("New date", value=old["date"], min_value=start, max_value=end,
-                                           format="MM/DD/YYYY", key=f"ed_nd_{pk}")
+                        nd = st.date_input("New date", value=old["date"], format="MM/DD/YYYY", key=f"ed_nd_{pk}")
+                        _not_scheduled(nd)
                         ns = st.selectbox("New time", TEAM_SLOT_CHOICES, format_func=team_slot_label,
                                           index=(TEAM_SLOT_CHOICES.index(old["slot"])
                                                  if old["slot"] in TEAM_SLOT_CHOICES else 0),
@@ -131,28 +163,30 @@ def render():
                 if not labels:
                     st.caption("No practices to change.")
                 else:
-                    lab_i = st.selectbox("Practice", labels, key=f"rq_pick_{e_team}")
+                    lab_i = st.selectbox("Practice", labels, key=f"rq_pick_{e_team}", index=_from_view(tp))
                     old = tp.iloc[labels.index(lab_i) if lab_i in labels else 0]
                     od = old["date"]
                     rk = f"rq_{e_team}_{od}_{old['slot']}"
                     if mode.startswith("Ask to move"):
-                        nd = st.date_input("New date", value=od, min_value=start, max_value=end, format="MM/DD/YYYY",
-                                           key=f"{rk}_nd")
+                        nd = st.date_input("New date", value=od, format="MM/DD/YYYY", key=f"{rk}_nd")
                         ns = st.selectbox("New time", TEAM_SLOT_CHOICES, format_func=team_slot_label,
                                           index=TEAM_SLOT_CHOICES.index(old["slot"]) if old["slot"] in TEAM_SLOT_CHOICES
                                           else 0, key=f"{rk}_ns")
+                        nc = court_pick(nd, ns, f"{rk}_nc", e_team, (od, old["slot"]))
                         why = st.text_input("Why (helps the admins decide)", key=f"{rk}_why",
                                             placeholder="e.g. gym conflict at school")
-                        same = nd == od and ns == old["slot"]
+                        same = nd == od and ns == old["slot"] and (nc == "Any" or str(nc) == str(old["court"]))
+                        where = "" if nc == "Any" else f", Court {nc}"
                         if st.button("Send request", type="primary", width="stretch", disabled=same, key=f"{rk}_go"):
                             submit_request("move", e_team,
-                                           f"Move {e_team} from {od:%a %b %-d} {old['slot']} to {nd:%a %b %-d} {ns}",
+                                           f"Move {e_team} from {od:%a %b %-d} {old['slot']} to "
+                                           f"{nd:%a %b %-d} {ns}{where}",
                                            {"rows": [
                                                {"team": e_team, "action": "Remove", "date": f"{od:%m/%d/%Y}",
                                                 "days": "", "time": old["slot"], "court": "",
                                                 "note": f"moved to {nd:%a %-m/%-d} {ns} (request)"},
                                                {"team": e_team, "action": "Add", "date": f"{nd:%m/%d/%Y}", "days": "",
-                                                "time": ns, "court": "",
+                                                "time": ns, "court": "" if nc == "Any" else str(nc),
                                                 "note": f"moved from {od:%a %-m/%-d} (request)"}],
                                             "replace_pin": [e_team, od.isoformat(), old["slot"]]}, why)
                     else:
@@ -169,16 +203,18 @@ def render():
                                                       "note": "cancelled (request)"}],
                                             "replace_pin": [e_team, od.isoformat(), old["slot"]]}, why)
             elif mode.startswith("Ask for an extra"):
-                ad = st.date_input("Date", value=start, min_value=start, max_value=end, format="MM/DD/YYYY",
-                                   key=f"rq_x_d_{e_team}")
+                ad = st.date_input("Date", value=start, format="MM/DD/YYYY", key=f"rq_x_d_{e_team}")
                 as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1,
                                    key=f"rq_x_t_{e_team}")
+                xc = court_pick(ad, as_, f"rq_x_c_{e_team}", e_team)
                 why = st.text_input("Why", key=f"rq_x_why_{e_team}",
                                     placeholder="e.g. extra practice before a tournament")
+                where = "" if xc == "Any" else f", Court {xc}"
                 if st.button("Send request", type="primary", width="stretch", key=f"rq_x_go_{e_team}"):
-                    submit_request("extra", e_team, f"Extra practice for {e_team} on {ad:%a %b %-d} at {as_}",
+                    submit_request("extra", e_team, f"Extra practice for {e_team} on {ad:%a %b %-d} at {as_}{where}",
                                    {"rows": [{"team": e_team, "action": "Extra", "date": f"{ad:%m/%d/%Y}", "days": "",
-                                              "time": as_, "court": "", "note": "extra practice (request)"}]}, why)
+                                              "time": as_, "court": "" if xc == "Any" else str(xc),
+                                              "note": "extra practice (request)"}]}, why)
             elif mode == "Suggest a preference":
                 st.caption("Tell the scheduler what this team would rather have. It's weighed against every other "
                            "team's requests, so it's kept when it fits, not forced.")
@@ -232,8 +268,8 @@ def render():
                                      f"Removed {plural(len(drop), 'preference')} for {e_team}.",
                                      "removed " + "; ".join(prefs[k] for k in drop))
             elif mode == "Add a practice":
-                ad = st.date_input("Date", value=start, min_value=start, max_value=end, format="MM/DD/YYYY",
-                                   key="ed_ad")
+                ad = st.date_input("Date", value=start, format="MM/DD/YYYY", key="ed_ad")
+                _not_scheduled(ad)
                 as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1, key="ed_as")
                 ac = st.selectbox("Court", ["Any"] + COURTS, key="ed_ac",
                                   format_func=lambda c: "Any open court" if c == "Any" else f"Court {c}")

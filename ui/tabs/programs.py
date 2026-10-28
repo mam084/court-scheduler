@@ -45,10 +45,10 @@ SIDES = ["Girls", "Boys", "Other"]
 
 def program_defaults(row: dict | None) -> dict:
     """Form values for a new program (row=None) or an existing Locals row."""
-    start, end, cleaned = S.start, S.end, S.cleaned
+    start, cleaned = S.start, S.cleaned
     if row is None:
-        return {"name": "", "side": "Girls", "on_site": True, "days": [], "every_week": False,
-                "p_start": start, "p_end": end, "times": [], "courts": [], "coaches_sel": [], "coaches_new": "",
+        return {"name": "", "side": "Girls", "on_site": True, "days": [],
+                "p_start": None, "p_end": None, "times": [], "courts": [], "coaches_sel": [], "coaches_new": "",
                 "tourns": []}
     yr = start.year
     try:
@@ -71,8 +71,8 @@ def program_defaults(row: dict | None) -> dict:
         "name": str(row.get("program", "")), "side": side,
         "on_site": on in ("", "yes", "y", "true", "1", "nan", "none"),
         "days": [d for d in parse_days(row.get("days")) if d in DAYS],
-        "every_week": not ranges,
-        "p_start": ranges[0][0] if ranges else start, "p_end": ranges[0][1] if ranges else end,
+        "p_start": min(a for a, _ in ranges) if ranges else None,
+        "p_end": max(b for _, b in ranges) if ranges else None,
         "times": [t for t in times if t in SLOT_CHOICES], "courts": courts,
         "coaches_sel": [n for n in names if n in known],
         "coaches_new": ", ".join(n for n in names if n not in known),
@@ -148,11 +148,11 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         on_site = c3.checkbox("Uses our courts", value=dv["on_site"],
                               help="Uncheck for programs somewhere else (e.g. a high school team). "
                                    "Those only block the coaches.")
-        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+        c1, c2, c3 = st.columns([2, 1, 1])
         days = c1.multiselect("Days", DAYS, default=dv["days"], placeholder="e.g. Tue, Thu")
-        every = c2.checkbox("Every week", value=dv["every_week"], help="No start or end date.")
-        p_start = c3.date_input("Start date", value=dv["p_start"], format="MM/DD/YYYY")
-        p_end = c4.date_input("End date", value=dv["p_end"], format="MM/DD/YYYY")
+        p_start = c2.date_input("Start date", value=dv["p_start"], format="MM/DD/YYYY",
+                                help="The first day it runs. Every program needs a start and an end date.")
+        p_end = c3.date_input("End date", value=dv["p_end"], format="MM/DD/YYYY", help="The last day it runs.")
         c1, c2 = st.columns(2)
         times = c1.multiselect("Time", SLOT_CHOICES, default=dv["times"], format_func=slot_label,
                                help="Pick every timeslot it uses (e.g. 3:45 and 5:30 for a 3:45–7:20 program). "
@@ -187,7 +187,7 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         for i, lab in enumerate(submit_labels):
             if cols[i].form_submit_button(lab, type="primary" if i == 0 else "secondary", width="stretch"):
                 clicked = lab
-    return clicked, dict(name=name, side=side, on_site=on_site, days=days, every=every, p_start=p_start,
+    return clicked, dict(name=name, side=side, on_site=on_site, days=days, p_start=p_start,
                          p_end=p_end, times=times, courts=courts, coaches_sel=coaches_sel, coaches_new=coaches_new,
                          tourns=tourns)
 
@@ -201,7 +201,9 @@ def program_row(v: dict) -> tuple[list[str], dict]:
         problems.append("Pick at least one day.")
     if not v["times"]:
         problems.append("Pick at least one timeslot.")
-    if not v["every"] and v["p_end"] < v["p_start"]:
+    if v["p_start"] is None or v["p_end"] is None:
+        problems.append("Give it a start date and an end date.")
+    elif v["p_end"] < v["p_start"]:
         problems.append("The end date is before the start date.")
     for d in v["days"]:
         ok = [t for t in v["times"] if (t in WEEKEND_KEYS) == (d in ("Sat", "Sun"))]
@@ -214,7 +216,7 @@ def program_row(v: dict) -> tuple[list[str], dict]:
         "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(v["courts"])) or "TBD",
         "coaches": "; ".join(dict.fromkeys(v["coaches_sel"] + parse_names(v["coaches_new"]))),
         "on_site": "Yes" if v["on_site"] else "No",
-        "dates": "" if v["every"] else f"{v['p_start']:%m/%d/%Y}-{v['p_end']:%m/%d/%Y}",
+        "dates": (f"{v['p_start']:%m/%d/%Y}-{v['p_end']:%m/%d/%Y}" if v["p_start"] and v["p_end"] else ""),
     }
     return problems, row
 
@@ -322,8 +324,10 @@ def render():
         rows_of = inp.locals.index[inp.locals["program"].astype(str).str.strip() == one_prog].tolist()
         lps = [lp for lp in cleaned.locals if lp.name == one_prog]
         if one_mode == "Cancel one session":
-            run_dates = sorted({d for d in pd.date_range(start, end).date for lp in lps if lp.runs_on(d)
-                                and d not in closures})
+            # Every session it has left, over its own dates (not just the dates being scheduled).
+            spans = [r for lp in lps for r in lp.ranges] or [(start, end)]
+            run_dates = sorted({d for a_, b_ in spans for d in pd.date_range(a_, b_).date
+                                for lp in lps if lp.runs_on(d) and d not in closures})
             if not run_dates:
                 st.caption(f"{one_prog} has no sessions left in these dates.")
             else:
@@ -342,7 +346,7 @@ def render():
         else:
             dv = program_defaults(inp.locals.fillna("").loc[rows_of[0]].to_dict() if rows_of else None)
             c1, c2, c3 = st.columns(3)
-            a_day = c1.date_input("Date", value=start, min_value=start, max_value=end, format="MM/DD/YYYY",
+            a_day = c1.date_input("Date", value=dv["p_start"] or start, format="MM/DD/YYYY",
                                   key=f"one_add_day_{ver}")
             wkend = a_day.weekday() >= 5
             t_opts = [t for t in SLOT_CHOICES if (t in WEEKEND_KEYS) == wkend]
@@ -386,7 +390,7 @@ def render():
             st.error(" ".join(problems + t_problems))
         elif try_locals(pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True), f"add {row['program']}",
                         replace_program_tournaments("", t_rows) if t_rows else None):
-            when = "every week" if v["every"] else f"{v['p_start']:%b %-d}–{v['p_end']:%b %-d}"
+            when = f"{v['p_start']:%b %-d}–{v['p_end']:%b %-d}"
             st.session_state.flash = done_msg(f"Added {row['program']} ({row['days']}, {when})"
                                               + (f" with {plural(len(t_rows), 'tournament date')}" if t_rows else ""))
             st.rerun()
@@ -397,6 +401,10 @@ def render():
         st.caption("No programs yet.")
     else:
         view = inp.locals.copy().fillna("")
+        undated = sorted({str(r["program"]).strip() for _, r in view.iterrows() if not str(r["dates"]).strip()})
+        if undated:
+            st.warning(f"**No start and end date:** {', '.join(undated)}. Until they have dates they block their "
+                       "courts every week; pick one under **Edit a program** to set them.")
         # Show the side the colors actually use (guessed from the name when blank).
         view["side"] = [program_side(s, n) or "Other" for s, n in zip(view["side"], view["program"])]
         st.dataframe(view.rename(columns={"program": "Program", "side": "Side", "days": "Days", "time": "Time",

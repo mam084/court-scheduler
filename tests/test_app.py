@@ -28,9 +28,17 @@ def _save(store, name, seed, pid=None):
     return pid
 
 
-def test_one_schedule_new_dates_and_switching_between_them(db):
-    """The club has one schedule; new dates are added to it, both stay in
-    the Dates menu, and each keeps its own built schedule."""
+def _auto_schedule(at, a, b):
+    """Pick dates under Auto-schedule in the sidebar and press it."""
+    at.sidebar.date_input(key=next(w.key for w in at.sidebar.date_input if w.key.startswith("as_from"))).set_value(a)
+    at.sidebar.date_input(key=next(w.key for w in at.sidebar.date_input if w.key.startswith("as_to"))).set_value(b)
+    at.sidebar.button(key="as_go").click().run()
+    return at
+
+
+def test_one_schedule_is_one_calendar(db):
+    """The club has one schedule and it's one calendar: an admin schedules some dates, and moving
+    around the calendar works on whichever scheduled dates are being looked at (no Dates menu)."""
     from streamlit.testing.v1 import AppTest
 
     from scheduler.storage import MAIN_ID, all_periods
@@ -39,27 +47,28 @@ def test_one_schedule_new_dates_and_switching_between_them(db):
     at.run()
     assert not at.exception
     assert at.session_state["project_id"] == MAIN_ID
+    assert not any(sb.label == "Dates" for sb in at.sidebar.selectbox)
     nov_practices = len(at.session_state["result"].assignments)
-    at.sidebar.date_input(key="new_from").set_value(date(2026, 12, 5))
-    at.sidebar.date_input(key="new_to").set_value(date(2026, 12, 20))
-    next(b for b in at.sidebar.button if b.label == "Start these dates").click().run()
+    _auto_schedule(at, date(2026, 12, 5), date(2026, 12, 20))
     assert not at.exception, at.exception
     assert at.session_state["range_start"] == date(2026, 12, 5)
     assert at.session_state["result"] is not None and at.session_state["result"].start == date(2026, 12, 5)
+    assert at.session_state["view_day"] == date(2026, 12, 5)
     periods = all_periods(db.get(pid)["payload"])
     assert set(periods) == {"2026-11-01_2026-11-30", "2026-12-05_2026-12-20"}
-    # Back to November: its schedule is still there; no other saved schedules appeared.
-    menu = next(sb for sb in at.sidebar.selectbox if sb.label == "Dates")
-    menu.set_value("2026-11-01_2026-11-30").run()
+    # Back a few weeks on the court view: November's schedule, still as it was.
+    at.radio(key="nav").set_value("Court view").run()
+    for _ in range(3):
+        next(b for b in at.button if b.key == "cv_prev").click().run()
     assert not at.exception
     assert at.session_state["range_start"] == date(2026, 11, 1)
     assert len(at.session_state["result"].assignments) == nov_practices
     assert [p["id"] for p in db.list()] == [MAIN_ID]
-    # A refresh opens the dates last worked on, with both still listed.
+    # A refresh opens on the calendar with both still there.
     at2 = AppTest.from_file("../app.py", default_timeout=180)
     at2.run()
-    assert at2.session_state["range_start"] == date(2026, 11, 1)
-    assert len(next(sb for sb in at2.sidebar.selectbox if sb.label == "Dates").options) == 2
+    assert not at2.exception
+    assert len(all_periods(db.get(pid)["payload"])) == 2
 
 
 def test_first_open_moves_an_old_saved_schedule_into_the_one_schedule(db):
@@ -108,7 +117,7 @@ def test_every_section_renders_and_publish_flow(db):
     assert at.session_state["nav"] == "Publish"
     assert len(db.get(pid)["payload"]["published"]) == 1
     # Rebuild: keeps the published schedule, nothing changed.
-    next(b for b in at.button if "Auto-schedule" in b.label).click().run()
+    at.sidebar.button(key="as_go").click().run()
     assert not at.exception
     assert at.session_state["result"].metrics["moved_from_previous"] == 0
     assert any("No changes" in s.value for s in at.success)
@@ -126,13 +135,15 @@ def test_program_edits_stay_on_programs_and_can_wait_for_rebuild(db):
     pick = next(s for s in at.selectbox if s.key and s.key.startswith("edit_pick_"))
     pick.set_value(pick.options[0]).run()
     assert at.session_state["nav"] == "Programs"
+    next(d for d in at.date_input if d.label == "Start date").set_value(date(2026, 11, 1))
+    next(d for d in at.date_input if d.label == "End date").set_value(date(2026, 11, 30))
     save = next(b for b in at.button if "Save changes" in b.label)
     save.click().run()
     assert not at.exception
     assert at.session_state["nav"] == "Programs"
     assert at.session_state["result"] is before          # no rebuild yet
     assert at.session_state["pending_rebuild"] == "Programs changed"
-    next(b for b in at.button if "Auto-schedule" in b.label).click().run()
+    at.sidebar.button(key="as_go").click().run()
     assert at.session_state["result"] is not before
     assert "pending_rebuild" not in at.session_state
 
@@ -144,8 +155,10 @@ def test_court_view_opens_on_first_week(db):
     at.query_params["project"] = pid
     at.run()
     show = next(s for s in at.selectbox if s.label == "Show")
-    assert show.value == "Week of Nov 1"
-    assert "Weekly template" in show.options
+    assert show.value == "Week" and "Weekly template" in show.options
+    assert any("Week of Nov 1–7" in m.value for m in at.markdown)
+    show.set_value("Weekly template").run()
+    assert not at.exception
 
 
 def test_suggest_a_preference_adds_wish_and_not_preferred(db):
@@ -260,7 +273,7 @@ def test_restore_published_version_button(db):
     want = {(p["name"], p["date"], p["slot"], int(p["court"])) for p in v1["practices"]}
     # Rebuild from scratch so the schedule drifts away from v1.
     at.session_state["keep_prev"] = False
-    next(b for b in at.button if "Auto-schedule" in b.label).click().run()
+    at.sidebar.button(key="as_go").click().run()
     at.session_state["keep_prev"] = True
     at.run()
     next(b for b in at.button if "Restore this version" in b.label).click().run()
@@ -382,7 +395,7 @@ def test_first_sign_in_seeds_admins_and_coach_sees_limited_app(db, monkeypatch):
     views = at.radio(key="nav").options
     assert "Programs" not in views and "Inputs" not in views and "Access" not in views
     assert "Review" not in views                                     # admins only
-    assert not any("Auto-schedule" in b.label for b in at.button)
+    assert not any(b.key == "as_go" for b in at.button)
     # Not linked yet: can't edit any team.
     at.radio(key="nav").set_value("Edit practices").run()
     assert any("isn't linked" in i.value for i in at.info)
@@ -431,7 +444,7 @@ def test_app_admin_can_view_as_and_manage_access(db, monkeypatch):
     at.selectbox(key="view_as").set_value("Scheduling admin").run()
     views = at.radio(key="nav").options
     assert "Programs" in views and "Access" not in views   # View as shows exactly what that role sees
-    assert any("Auto-schedule" in b.label for b in at.button)
+    assert any(b.key == "as_go" for b in at.button)
     at.selectbox(key="view_as").set_value("Myself").run()
     assert "Access" in at.radio(key="nav").options
 
@@ -552,10 +565,22 @@ def test_open_days_form_opens_a_break_in_blocks(db):
     at.text_input(key="o_note").set_value("Thanksgiving week")
     next(b for b in at.button if b.label == "Open these days").click().run()
     assert not at.exception, at.exception
+    assert "11/23/2026-11/25/2026" in set(at.session_state["inp"].weekends["date"])
+    # Thanksgiving week is all open days now: an open week, so nothing's scheduled automatically.
     pr = at.session_state["result"].assignments
     pr = pr[(pr["kind"] == "Practice") & pr["date"].isin([date(2026, 11, d) for d in (23, 24, 25)])]
-    assert len(pr) and set(pr["slot"]) <= {"9AM", "11AM", "1PM", "3PM", "5PM", "7PM"}
-    assert "11/23/2026-11/25/2026" in set(at.session_state["inp"].weekends["date"])
+    assert pr.empty
+    # A coach's practice added by hand goes in a 2-hour block.
+    team = at.session_state["inp"].teams["team"].iloc[0]
+    at.radio(key="nav").set_value("Edit practices").run()
+    at.selectbox(key="ed_team").set_value(team).run()
+    at.radio(key="ed_mode").set_value("Add a practice").run()
+    at.date_input(key="ed_ad").set_value(date(2026, 11, 24)).run()
+    at.selectbox(key="ed_as").set_value("11AM").run()
+    next(b for b in at.button if b.label == "Add it").click().run()
+    assert not at.exception, at.exception
+    a = at.session_state["result"].assignments
+    assert ((a["name"] == team) & (a["date"] == date(2026, 11, 24)) & (a["slot"] == "11AM")).any()
 
 
 def test_coach_opens_on_the_published_dates_covering_today(db, monkeypatch):
@@ -635,54 +660,46 @@ def test_edit_a_tournament(db):
     assert not any("coverage flag to sort out" in e.label for e in at.expander)   # no longer the same weekend
 
 
-def test_show_every_date_scheduled(db):
+def test_calendar_moves_across_scheduled_and_unscheduled_dates(db):
     from streamlit.testing.v1 import AppTest
     _save(db, "November", 41)
     at = AppTest.from_file("../app.py", default_timeout=180)
     at.run()
-    at.sidebar.date_input(key="new_from").set_value(date(2026, 12, 1))
-    at.sidebar.date_input(key="new_to").set_value(date(2026, 12, 14))
-    next(b for b in at.sidebar.button if b.label == "Start these dates").click().run()
-    assert not at.exception
-    at.radio(key="nav").set_value("Court view").run()
-    at.toggle(key="all_dates").set_value(True).run()
-    assert not at.exception, at.exception
-    show = next(sb for sb in at.selectbox if sb.label == "Show")
-    assert "Week of Nov 1" in show.options and "Week of Dec 6" in show.options
-    show.set_value("Week of Nov 1").run()
+    _auto_schedule(at, date(2026, 12, 1), date(2026, 12, 14))
     assert not at.exception
     at.radio(key="nav").set_value("Calendar").run()
+    assert not at.exception, at.exception
+    assert any("December 2026" in m.value for m in at.markdown)
+    next(b for b in at.button if b.key == "cal_prev").click().run()      # November
     assert not at.exception
-    assert at.session_state["range_start"] == date(2026, 12, 1)    # still working on December
+    assert any("November 2026" in m.value for m in at.markdown)
+    assert at.session_state["range_start"] == date(2026, 11, 1)
+    for _ in range(3):                                                    # January: not scheduled
+        next(b for b in at.button if b.key == "cal_next").click().run()
+    assert not at.exception, at.exception
+    assert any("Not scheduled yet" in c.value for c in at.caption)
+    assert at.session_state["range_start"] == date(2026, 12, 1)          # stays on the last dates looked at
 
 
-def test_new_dates_show_programs_before_auto_schedule(db):
-    """Dates that haven't been built yet still show their programs on the
-    court view and calendar."""
+def test_dates_not_scheduled_show_programs_and_nothing_is_built(db):
+    """Dates that haven't been scheduled still show their programs on the court view and calendar,
+    and looking at them never schedules them."""
     from streamlit.testing.v1 import AppTest
-    _save(db, "November", 42)
+
+    from scheduler.storage import all_periods
+    pid = _save(db, "November", 42)
     at = AppTest.from_file("../app.py", default_timeout=180)
     at.run()
-    at.sidebar.date_input(key="new_from").set_value(date(2026, 12, 6))
-    at.sidebar.date_input(key="new_to").set_value(date(2026, 12, 20))
-    next(b for b in at.sidebar.button if b.label == "Start these dates").click().run()
-    at.session_state["result"] = None            # as if it hadn't been built
     at.radio(key="nav").set_value("Court view").run()
+    at.date_input(key="cv_pick").set_value(date(2026, 12, 13)).run()
     assert not at.exception, at.exception
-    assert any("Not auto-scheduled yet" in i.value for i in at.info)
-    assert any("Winter" in m.value or "cs-grid" in m.value for m in at.markdown)
-    show = next(sb for sb in at.selectbox if sb.label == "Show")
-    assert "Week of Dec 6" in show.options and "Week of Dec 20" in show.options
-    show.set_value("Week of Dec 13").run()
-    assert not at.exception
+    assert any("Not scheduled yet" in c.value for c in at.caption)
+    assert any("cs-grid" in m.value for m in at.markdown)
     at.radio(key="nav").set_value("Calendar").run()
     assert not at.exception, at.exception
-    assert any("cs-cal" in m.value or "<table" in m.value for m in at.markdown)
-    assert at.session_state["result"] is None    # nothing was auto-scheduled
+    assert any("cs-cal" in m.value for m in at.markdown)
+    assert set(all_periods(db.get(pid)["payload"])) == {"2026-11-01_2026-11-30"}   # nothing was auto-scheduled
 
-
-
-# ----------------------------------------------------------- requests --
 
 def test_coach_request_then_another_admin_approves(db, monkeypatch):
     pid = _save(db, "Roles", 31)
@@ -786,10 +803,8 @@ def test_two_admins_on_different_dates_keep_each_others_work(db):
     a.run()
     b = AppTest.from_file("../app.py", default_timeout=180)
     b.run()
-    # B starts December (and saves it).
-    b.sidebar.date_input(key="new_from").set_value(date(2026, 12, 1))
-    b.sidebar.date_input(key="new_to").set_value(date(2026, 12, 14))
-    next(x for x in b.sidebar.button if x.label == "Start these dates").click().run()
+    # B schedules December (and saves it).
+    _auto_schedule(b, date(2026, 12, 1), date(2026, 12, 14))
     assert "2026-12-01_2026-12-14" in all_periods(db.get(MAIN_ID)["payload"])
     # A, still on November, changes something: December must survive A's save.
     a.session_state["makeup"] = False
@@ -831,3 +846,97 @@ def test_clicking_around_does_not_query_the_database(db):
         assert 0 < n["q"] <= 6
     finally:
         event.remove(Engine, "before_cursor_execute", count)
+
+
+# ------------------------------------------------- batch: Oct 28, 2026 --
+
+def test_scheduling_over_scheduled_dates_trims_them_and_keeps_practices(db):
+    """Auto-scheduling dates that overlap scheduled ones takes those days out of the old run (the
+    rest of it stays) and starts from the practices already there."""
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.storage import all_periods
+    pid = _save(db, "November", 46)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    before = at.session_state["result"].assignments
+    before = before[(before["kind"] == "Practice") & before["date"].map(lambda d: d >= date(2026, 11, 15))]
+    _auto_schedule(at, date(2026, 11, 15), date(2026, 12, 5))
+    assert not at.exception, at.exception
+    periods = all_periods(db.get(pid)["payload"])
+    assert set(periods) == {"2026-11-01_2026-11-14", "2026-11-15_2026-12-05"}
+    nov = periods["2026-11-01_2026-11-14"]["result"]["assignments"]
+    assert nov and all(x["date"] <= "2026-11-14" for x in nov)
+    now = at.session_state["result"].assignments
+    keep = {(r.name, r.date, r.slot) for r in now.itertuples() if r.kind == "Practice"}
+    kept = sum((r.name, r.date, r.slot) in keep for r in before.itertuples())
+    assert kept >= 0.8 * len(before)
+    # The middle of a scheduled run can't be cut out.
+    _auto_schedule(at, date(2026, 11, 20), date(2026, 11, 25))
+    assert any("in the middle of" in e.value for e in at.sidebar.error)
+
+
+def test_request_shows_where_it_goes_and_never_bumps_a_team(db, monkeypatch):
+    """A coach asks for an extra practice on a court that's taken: the admin sees it on the court
+    view, it goes on an open court, and the team already there stays put."""
+    pid = _save(db, "Roles", 47)
+    head, team = _head_of_first_team(db, pid)
+    db.save_user("coach@sdvbc.org", "Coach", head)
+    at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
+    a = at.session_state["result"].assignments
+    day = date(2026, 11, 4)
+    taken = a[(a["kind"] == "Practice") & (a["date"] == day) & (a["slot"] == "5:30") & (a["name"] != team)]
+    assert len(taken)
+    other, court = taken.iloc[0]["name"], int(taken.iloc[0]["court"])
+    at.radio(key="nav").set_value("Edit practices").run()
+    at.selectbox(key="ed_team").set_value(team).run()
+    at.radio(key="ed_mode").set_value("Ask for an extra practice").run()
+    at.date_input(key=f"rq_x_d_{team}").set_value(day).run()
+    at.selectbox(key=f"rq_x_t_{team}").set_value("5:30").run()
+    at.selectbox(key=f"rq_x_c_{team}").set_value(court).run()
+    next(b for b in at.button if b.key == f"rq_x_go_{team}").click().run()
+    assert not at.exception, at.exception
+    req = db.requests("pending")[0]
+    assert req["detail"]["rows"][0]["court"] == str(court)
+    db.save_user("cliff@sdvbc.org", "Cliff", "", False, True)
+    at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Requests").run()
+    assert any(f"Court {court} is taken" in w.value for w in at.warning)
+    assert any("requested" in m.value and "cs-grid" in m.value for m in at.markdown)
+    put = at.selectbox(key=f"rq_court_{req['id']}")
+    assert court not in put.options
+    put_on = put.value
+    next(b for b in at.button if b.key == f"rq_ok_{req['id']}").click().run()
+    assert not at.exception, at.exception
+    assert db.get_request(req["id"])["status"] == "approved"
+    a2 = at.session_state["result"].assignments
+    mine = a2[(a2["name"] == team) & (a2["date"] == day) & (a2["slot"] == "5:30")]
+    assert len(mine) == 1 and int(mine.iloc[0]["court"]) == put_on
+    still = a2[(a2["name"] == other) & (a2["date"] == day) & (a2["slot"] == "5:30")]
+    assert len(still) == 1 and int(still.iloc[0]["court"]) == court
+
+
+def test_program_needs_start_and_end_date(db):
+    from streamlit.testing.v1 import AppTest
+    _save(db, "Programs", 48)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    at.radio(key="nav").set_value("Programs").run()
+    assert not any(c.label == "Every week" for c in at.checkbox)
+    n = len(at.session_state["inp"].locals)
+    form_inputs = [t for t in at.text_input if t.label == "Program name"]
+    form_inputs[-1].set_value("G 12 Clinic").run()
+    next(m for m in reversed(at.multiselect) if m.label == "Days").set_value(["Tue"]).run()
+    next(m for m in reversed(at.multiselect) if m.label == "Time").set_value(["5:30"]).run()
+    next(b for b in at.button if b.label == "Add program").click().run()
+    assert any("start date and an end date" in e.value for e in at.error)
+    assert len(at.session_state["inp"].locals) == n
+
+
+def test_local_tournaments_wear_their_programs_colors():
+    from scheduler.data import Tournament
+    from scheduler.views import SIDE_COLORS, _tourn_chip
+    g = Tournament("G 14 League Tournament", "local", date(2026, 11, 14), date(2026, 11, 14), [], [1, 2], [],
+                   side="Girls")
+    b = Tournament("Boys Bash", "local", date(2026, 11, 15), date(2026, 11, 15), [], [1, 2], [], side="Boys")
+    assert SIDE_COLORS["Girls"][0] in _tourn_chip(g) and SIDE_COLORS["Boys"][0] in _tourn_chip(b)
