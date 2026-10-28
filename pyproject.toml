@@ -27,4 +27,5 @@ ignore = [
 "tests/*" = ["B011"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["scheduler"]
+known-first-party = ["scheduler", "ui"]
+split-on-trailing-comma = false

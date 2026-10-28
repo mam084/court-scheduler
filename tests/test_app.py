@@ -752,3 +752,24 @@ def test_publish_email_needs_a_connection(db, monkeypatch):
     next(b for b in at.button if b.label == "Publish this schedule").click().run()
     assert not at.exception, at.exception
     assert any("email isn't connected" in s.value or "Not sent" in s.value for s in at.success)
+
+
+def test_every_section_has_a_tab_module():
+    """The section menu and the tab modules stay in step."""
+    from ui.main import SECTIONS
+    from ui.nav import ALL_VIEWS
+    assert set(SECTIONS) == set(ALL_VIEWS)
+    assert all(callable(m.render) for m in SECTIONS.values())
+
+
+def test_page_values_are_kept_per_visitor(db):
+    """S lives in each visitor's own session state: two people's pages never mix
+    (one person's admin rights or dates can't leak into another's page)."""
+    from streamlit.testing.v1 import AppTest
+    _save(db, "November", 43)
+    admin = AppTest.from_file("../app.py", default_timeout=180)
+    admin.run()
+    coach = AppTest.from_file("../app.py", default_timeout=180)
+    coach.run()
+    assert admin.session_state["_page_state"] is not coach.session_state["_page_state"]
+    assert admin.session_state["_page_state"].CAN is True
