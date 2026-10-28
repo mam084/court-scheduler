@@ -25,12 +25,22 @@ Use the same Google Cloud project as sign-in (or create one at [console.cloud.go
 
 ## 2. Add the key to the app's secrets
 
-Streamlit Cloud → the app → **⋮ → Settings → Secrets**. Paste the key file's contents as one line in single quotes:
+Streamlit Cloud → the app → **⋮ → Settings → Secrets**. Open the key file in a text editor, copy **all** of it, and paste it between triple single quotes at the bottom of the secrets (keep everything already there, like `[auth]`):
 
 ```toml
-GOOGLE_SERVICE_ACCOUNT = '{"type": "service_account", "project_id": "...", "private_key": "-----BEGIN PRIVATE KEY-----\n...", "client_email": "court-scheduler@....iam.gserviceaccount.com", ...}'
+GOOGLE_SERVICE_ACCOUNT = '''
+{
+  "type": "service_account",
+  "project_id": "...",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+  "client_email": "court-scheduler@....iam.gserviceaccount.com",
+  ...
+}
+'''
 CLUB_ADDRESS = "Club address for the event location (optional)"
 ```
+
+Paste the file exactly as it is: don't remove the `\n`s inside the private key. **Save**; the app restarts in about a minute. The Publish tab then shows the robot's email instead of "Google Calendar isn't connected yet".
 
 ## 3. Make a test calendar and share it
 
