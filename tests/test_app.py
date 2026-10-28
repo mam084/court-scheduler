@@ -644,3 +644,28 @@ def test_show_every_date_scheduled(db):
     at.radio(key="nav").set_value("Calendar").run()
     assert not at.exception
     assert at.session_state["range_start"] == date(2026, 12, 1)    # still working on December
+
+
+def test_new_dates_show_programs_before_auto_schedule(db):
+    """Dates that haven't been built yet still show their programs on the
+    court view and calendar."""
+    from streamlit.testing.v1 import AppTest
+    _save(db, "November", 42)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    at.sidebar.date_input(key="new_from").set_value(date(2026, 12, 6))
+    at.sidebar.date_input(key="new_to").set_value(date(2026, 12, 20))
+    next(b for b in at.sidebar.button if b.label == "Start these dates").click().run()
+    at.session_state["result"] = None            # as if it hadn't been built
+    at.radio(key="nav").set_value("Court view").run()
+    assert not at.exception, at.exception
+    assert any("Not auto-scheduled yet" in i.value for i in at.info)
+    assert any("Winter" in m.value or "cs-grid" in m.value for m in at.markdown)
+    show = next(sb for sb in at.selectbox if sb.label == "Show")
+    assert "Week of Dec 6" in show.options and "Week of Dec 20" in show.options
+    show.set_value("Week of Dec 13").run()
+    assert not at.exception
+    at.radio(key="nav").set_value("Calendar").run()
+    assert not at.exception, at.exception
+    assert any("cs-cal" in m.value or "<table" in m.value for m in at.markdown)
+    assert at.session_state["result"] is None    # nothing was auto-scheduled

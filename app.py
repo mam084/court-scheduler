@@ -676,7 +676,7 @@ if CAN and inp.teams.dropna(how="all").empty:
     st.info("**Getting these dates ready:** 1) set up the locals in **Programs**, tournaments in **Tournaments** and "
             "any weekends or school-break days in **Open days**; 2) **Import coaches' spreadsheet** in the sidebar "
             "for the teams, no-dates and wishlists; 3) **Auto-schedule**.")
-elif result is None:
+elif result is None and st.session_state.get("nav") not in ("Court view", "Calendar"):  # those show their own note
     st.info("Press **Auto-schedule** in the sidebar to build the schedule for these dates. "
             "You can review and edit the inputs in the **Inputs** tab first." if CAN else
             "These dates haven't been scheduled yet.")
@@ -836,7 +836,37 @@ def season_result():
                           practice_counts=result.practice_counts, broken=result.broken), s_all, e_all
 
 
+def programs_preview():
+    """Before these dates are auto-scheduled: the programs, tournaments,
+    open days and closures on their own, so the court view and calendar
+    show them right away. Rebuilt only when one of those changes."""
+    from scheduler.data import ATTRS as _AT
+    base = ScheduleInput(**{a: empty(sh) for sh, a in _AT.items()})
+    for attr in ("locals", "weekends", "closures", "tournaments"):
+        setattr(base, attr, getattr(inp, attr))
+    sig = hashlib.sha1(json.dumps([base.to_records(), str(start), str(end)], sort_keys=True,
+                                  default=str).encode()).hexdigest()
+    hit = st.session_state.get("_preview")
+    if hit and hit[0] == sig:
+        return hit[1]
+    try:
+        r_ = solve(base, start, end, time_limit_s=5)
+    except ValueError:
+        r_ = None
+    r_ = r_ if r_ is not None and r_.ok else None
+    st.session_state._preview = (sig, r_)
+    return r_
+
+
 _view_saved = (result, start, end)
+PREVIEW = False
+if VIEW in (TAB_COURT, TAB_CAL) and result is None and cleaned is not None:
+    result = programs_preview()
+    PREVIEW = result is not None
+    if PREVIEW:
+        st.info("**Not auto-scheduled yet.** Showing the programs, tournaments and open days for these dates. "
+                + ("Press **Auto-schedule** when the teams are in to add practices." if CAN else
+                   "Practices show up once the scheduling admins build these dates."))
 if VIEW in (TAB_COURT, TAB_CAL) and result is not None and st.session_state.get("periods"):
     if st.toggle("Show every date scheduled", key="all_dates",
                  help="Include the other dates in the Dates menu (each as last built), so you can look back or "
@@ -850,7 +880,8 @@ if VIEW == TAB_COURT:
     else:
         a = result.assignments
         stripes = club_stripes(a["club"])
-        weeks = sorted({week_start(d) for d in a["date"]})
+        weeks = sorted({week_start(d) for d in a["date"]}
+                       | {week_start(d.date()) for d in pd.date_range(start, end, freq="7D")} | {week_start(end)})
         options = ["Weekly template"] + [f"Week of {w:%b %-d}" for w in weeks]
         c1, c2 = st.columns([1, 2])
         pick = c1.selectbox("Show", options, index=1 if weeks else 0,  # open on the first week
