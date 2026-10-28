@@ -940,3 +940,38 @@ def test_local_tournaments_wear_their_programs_colors():
                    side="Girls")
     b = Tournament("Boys Bash", "local", date(2026, 11, 15), date(2026, 11, 15), [], [1, 2], [], side="Boys")
     assert SIDE_COLORS["Girls"][0] in _tourn_chip(g) and SIDE_COLORS["Boys"][0] in _tourn_chip(b)
+
+
+def test_hand_edits_on_published_dates_move_nobody_else(db):
+    """Once dates are published, moving or adding a practice by hand leaves every other team's
+    practices exactly as they were; a taken court is refused."""
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Published", 49)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Publish").run()
+    next(b for b in at.button if "Publish this schedule" in b.label).click().run()
+    assert not at.exception, at.exception
+    a = at.session_state["result"].assignments
+    pr = a[a["kind"] == "Practice"]
+    team = pr["name"].iloc[0]
+    others = {(r.name, r.date, r.slot, int(r.court)) for r in pr.itertuples() if r.name != team}
+    day = date(2026, 11, 4)
+    taken = pr[(pr["date"] == day) & (pr["slot"] == "5:30") & (pr["name"] != team)]
+    at.radio(key="nav").set_value("Edit practices").run()
+    at.selectbox(key="ed_team").set_value(team).run()
+    at.radio(key="ed_mode").set_value("Add a practice").run()
+    at.date_input(key="ed_ad").set_value(day).run()
+    at.selectbox(key="ed_as").set_value("5:30").run()
+    if len(taken):  # a taken court is refused
+        at.selectbox(key="ed_ac").set_value(int(taken.iloc[0]["court"])).run()
+        next(b for b in at.button if b.label == "Add it").click().run()
+        assert any("is taken then" in e.value for e in at.error)
+        at.selectbox(key="ed_ac").set_value("Any").run()
+    next(b for b in at.button if b.label == "Add it").click().run()
+    assert not at.exception, at.exception
+    a2 = at.session_state["result"].assignments
+    pr2 = a2[a2["kind"] == "Practice"]
+    assert ((pr2["name"] == team) & (pr2["date"] == day) & (pr2["slot"] == "5:30")).any()
+    assert {(r.name, r.date, r.slot, int(r.court)) for r in pr2.itertuples() if r.name != team} == others

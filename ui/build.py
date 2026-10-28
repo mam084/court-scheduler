@@ -18,8 +18,8 @@ from ui.state import S
 
 
 def _held(assignments: pd.DataFrame, req: dict) -> pd.DataFrame:
-    """The practices to keep exactly as they are while a request goes in: all of them, minus the
-    ones the request moves or cancels."""
+    """The practices to keep exactly as they are while a change goes in (`change`: {"detail": {"rows",
+    "replace_pin"}}): all of them, minus the ones it moves or cancels."""
     from datetime import date as _date
     p = assignments[assignments["kind"] == "Practice"]
     det = req.get("detail") or {}
@@ -31,7 +31,9 @@ def _held(assignments: pd.DataFrame, req: dict) -> pd.DataFrame:
     rp = det.get("replace_pin")
     if rp:
         gone.add((rp[0], _date.fromisoformat(rp[1]), rp[2]))
-    keep = [(n, d, s) not in gone for n, d, s in zip(p["name"], p["date"], p["slot"])]
+    # New usual days for a team: that team's practices are free to move (everyone else's stay).
+    loose = {r["team"] for r in det.get("rows") or [] if str(r.get("action", "")).strip().lower().startswith("usual")}
+    keep = [(n, d, s) not in gone and n not in loose for n, d, s in zip(p["name"], p["date"], p["slot"])]
     return p[keep]
 
 
@@ -82,6 +84,7 @@ def run():
     if resolve and not built and not S.run_pressed:
         resolve = False
         st.session_state.pop("overrides_backup", None)
+        st.session_state.pop("holding", None)
         _appr = st.session_state.pop("approving", None)
         if _appr is not None:  # nothing built on its dates yet: it goes in when they're scheduled
             st.session_state.flash = decided(_appr, "approved", st.session_state.pop("approving_note", ""))
@@ -106,10 +109,12 @@ def run():
                         prev, prev_pat = st.session_state.result.assignments, st.session_state.result.pattern
                     elif seed is not None:  # new dates: start from what was there (and the usual week before)
                         prev, prev_pat = seed
-                if restore is None and st.session_state.get("approving") is not None and built:
-                    # Approving a coach's request: every other practice stays exactly where it is (same
-                    # time, same court), so the request never pushes anyone out.
-                    restore = _held(st.session_state.result.assignments, st.session_state.approving)
+                holding = st.session_state.get("holding")
+                if (restore is None and holding is not None and built
+                        and (st.session_state.get("approving") is not None or published)):
+                    # A coach's request, or a hand edit once these dates are published: every other
+                    # practice stays exactly where it is (same time, same court), so nobody's pushed out.
+                    restore = _held(st.session_state.result.assignments, holding)
                 st.session_state.result = solve(inp, start, end, time_limit_s=time_limit, makeup_closures=makeup,
                                                 previous=prev, previous_pattern=prev_pat, restore=restore)
                 if restore_ver is not None:
@@ -149,6 +154,8 @@ def run():
                     st.error(str(e))
             else:
                 st.session_state.pop("overrides_backup", None)
+        if not st.session_state.get("rebuild_queue"):
+            st.session_state.pop("holding", None)
         # Auto-schedule pressed and it built: start the page again so everything (the sidebar's dates
         # too) shows the new schedule.
         _r = st.session_state.get("result")

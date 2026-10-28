@@ -41,18 +41,38 @@ def _from_view(tp: pd.DataFrame) -> int:
 
 
 def court_pick(d, slot: str, key: str, team: str, moving: tuple | None = None):
-    """A court for a request: 'Any' or a court number, with which courts are open then."""
+    """A court for a request or a hand edit: 'Any' or a court number, with which courts are open then."""
     free = open_courts(d, slot, team, moving)
     opts = ["Any"] + COURTS
     lab = {c: ("Any open court" if c == "Any" else f"Court {c}" + ("" if free is None or c in free else " (taken)"))
            for c in opts}
     c = st.selectbox("Court", opts, format_func=lab.get, key=key,
-                     help="Ask for a particular court if it matters. Your request never bumps another team: if the "
-                          "court's taken then, the admins put it on an open one or get back to you.")
+                     help="Pick a court if it matters. Nothing already there gets pushed out: a request on a taken "
+                          "court goes on an open one, and once dates are published a hand edit only uses open "
+                          "courts.")
     if free is not None:
         st.caption("Open then: " + (", ".join(f"Court {x}" for x in free) if free else
                                     "no courts (everything's booked then, so the admins may suggest another time)"))
     return c
+
+
+def _placed(d, slot: str, court, team: str, moving: tuple | None = None):
+    """The court a hand-placed practice goes on. On published dates nobody else moves for it: it
+    goes on the court picked if that's open (or the first open one for 'Any'), and stops with a
+    message if the court picked is taken or nothing is open. Unpublished dates: as picked."""
+    hit = dates.run_at(d)
+    if hit is None or not dates.is_published(hit[0]):
+        return court
+    free = open_courts(d, slot, team, moving) or []
+    if court != "Any" and int(court) not in free:
+        st.error(f"Court {court} is taken then. These dates are published, so nobody else is moved: pick an "
+                 "open court" + (f" ({', '.join(map(str, free))})" if free else "") + " or another time.")
+        st.stop()
+    if not free:
+        st.error(f"No court is open {d:%a %b %-d} at {slot}. These dates are published, so nobody else is moved: "
+                 "pick another time.")
+        st.stop()
+    return free[0] if court == "Any" else court
 
 
 def _not_scheduled(d):
@@ -134,12 +154,12 @@ def render():
                                           index=(TEAM_SLOT_CHOICES.index(old["slot"])
                                                  if old["slot"] in TEAM_SLOT_CHOICES else 0),
                                           key=f"ed_ns_{pk}")
-                        nc = st.selectbox("Court", ["Any"] + COURTS, key=f"ed_nc_{pk}",
-                                          format_func=lambda c: "Any open court" if c == "Any" else f"Court {c}")
+                        nc = court_pick(nd, ns, f"ed_nc_{pk}", e_team, (old["date"], old["slot"]))
                         same = nd == old["date"] and ns == old["slot"]
                         same_court = same and (nc == "Any" or str(nc) == str(old["court"]))
                         if st.button("Move it", type="primary", width="stretch", disabled=same_court,
                                      help="Pick a different date, time or court first." if same_court else None):
+                            nc = _placed(nd, ns, nc, e_team, (old["date"], old["slot"]))
                             where = f" at {ns}" + ("" if nc == "Any" else f", Court {nc}")
                             apply_overrides([
                                 {"team": e_team, "action": "Remove", "date": f"{old['date']:%m/%d/%Y}", "days": "",
@@ -271,14 +291,14 @@ def render():
                 ad = st.date_input("Date", value=start, format="MM/DD/YYYY", key="ed_ad")
                 _not_scheduled(ad)
                 as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1, key="ed_as")
-                ac = st.selectbox("Court", ["Any"] + COURTS, key="ed_ac",
-                                  format_func=lambda c: "Any open court" if c == "Any" else f"Court {c}")
+                ac = court_pick(ad, as_, "ed_ac", e_team)
                 how_add = st.radio("This practice is", [f"Extra (on top of the week's {e_per_week})",
                                                         "Instead of one of the week's practices"], key="ed_add_how",
                                    help="Extra: the team keeps its usual practices and gets this one too. "
                                         "Instead: the scheduler drops another practice that week to make room.")
                 extra = how_add.startswith("Extra")
                 if st.button("Add it", type="primary", width="stretch"):
+                    ac = _placed(ad, as_, ac, e_team)
                     apply_overrides([{"team": e_team, "action": "Extra" if extra else "Add", "date": f"{ad:%m/%d/%Y}",
                                       "days": "", "time": as_, "court": "" if ac == "Any" else str(ac),
                                       "note": "extra practice" if extra else "added by hand"}],

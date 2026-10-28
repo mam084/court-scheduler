@@ -48,6 +48,8 @@ def apply_overrides(rows: list[dict], message: str, backup: pd.DataFrame | None 
     base = without_pin(inp.overrides, *replace_pin) if replace_pin else inp.overrides
     inp.overrides = pd.concat([base, pd.DataFrame(rows)], ignore_index=True)
     st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+    st.session_state.holding = {"detail": {"rows": rows, "replace_pin": [replace_pin[0], replace_pin[1].isoformat(),
+                                                                         replace_pin[2]] if replace_pin else None}}
     days = [d for d in [_row_date(r.get("date")) for r in rows] + [replace_pin[1] if replace_pin else None] if d]
     keys = []
     for d in days:
@@ -56,6 +58,7 @@ def apply_overrides(rows: list[dict], message: str, backup: pd.DataFrame | None 
             keys.append(hit[0])
     if days and not keys:  # none of its dates are scheduled yet
         st.session_state.pop("overrides_backup", None)
+        st.session_state.pop("holding", None)
         appr = st.session_state.pop("approving", None)
         st.session_state.flash = ((decided(appr, "approved", st.session_state.pop("approving_note", ""))
                                    if appr else message) + " It goes in when those dates are scheduled.")
