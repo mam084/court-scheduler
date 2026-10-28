@@ -154,7 +154,23 @@ pytest              # checks every hard rule on solved schedules
 ## Project layout
 
 ```
-app.py                  the Streamlit app (its docstring maps the sections)
+app.py                  page setup; runs ui.main
+ui/                     the Streamlit app (its __init__ docstring walks through a page run)
+  main.py               one page run, top to bottom
+  state.py              S: what this page run knows (inputs, dates, result, who's looking), per visitor
+  setup.py              password / Google sign-in, the database, the club's Google account
+  session.py            the club's one schedule and its runs of dates; autosave
+  sidebar.py            Dates menu, new dates, import, solver settings, Auto-schedule
+  build.py              these dates' inputs and settings; runs the solver when asked
+  header.py             title, summary numbers, warnings, the section menu
+  flags.py              coverage flags (resolvable)
+  dates.py              which dates the court view and calendar show (every date, preview)
+  edits.py              hand edits, coaches' preferences, change requests (shared by several tabs)
+  common.py             small shared helpers (wording, pickers, email)
+  nav.py                the sections and who sees them
+  tabs/                 one module per section, each with render(): court_view, calendar_view, edit,
+                        requests, programs, tournaments, open_days, privates, coaches, pecking,
+                        publish, review, inputs, access
 scheduler/              the scheduling engine, usable without Streamlit
   data.py               input tables, parsing, validation (clean), spreadsheet import/merge
   solver.py             two-stage CP-SAT scheduler (solve)
@@ -177,6 +193,10 @@ tests/                  hard rules, parsing, app flows (Streamlit AppTest), Goog
 docs/                   setup guides (sign-in, Google, calendars) and screenshots
 pyproject.toml          pytest and ruff (linter) settings
 ```
+
+To change a section, open its file in `ui/tabs/`. Each tab's `render()` starts by
+picking up the values it uses from `S` (e.g. `inp = S.inp`), so its dependencies are
+listed at the top.
 
 Checks before pushing: `pytest` and `ruff check .`
 
