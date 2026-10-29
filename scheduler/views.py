@@ -92,6 +92,17 @@ CSS = """
 .cs-tag { display: inline-block; font-size: 10.5px; font-weight: 700; border-radius: 4px; padding: 0 4px;
           margin-top: 2px; background: #FDE68A; color: #6B4A00; }
 .cs-tag.cs-xtra { background: #E0E7FF; color: #3730A3; }
+.cs-tblock { border-radius: 6px; padding: 6px 8px 6px 9px; margin: 0 0 4px 0; min-height: 56px;
+             border: 1px solid rgba(0,0,0,.08); border-left-width: 5px; display: flex; flex-direction: column;
+             justify-content: center; line-height: 1.25;
+             background-image: repeating-linear-gradient(135deg, transparent, transparent 6px,
+                                                         rgba(0,0,0,.035) 6px, rgba(0,0,0,.035) 12px); }
+.cs-tblock-wk { min-height: 110px; }
+.cs-tb-head { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; opacity: .7;
+              margin-bottom: 3px; }
+.cs-tb-name { font-weight: 700; font-size: 12.5px; }
+.cs-tb-name + .cs-tb-name { border-top: 1px solid rgba(0,0,0,.12); margin-top: 3px; padding-top: 3px; }
+.cs-grid td.cs-tcell { vertical-align: middle; }
 .cs-chip.cs-priv { background: #F5EEFF; color: #4C1D95; border-left-color: #8B5CF6; padding: 2px 5px; }
 .cs-chip.cs-priv span { font-size: 11px; }
 .cs-grid th .cs-thead-t { margin-top: 4px; text-align: left; font-weight: 600; }
@@ -278,6 +289,21 @@ def _tourn_chip(tn, compact=False) -> str:
             f'{html.escape(tn.label())}{extra}</div>')
 
 
+def _tourn_block(tns: list, weekend: bool = False) -> str:
+    """One block for a court's local tournaments that day: 'Local tournament · until 7 PM', then each
+    tournament's name. Girls blue / boys green when they're all one side, else grey."""
+    sides = {getattr(tn, "side", "") or "" for tn in tns}
+    side = sides.pop() if len(sides) == 1 else ""
+    bg, fg = SIDE_COLORS.get(side, LOCAL_COLORS)
+    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(side, "#9AA3B2")
+    head = f"Local tournament{'s' if len(tns) > 1 else ''} · until 7 PM"
+    names = "".join(f'<div class="cs-tb-name">{html.escape(tn.label())}</div>' for tn in tns)
+    title = "; ".join(f"{tn.name} (until 7 PM)" for tn in tns)
+    return (f'<div class="cs-tblock{" cs-tblock-wk" if weekend else ""}" '
+            f'style="background-color:{bg};color:{fg};border-left-color:{stripe}" title="{html.escape(title)}">'
+            f'<div class="cs-tb-head">{head}</div>{names}</div>')
+
+
 def _tourn_head_chip(tn) -> str:
     """A tournament under its day's name in the weekly grid."""
     cls = "cs-tourn" if tn.kind == "local" else "cs-travel"
@@ -361,12 +387,18 @@ def court_grid_html(
     for i, c in enumerate(rows_):
         pc = c not in COURTS
         cells: dict[str, list] = {}  # wd -> [(band, minutes, html)]
+        merged: set = set()          # (court, wd): a weekday whose first two bands are one tournament block
         for wd in cols:
             if wd in blocked:
                 continue
             weekend = block_day(wd)
             cell = by_cell.get((c, wd), [])
-            items = [(0, -1, _tourn_chip(tn, compact=True)) for tn in partial.get(wd, []) if c in tn.courts]
+            tns = [tn for tn in partial.get(wd, []) if c in tn.courts]
+            # Local tournaments on this court: one block, listing each of them, in place of the
+            # times they take (a weekday's 3:45 and 5:30; a weekend's blocks until 7 PM).
+            items = [(0, -1, _tourn_block(tns, weekend))] if tns else []
+            if tns and not weekend:
+                merged.add((c, wd))
             for r in cell:
                 m = _minutes(r["slot"])
                 items.append((0 if weekend else _band(m), m, _chip(r, stripes, highlight, local_coaches=local_coaches)))
@@ -405,10 +437,15 @@ def court_grid_html(
                 weekend = block_day(wd)
                 if weekend and band > 0:
                     continue  # covered by the weekend cell's rowspan
-                its = [x for x in cells[wd] if weekend or x[0] == band]
+                joined = (c, wd) in merged
+                if joined and band == 1:
+                    continue  # covered by the tournament block above
+                its = [x for x in cells[wd] if weekend or x[0] == band or (joined and band == 0 and x[0] == 1)]
                 html_ = "".join(h for _, _, h in sorted(its, key=lambda x: x[1]))
                 if weekend:
                     out.append(f'<td class="cs-wkend cs-wkcell" rowspan="{n_bands}">{html_}</td>')
+                elif joined and band == 0:
+                    out.append(f'<td class="cs-band cs-b0 cs-tcell" rowspan="2">{html_}</td>')
                 else:
                     out.append(f'<td class="cs-band cs-b{band}">{html_}</td>')
             out.append("</tr>")
