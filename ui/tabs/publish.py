@@ -340,13 +340,23 @@ def _calendars():
                                placeholder="All linked calendars",
                                help="Pick one or a few to try a sync on just them (e.g. your own team's), "
                                     "leaving every other calendar alone.")
+        extras = st.toggle("Include programs and tournaments", value=False, key="cal_extras",
+                           help="Off: only team practices are sent (to team and club calendars), and program "
+                                "calendars aren't touched. Programs and tournaments already on the calendars stay as "
+                                "they are, including any this app added before. On: programs and tournaments are "
+                                "sent too.")
+        if not extras:
+            links = {k: v for k, v in links.items() if k[0] != "Program"}
         if only_:
             links = {k: v for k, v in links.items() if f"{k[0]}: {k[1]}" in only_}
         ver_ = published[vi_]
         pr_ = practices_of(ver_)
         loc_ = result.assignments[result.assignments["kind"] == "Local"]
+        if not extras:
+            loc_ = loc_.iloc[0:0]
         side_ = {lp.name: lp.side for lp in cleaned.locals}
-        evs, missing = gcal.desired_events(pr_, loc_, cleaned.tournaments, cleaned.teams, links, start, end,
+        evs, missing = gcal.desired_events(pr_, loc_, cleaned.tournaments if extras else [], cleaned.teams, links,
+                                           start, end,
                                            test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
                                            side_)
         if missing and not only_:
@@ -354,12 +364,13 @@ def _calendars():
                        + (f" and {len(missing) - 12} more" if len(missing) > 12 else ""))
         all_cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else set(links.values()))
         ready = client is not None and (not test_mode or bool(test_cal.strip())) and bool(evs)
-        sig_ = (ver_["id"], test_mode, test_cal.strip(), tuple(sorted(links.items())), tuple(only_))
+        sig_ = (ver_["id"], test_mode, test_cal.strip(), tuple(sorted(links.items())), tuple(only_), extras)
         if st.button(f"Preview changes ({plural(len(evs), 'event')})", disabled=not ready, key="cal_preview",
                      help=None if ready else
                      "Connect Google, link calendars (and a test calendar in test mode) first."):
             with st.spinner("Reading the calendars…"):
-                st.session_state.cal_plan = (sig_, gcal.plan(evs, client, start, end, all_cals))
+                st.session_state.cal_plan = (sig_, gcal.plan(evs, client, start, end, all_cals,
+                                                             leave=() if extras else ("program", "tournament")))
         held = st.session_state.get("cal_plan")
         if held and held[0] == sig_:
             plan_ = held[1]

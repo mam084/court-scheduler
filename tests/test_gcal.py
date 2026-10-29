@@ -158,3 +158,24 @@ def test_rest_client_paths(monkeypatch):
     import pytest
     with pytest.raises(LookupError):
         gcal.CalendarClient({"client_email": "r@x"}, session=s).calendar_name("nope")
+
+
+def test_practices_only_leaves_programs_and_tournaments_alone():
+    """With programs and tournaments switched off, a sync sends only practices and never removes the
+    program or tournament events already on the calendars."""
+    inp, r, data, links = _club()
+    g = FakeGoogle()
+    full, _ = _events(r, data, links)
+    cals = sorted(set(links.values()))
+    gcal.apply(gcal.plan(full, g, S, E, cals), g)     # an earlier sync that sent everything
+    before = {cid: set(ev) for cid, ev in g.cals.items()}
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    only, _ = gcal.desired_events(pr, pr.iloc[0:0], [], data.teams,
+                                  {k: v for k, v in links.items() if k[0] != "Program"}, S, E, "")
+    assert only and all(e.key.split("|")[1] == "practice" for e in only)
+    p = gcal.plan(only, g, S, E, sorted({e.calendar_id for e in only}), leave=("program", "tournament"))
+    assert not p.delete and not p.create and not p.update
+    if any(e.key.split("|")[1] == "tournament" for e in full):   # without leave=, they'd be removed
+        assert gcal.plan(only, g, S, E, sorted({e.calendar_id for e in only})).delete
+    gcal.apply(p, g)
+    assert {cid: set(ev) for cid, ev in g.cals.items()} == before

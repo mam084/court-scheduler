@@ -313,10 +313,12 @@ def _when(v, all_day=False) -> str:
 
 
 def plan(events: list[Event], client: CalendarClient, start: date, end: date,
-         calendars: list[str] | None = None) -> Plan:
+         calendars: list[str] | None = None, leave: tuple[str, ...] = ()) -> Plan:
     """What a sync would change. Only reads the calendars.
     calendars: every calendar the sync covers (so a calendar whose events
-    all went away gets them removed), defaulting to those with events."""
+    all went away gets them removed), defaulting to those with events.
+    leave: kinds of the app's own events this sync leaves alone, e.g. ("program", "tournament")
+    when those aren't being sent (they're never removed then)."""
     p = Plan()
     by_cal = defaultdict(list)
     for e in events:
@@ -336,7 +338,9 @@ def plan(events: list[Event], client: CalendarClient, start: date, end: date,
             else:
                 p.unchanged += 1
         for eid, ev in have.items():
-            if eid not in want:
+            key = ev.get("extendedProperties", {}).get("private", {}).get("cs_key", "")
+            kind = key.split("|")[1] if key.count("|") >= 1 else ""  # 'Team: 16 Black|practice|...'
+            if eid not in want and not (leave and kind in leave):
                 st_ = ev.get("start", {})
                 p.delete.append((cid, eid, ev.get("summary", ""),
                                  st_.get("date") or str(st_.get("dateTime", ""))[:16].replace("T", " ")))
