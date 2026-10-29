@@ -5,7 +5,7 @@ pages (courts 1-4, then courts 5-7 and the practice court), days Sun-Sat
 across, and every court box lists every timeslot of that day as its own
 line: filled in where something is booked, a blank line to write on where
 it's open. The day's header carries tournaments and closures, and the
-second page ends with the day's practice counts and the week's total
+second page can end with the day's practice counts and the week's total (SHOW_COUNTS)
 against what the teams need.
 """
 
@@ -164,6 +164,11 @@ def _head(d: date, start: date, end: date, closures: dict, tourns: list, wd: str
     return f'<th class="dh">{wd} <span class="num">{d.day}</span>{note}</th>'
 
 
+# The practice counts under each day (and the week's total vs. needed) are off for now, until the
+# club decides what they should show. Flip to True to bring them back.
+SHOW_COUNTS = False
+
+
 def _footer(book: pd.DataFrame, days: list[date], start: date, end: date, need: int | None,
             block_days: set | frozenset = frozenset()) -> str:
     """Team practices per day (and per weekday time), the week's total vs. what teams need."""
@@ -224,7 +229,7 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
                     else:
                         cells.append(f'<td class="box">{_box(d, c, book, tourns, pv, local_coaches, block_days)}</td>')
                 rows.append(f'<tr{cls}><td class="ct">{cname}</td>{"".join(cells)}</tr>')
-            if i == len(HALVES) - 1:
+            if SHOW_COUNTS and i == len(HALVES) - 1:
                 rows.append(_footer(book, days, start, end, need_by_week.get(ws), block_days))
             rows.append("</tbody></table>")
             parts.append(f'<section class="cs-week"><h2>{month} <span>· week of {ws:%b %-d} · {label} · '

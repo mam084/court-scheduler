@@ -69,15 +69,17 @@ def render():
         m = result.metrics
         st.caption(f"**{range_label(start, end)}** (the scheduled dates you're looking at)"
                    + ("" if st.session_state.get("published") else " · not published yet"))
-        c = st.columns(6)
-        c[0].metric("Practices", m["practices_scheduled"])
-        c[1].metric("Missed", m["missed_practices"], help="Practices short of each team's weekly target")
-        c[2].metric("Weekend practices", m["weekend_practices"])
-        c[3].metric("Wishlist 1st choice", f"{m['wishlist_pct']}%" if m["wishlist_pct"] is not None else "–",
-                    help="Weekday practices matching the team's 1st-choice wishlist")
-        c[4].metric("Coach double-ups", m["double_ups"], help="A coach's teams back-to-back on the same day")
-        c[5].metric("On usual schedule", f"{m['on_pattern_pct']}%" if m.get("on_pattern_pct") is not None else "–",
-                    help="Weekday practices on the team's usual day and time (break days in 2-hour blocks don't count)")
+        if CAN:  # the summary numbers are for the admins
+            c = st.columns(6)
+            c[0].metric("Practices", m["practices_scheduled"])
+            c[1].metric("Missed", m["missed_practices"], help="Practices short of each team's weekly target")
+            c[2].metric("Weekend practices", m["weekend_practices"])
+            c[3].metric("Wishlist 1st choice", f"{m['wishlist_pct']}%" if m["wishlist_pct"] is not None else "–",
+                        help="Weekday practices matching the team's 1st-choice wishlist")
+            c[4].metric("Coach double-ups", m["double_ups"], help="A coach's teams back-to-back on the same day")
+            c[5].metric("On usual schedule", f"{m['on_pattern_pct']}%" if m.get("on_pattern_pct") is not None else "–",
+                        help="Weekday practices on the team's usual day and time (break days in 2-hour blocks "
+                             "don't count)")
         short = result.shortfalls
         if len(short) and COACH_VIEW:
             short = short[short["team"].map(mine)]

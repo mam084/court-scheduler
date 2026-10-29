@@ -132,8 +132,8 @@ def render():
                            file_name=f"court_sheets_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html",
                            help="Like the sheets on the board: every timeslot on every court is a line, filled in "
                                 "where something's booked and blank where it's open, so privates and changes can "
-                                "be written in. Two landscape pages a week, with each day's practice count and the "
-                                "week's total at the bottom. Open it in your browser, then print or save as PDF.")
+                                "be written in. Two landscape pages a week. Open it in your browser, then print or "
+                                "save as PDF.")
         d1.download_button("Download schedule (Excel)", lambda: to_excel(_win(), closures),
                            f"schedule_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", width="stretch")
         d2.download_button("Printable weeks · color",

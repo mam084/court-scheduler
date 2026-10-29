@@ -1461,7 +1461,8 @@ def test_paper_print_has_every_slot_as_a_line():
     h = paper_weeks_html(r.assignments, *NOV, data.closures, data.tournaments, "T", [], r.practice_counts)
     weeks = len({week_start(d) for d in pd.date_range(*NOV).date})
     assert h.count('<section class="cs-week">') == 2 * weeks
-    assert "7:20-9:10" in h and "9-11" in h and "Boys Local" in h and "needed" in h
+    assert "7:20-9:10" in h and "9-11" in h and "Boys Local" in h
+    assert "needed" not in h and 'class="foot"' not in h   # practice counts are off for now
     assert "16-Bea" in h
 
 
