@@ -1246,7 +1246,7 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             if not times:
                 raise ValueError("needs a time (e.g. 5:30, 3:45-7:20, or 9AM-1PM on weekends)")
             courts = parse_courts(r.get("courts"))
-            on_site = blank(r.get("on_site")) or yes(r.get("on_site"))
+            on_site = True  # every program on the calendar uses our courts (the on_site column is ignored)
             staff = parse_names(r.get("coaches"))
             ranges = parse_date_ranges(r.get("dates"), year)
             skip = {a + timedelta(days=k) for a, b in parse_date_ranges(r.get("skip"), year)

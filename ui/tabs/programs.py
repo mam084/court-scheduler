@@ -131,13 +131,11 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
     cleaned = S.cleaned
     known_coaches = cleaned.coaches if cleaned else []
     with st.form(key, clear_on_submit=key == "add_program"):
-        c1, c2, c3 = st.columns([2, 1, 1])
+        c1, c2 = st.columns([2, 1])
         name = c1.text_input("Program name", value=dv["name"], placeholder="e.g. G 14 League or JumpStart")
         side = c2.radio("Side", SIDES, index=SIDES.index(dv["side"]), horizontal=True,
                         help="Girls programs show in blue, boys in green.")
-        on_site = c3.checkbox("Uses our courts", value=dv["on_site"],
-                              help="Uncheck for programs somewhere else (e.g. a high school team). "
-                                   "Those only block the coaches.")
+        on_site = True  # every program on the calendar uses our courts
         c1, c2, c3 = st.columns([2, 1, 1])
         days = c1.multiselect("Days", DAYS, default=dv["days"], placeholder="e.g. Tue, Thu")
         p_start = c2.date_input("Start date", value=dv["p_start"], format="MM/DD/YYYY",
@@ -393,6 +391,6 @@ def render():
         # Show the side the colors actually use (guessed from the name when blank).
         view["side"] = [program_side(s, n) or "Other" for s, n in zip(view["side"], view["program"])]
         st.dataframe(view.rename(columns={"program": "Program", "side": "Side", "days": "Days", "time": "Time",
-                                          "courts": "Courts", "coaches": "Coaches", "on_site": "On site",
+                                          "courts": "Courts", "coaches": "Coaches",
                                           "dates": "Dates", "skip": "Cancelled"}),
                      hide_index=True, width="stretch")

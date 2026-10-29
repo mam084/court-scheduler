@@ -1181,8 +1181,8 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fix
             ch = m.NewBoolVar(f"ch_{t}_{d}_{s}_{c}")
             m.Add(ch >= x[t, d, s, c] - home[t, c])
             changes.append(WEIGHTS["home_court"] * ch)
-            if COURT_COST[c]:
-                changes.append(COURT_COST[c] * weights[t] * x[t, d, s, c])
+            if COURT_COST[c]:  # pecking order first: worth more than nets, coaches staying put, home courts
+                changes.append(WEIGHTS["pecking_court"] * COURT_COST[c] * weights[t] * x[t, d, s, c])
         m.AddExactlyOne([x[t, d, s, c] for c in opts])
         pc = (prev_court or {}).get((t, d, s))
         if pc is not None and (t, d, s, pc) in x:

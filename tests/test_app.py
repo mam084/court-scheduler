@@ -1130,3 +1130,35 @@ def test_rename_a_team_everywhere(db):
                                                          ["assignments"])))
     req = db.get_request(rid)
     assert req["team"] == "16-Danielle&Darci" and req["detail"]["rows"][0]["team"] == "16-Danielle&Darci"
+
+
+def test_moves_wait_for_update_schedule(db):
+    """Moving practices puts them on the schedule right away without rebuilding; Update schedule then
+    rebuilds once, keeping them where they were put."""
+    from streamlit.testing.v1 import AppTest
+    _save(db, "Staged", 56)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    at.radio(key="nav").set_value("Edit practices").run()
+    team = at.selectbox(key="ed_team").value
+    at.radio(key="ed_mode").set_value("Move a practice").run()
+    a = at.session_state["result"].assignments
+    first = a[(a["kind"] == "Practice") & (a["name"] == team)].sort_values("date").iloc[0]
+    d, old_slot = first["date"], first["slot"]
+    new_slot = next(s for s in ("5:30", "7:20", "3:45") if s != old_slot
+                    and not ((a["name"] == team) & (a["date"] == d) & (a["slot"] == s)).any())
+    metrics = dict(at.session_state["result"].metrics)
+    at.selectbox(key=f"ed_ns_{team}_{d}_{old_slot}").set_value(new_slot).run()
+    next(b for b in at.button if b.label == "Move it").click().run()
+    assert not at.exception, at.exception
+    r = at.session_state["result"]
+    assert r.metrics == metrics                                    # not rebuilt
+    p = r.assignments[(r.assignments["name"] == team) & (r.assignments["date"] == d)]
+    assert list(p["slot"]) == [new_slot]
+    assert at.session_state["staged"]["what"]
+    at.button(key="upd_go").click().run()
+    assert not at.exception, at.exception
+    r = at.session_state["result"]
+    p = r.assignments[(r.assignments["name"] == team) & (r.assignments["date"] == d)]
+    assert list(p["slot"]) == [new_slot]
+    assert "staged" not in at.session_state

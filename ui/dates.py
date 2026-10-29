@@ -108,6 +108,8 @@ def follow():
     d = view_day()
     if st.session_state.get("resolve") or st.session_state.get("rebuild_queue"):
         return
+    if (st.session_state.get("staged") or {}).get("what"):
+        return  # hand edits waiting for Update schedule: stay on their dates
     hit = run_at(d)
     if hit and hit[0] != active_key():
         if S.CAN:

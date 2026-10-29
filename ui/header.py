@@ -143,6 +143,19 @@ def render():
     if "flash" in st.session_state:
         st.success(st.session_state.pop("flash"))
 
+    staged = st.session_state.get("staged")
+    if CAN and staged and staged.get("what"):
+        from ui.edits import update_schedule
+        with st.container(border=True):
+            c1, c2 = st.columns([4, 1], vertical_alignment="center")
+            n = len(staged["what"])
+            c1.markdown(f"**{plural(n, 'change')} waiting:** " + "; ".join(staged["what"][-5:])
+                        + (f" (+{n - 5} more)" if n > 5 else "") + ". They're on the schedule already; "
+                        "**Update schedule** fits everything else around them"
+                        + (" (nothing else moves, since these dates are published)." if S.published else "."))
+            if c2.button("Update schedule", type="primary", width="stretch", key="upd_go"):
+                update_schedule()
+
     # Navigation. Only the chosen section is built on each click (tabs would
     # build every section every time), and the choice is remembered, so saving a
     # program or removing something keeps you where you were.

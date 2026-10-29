@@ -28,9 +28,13 @@ def _held(assignments: pd.DataFrame, req: dict) -> pd.DataFrame:
         if str(r.get("action", "")).strip().lower() in ("remove", "cancel"):
             with contextlib.suppress(ValueError, TypeError, KeyError):
                 gone.add((r["team"], pd.to_datetime(str(r["date"])).date(), str(r["time"]).strip()))
-    rp = det.get("replace_pin")
-    if rp:
-        gone.add((rp[0], _date.fromisoformat(rp[1]), rp[2]))
+    for rp in [det.get("replace_pin")] + list(det.get("replace_pins") or []):
+        if rp:
+            gone.add((rp[0], _date.fromisoformat(rp[1]), rp[2]))
+    for r in det.get("rows") or []:  # placed by hand: their own pins hold them
+        if str(r.get("action", "")).strip().lower() in ("add", "extra"):
+            with contextlib.suppress(ValueError, TypeError, KeyError):
+                gone.add((r["team"], pd.to_datetime(str(r["date"])).date(), str(r["time"]).strip()))
     # New usual days for a team: that team's practices are free to move (everyone else's stay).
     loose = {r["team"] for r in det.get("rows") or [] if str(r.get("action", "")).strip().lower().startswith("usual")}
     keep = [(n, d, s) not in gone and n not in loose for n, d, s in zip(p["name"], p["date"], p["slot"])]
@@ -120,6 +124,7 @@ def run():
                 if restore_ver is not None:
                     st.session_state.base_version = restore_ver["id"]
                 st.session_state.pop("pending_rebuild", None)
+                st.session_state.pop("staged", None)
                 st.session_state.pending_prefs = []
                 st.session_state.result_period = (start, end)
                 _appr = st.session_state.pop("approving", None)

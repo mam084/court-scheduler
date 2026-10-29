@@ -25,8 +25,8 @@ def render():
                         "days like `Mon` / `Weekdays`, dates like `11/10-11/16`, times like `5:30` or `3:45` "
                         "(blank = any).",
         "Wishlist": "Ranked day/time wishes. choice 1 or 2. Blank days = any day.",
-        "Locals": "Programs. side = Girls / Boys (colors). on_site = No for programs elsewhere (blocks the coach "
-                  "only). Times like `5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend `9AM-1PM`. "
+        "Locals": "Programs. side = Girls / Boys (colors). Every program uses our courts (on_site is ignored). "
+                  "Times like `5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend `9AM-1PM`. "
                   "Courts like `1-4`, `P` for the practice court; blank/TBD until known. "
                   "skip = single dates it doesn't run (`11/12; 11/26`). Easier: use the Programs tab.",
         "Weekends": "Open days in 2-hour blocks (easier: the Open days tab): weekends, and weekdays over a school "

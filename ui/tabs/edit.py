@@ -185,7 +185,7 @@ def render():
                                  "court": "" if nc == "Any" else str(nc),
                                  "note": f"moved from {old['date']:%a %-m/%-d}"},
                             ], f"Moved {e_team} from {old['date']:%a %b %-d} {old['slot']} to {nd:%a %b %-d}{where}.",
-                                replace_pin=(e_team, old["date"], old["slot"]))
+                                replace_pin=(e_team, old["date"], old["slot"]), stage=True)
                     else:
                         how = st.radio("Then", ["Find a makeup that week if possible", "Cancel it (no makeup)"],
                                        key="ed_how")
@@ -195,7 +195,7 @@ def render():
                                               "days": "", "time": old["slot"], "court": "", "note": "removed by hand"}],
                                             f"{'Removed' if act == 'Remove' else 'Cancelled'} {e_team}'s "
                                             f"{old['date']:%a %b %-d} practice.",
-                                            replace_pin=(e_team, old["date"], old["slot"]))
+                                            replace_pin=(e_team, old["date"], old["slot"]), stage=True)
             elif mode.startswith("Ask to move") or mode.startswith("Ask to cancel"):
                 if not labels:
                     st.caption("No practices to change.")
@@ -333,7 +333,7 @@ def render():
                                       "days": "", "time": as_, "court": "" if ac == "Any" else str(ac),
                                       "note": "extra practice" if extra else "added by hand"}],
                                     f"Added {'an extra' if extra else 'a'} practice for {e_team} "
-                                    f"on {ad:%a %b %-d} at {as_}.")
+                                    f"on {ad:%a %b %-d} at {as_}.", stage=True)
             elif mode == "Practices per week":
                 st.caption("For a team that wants more (or fewer) practices every week. The scheduler gives the "
                            "first two the usual priority; a 3rd or more is added wherever there's room without "

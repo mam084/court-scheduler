@@ -299,6 +299,10 @@ WEIGHTS = {
     # by courts alone. Stage 2 (courts): per court whose net has to change.
     "net_change": 14,
     "net_change_court": 80,
+    # Stage 2: the pecking order decides courts (better courts to higher teams). Scaled so that
+    # putting a lower team on a better court than a higher one in the same timeslot always costs
+    # more than every net change, coach move and home-court change it could save.
+    "pecking_court": 400,
     # Stage 2: a coach with back-to-back sessions (two teams, or a program
     # then a team) stays on the same court. Less important than nets.
     "coach_stay": 25,

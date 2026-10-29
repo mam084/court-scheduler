@@ -36,11 +36,13 @@ def _row_date(v) -> date | None:
 
 
 def apply_overrides(rows: list[dict], message: str, backup: pd.DataFrame | None = None,
-                    replace_pin: tuple | None = None):
+                    replace_pin: tuple | None = None, stage: bool = False):
     """Add manual-change rows and rebuild the scheduled dates they land on (the run holding the
     first date now, any other run next); rolled back if the rebuild can't honor them. Dates that
     aren't scheduled yet just keep the change: it goes in when they're built.
-    replace_pin=(team, date, slot) first drops the hand 'Add' that put that practice there."""
+    replace_pin=(team, date, slot) first drops the hand 'Add' that put that practice there.
+    stage: a scheduling admin's hand edit on the dates being worked on is put straight on the schedule
+    without rebuilding (several can be made in a row); Update schedule then rebuilds around them."""
     from ui import dates
     from ui.session import switch_period
     inp = S.inp
@@ -48,6 +50,8 @@ def apply_overrides(rows: list[dict], message: str, backup: pd.DataFrame | None 
     base = without_pin(inp.overrides, *replace_pin) if replace_pin else inp.overrides
     inp.overrides = pd.concat([base, pd.DataFrame(rows)], ignore_index=True)
     st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+    if stage and _stage(rows, replace_pin, message):
+        return  # (reruns)
     st.session_state.holding = {"detail": {"rows": rows, "replace_pin": [replace_pin[0], replace_pin[1].isoformat(),
                                                                          replace_pin[2]] if replace_pin else None}}
     days = [d for d in [_row_date(r.get("date")) for r in rows] + [replace_pin[1] if replace_pin else None] if d]
@@ -70,6 +74,73 @@ def apply_overrides(rows: list[dict], message: str, backup: pd.DataFrame | None 
     st.session_state.rebuild_queue = keys
     st.session_state.resolve = True
     st.session_state.flash = message
+    st.rerun()
+
+
+def _stage(rows: list[dict], replace_pin: tuple | None, message: str) -> bool:
+    """Puts a hand edit on the built schedule as it is (no rebuild): removes the practices it takes
+    away and places the ones it adds, each on the court picked or the first open one. Only for the
+    dates being worked on, once built; False (rebuild instead) otherwise."""
+    from dataclasses import replace
+
+    from scheduler.config import DAYS, SLOTS
+    r = st.session_state.get("result")
+    start, end = st.session_state.range_start, st.session_state.range_end
+    days = [d for d in [_row_date(x.get("date")) for x in rows] + [replace_pin[1] if replace_pin else None] if d]
+    if r is None or not r.ok or st.session_state.get("result_period") != (start, end) \
+            or not days or not all(start <= d <= end for d in days):
+        return False
+    a = r.assignments.copy()
+    prac = a["kind"] == "Practice"
+    template = {}
+    for x in rows:  # what's taken away first, so a move within a day frees its court
+        act, d = str(x.get("action", "")).strip().lower(), _row_date(x.get("date"))
+        t_ = str(x.get("time", "")).strip()
+        if act.startswith(("rem", "can")):
+            hit = prac & (a["name"] == x["team"]) & (a["date"] == d) & ((a["slot"] == t_) if t_ else True)
+            if hit.any():
+                template.setdefault(x["team"], a[hit].iloc[0].to_dict())
+            a = a[~hit]
+            prac = a["kind"] == "Practice"
+    st.session_state.result = replace(r, assignments=a.reset_index(drop=True))
+    added = []
+    for x in rows:
+        act, d = str(x.get("action", "")).strip().lower(), _row_date(x.get("date"))
+        if not act.startswith(("add", "extra")):
+            continue
+        team, slot = x["team"], str(x.get("time", "")).strip()
+        free = open_courts(d, slot, team) or []
+        want = str(x.get("court", "")).strip()
+        court = int(want) if want.isdigit() else (free[0] if free else None)
+        if court is None or (want.isdigit() and int(want) not in free):
+            st.session_state.result = r  # put it back as it was
+            return False  # no open court: let a rebuild sort it out
+        base = template.get(team)
+        if base is None:
+            same = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["name"] == team)]
+            base = same.iloc[0].to_dict() if len(same) else {"name": team, "kind": "Practice"}
+        added.append(dict(base, date=d, day=DAYS[d.weekday()], slot=slot, slot_label=SLOTS.get(slot, slot),
+                          court=court, on_pattern=False, pinned=True, extra=act.startswith("extra"), paired=""))
+        a2 = pd.concat([st.session_state.result.assignments, pd.DataFrame([added[-1]])], ignore_index=True)
+        st.session_state.result = replace(st.session_state.result, assignments=a2)
+    st.session_state.pop("overrides_backup", None)
+    staged = st.session_state.setdefault("staged", {"rows": [], "pins": [], "what": []})
+    staged["rows"] += rows
+    if replace_pin:
+        staged["pins"].append([replace_pin[0], replace_pin[1].isoformat(), replace_pin[2]])
+    staged["what"].append(message.rstrip("."))
+    st.session_state.flash = message + " Press **Update schedule** when you're done making changes."
+    st.rerun()
+    return True
+
+
+def update_schedule():
+    """Rebuild around the hand edits made since the last build (Update schedule). Once these dates are
+    published, every other practice stays exactly where it is."""
+    staged = st.session_state.pop("staged", None) or {"rows": [], "pins": []}
+    st.session_state.holding = {"detail": {"rows": staged["rows"], "replace_pins": staged["pins"]}}
+    st.session_state.resolve = True
+    st.session_state.flash = "Updated the schedule."
     st.rerun()
 
 

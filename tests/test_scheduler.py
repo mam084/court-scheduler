@@ -1299,7 +1299,12 @@ def test_hs_boys_keep_their_courts_from_530_to_720():
         if kinds["5:30"] and kinds["7:20"] and kinds["5:30"] != kinds["7:20"]:
             changes += 1
     assert changes == r.metrics["net_changes"]
-    assert changes <= 2
+    # The pecking order outranks nets: no team is on a better court than a higher team at the same time.
+    from scheduler.config import COURT_COST, pecking_weights
+    pw = pecking_weights(clean(_inp(teams), *NOV).teams)
+    for _, g in pr.groupby(["date", "slot"]):
+        rows = list(zip(g["name"].map(pw), g["court"].map(COURT_COST)))
+        assert not any(w1 > w2 and q1 > q2 for w1, q1 in rows for w2, q2 in rows), g
 
 
 def test_coach_stays_on_court_for_back_to_back_teams():
