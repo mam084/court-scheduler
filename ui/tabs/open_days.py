@@ -8,6 +8,7 @@ import streamlit as st
 from scheduler import ScheduleInput, clean
 from scheduler.config import COURTS, court_name
 from scheduler.data import COLUMNS
+from ui import dates
 from ui.common import plural
 from ui.state import S
 
@@ -69,11 +70,12 @@ def render():
             except ValueError as e:
                 st.error(f"Couldn't add those days: {e}")
             else:
+                before = inp.weekends.copy()
                 inp.weekends = trial.astype(object)
                 st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-                st.session_state.resolve = True
                 st.session_state.flash = (f"Opened {plural(len(days_), 'day')} in 2-hour blocks "
-                                          f"({dict(OPEN_HOURS)[o_a]}–{dict(OPEN_HOURS)[o_b]}). Schedule rebuilt.")
+                                          f"({dict(OPEN_HOURS)[o_a]}–{dict(OPEN_HOURS)[o_b]}). "
+                                          + dates.rebuild_for([(before, inp.weekends, ("date",))]))
                 st.rerun()
 
     st.subheader("Open days")
@@ -97,8 +99,9 @@ def render():
         drop_o = c1.multiselect("Remove", list(view_.index), placeholder="Choose open days to remove")
         if c2.button("Remove", disabled=not drop_o, width="stretch", key="rm_open"):
             keep = [i for i, lab in enumerate(view_.index) if lab not in drop_o]
+            before = inp.weekends.copy()
             inp.weekends = wk.iloc[keep].reset_index(drop=True)
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-            st.session_state.resolve = True
-            st.session_state.flash = f"Removed {plural(len(drop_o), 'row')}. Schedule rebuilt."
+            st.session_state.flash = (f"Removed {plural(len(drop_o), 'row')}. "
+                                      + dates.rebuild_for([(before, inp.weekends, ("date",))]))
             st.rerun()

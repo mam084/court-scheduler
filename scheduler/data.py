@@ -1080,14 +1080,9 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             ranges = parse_date_ranges(r.get("dates"), year)
             skip = {a + timedelta(days=k) for a, b in parse_date_ranges(r.get("skip"), year)
                     for k in range((b - a).days + 1)}
+            # Any time on any day: a morning camp on weekdays (9AM-11AM), a 5:30 program on a Saturday...
+            day_slots = [s for s in SLOT_KEYS if s in times]
             for day in days:
-                day_slots = [s for s in SLOT_KEYS if s in times and ((day in WEEKEND) == (s in WEEKEND_KEYS))]
-                if not day_slots and day not in WEEKEND:
-                    # A weekday program in the 2-hour blocks: a break camp, 9AM-11AM.
-                    day_slots = [s for s in WEEKEND_KEYS if s in times]
-                if not day_slots:
-                    example = "weekend time like 9AM-1PM" if day in WEEKEND else "time like 5:30 or 9AM-11AM"
-                    raise ValueError(f"{day} needs a {example}")
                 for slot in day_slots:
                     locals_.append(LocalProgram(name, day, slot, courts, staff, on_site, ranges,
                                                 program_side(r.get("side"), name), skip))

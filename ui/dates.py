@@ -178,6 +178,29 @@ def _days(a: date, b: date) -> list[date]:
     return [a + timedelta(days=i) for i in range((b - a).days + 1)]
 
 
+def open_now(a: date, b: date) -> set[date]:
+    """Days from a to b the Open days tab opens now (in 2-hour blocks), minus closures."""
+    cleaned = getattr(S, "cleaned", None) if _has(S, "cleaned") else None
+    if cleaned is None:
+        return set()
+    closures = (getattr(S, "closures", None) if _has(S, "closures") else None) or {}
+    return {d for d in cleaned.weekends if a <= d <= b and d not in closures}
+
+
+def not_built_open_days(a: date, b: date) -> list[tuple[str, date, date, list[date]]]:
+    """Scheduled runs overlapping a..b with days opened since they were built (so no practices can be
+    on them yet): (key, start, end, those days)."""
+    out = []
+    parts = {(s_, e_): set(wd) for s_, e_, _, wd, _ in _built_parts()}
+    for k, s_, e_ in runs():
+        if s_ > b or e_ < a:
+            continue
+        new = sorted(open_now(s_, e_) - parts.get((s_, e_), set()))
+        if new:
+            out.append((k, s_, e_, new))
+    return out
+
+
 def window(a: date, b: date, with_preview: bool = True) -> tuple[ScheduleResult | None, list[date]]:
     """Everything on the calendar from a to b: each scheduled run's practices and programs, plus
     (with_preview) the programs on dates not scheduled yet. Returns (result, days not scheduled yet);
@@ -193,6 +216,7 @@ def window(a: date, b: date, with_preview: bool = True) -> tuple[ScheduleResult 
         wk.update(d for d in wd if lo <= d <= hi)
         if pc is not None and len(pc) and "week_of" in pc.columns:
             pcs.append(pc[pc["week_of"].map(lambda w, lo=lo, hi=hi: week_start(lo) <= w <= hi)])
+    wk.update(d for d in open_now(a, b) if d in covered)  # open days as they are now, built or not
     gaps = [d for d in _days(a, b) if d not in covered]
     if gaps and with_preview:
         pv = preview(min(gaps), max(gaps))
@@ -236,6 +260,13 @@ def _picked(key: str):
 
 def where_note(a: date, b: date, gaps: list[date]):
     """One line under the picker: which scheduled dates this is part of, or that it isn't scheduled yet."""
+    for _k, s_, e_, days in not_built_open_days(a, b):
+        st.warning(f"**{', '.join(f'{d:%a %b %-d}' for d in days[:6])}{' …' if len(days) > 6 else ''}** "
+                   f"{'was' if len(days) == 1 else 'were'} opened after {range_label(s_, e_)} was scheduled, so "
+                   "no practices are on "
+                   + ("it" if len(days) == 1 else "them")
+                   + (" yet. Press **Rebuild these dates** in the sidebar to use "
+                      + ("it." if len(days) == 1 else "them.") if S.CAN else " yet."))
     rs = [r for r in runs() if r[1] <= b and a <= r[2]]
     bits = [range_label(s_, e_) + ("" if is_published(k) else " (not published)") for k, s_, e_ in rs]
     if gaps and not rs:
@@ -306,3 +337,64 @@ def run_picker(key: str):
     st.selectbox("Scheduled dates", keys, format_func=lab.get, key=key, on_change=_go,
                  help="Dates are scheduled and published a run at a time. Picking one here also moves the "
                       "court view and calendar there.")
+
+
+# ------------------------------------------------- rebuilding changes --
+
+def _row_spans(rows: list[dict], cols: tuple[str, ...]) -> list[tuple[date, date]] | None:
+    """The dates a set of rows covers (their date columns); None if one has no dates (it covers
+    every date)."""
+    from scheduler.data import blank, parse_date_ranges
+    year = st.session_state.range_start.year
+    out = []
+    for r in rows:
+        got = []
+        for c in cols:
+            v = r.get(c)
+            if v is None or blank(v) or not str(v).strip():
+                continue
+            try:
+                got += parse_date_ranges(str(v), year)
+            except (ValueError, TypeError):
+                return None
+        if not got:
+            return None
+        out.append((min(x for x, _ in got), max(y for _, y in got)))
+    return out
+
+
+def _changed(old: pd.DataFrame, new: pd.DataFrame) -> list[dict]:
+    """Rows in one table but not the other (added, removed, or the before and after of an edit)."""
+    def recs(df):
+        df = df.dropna(how="all").fillna("").astype(str)
+        return [tuple(sorted(r.items())) for r in df.to_dict("records")]
+    a, b = recs(old), recs(new)
+    diff = [x for x in a if x not in b] + [x for x in b if x not in a]
+    return [dict(x) for x in diff]
+
+
+def rebuild_for(changes: list[tuple[pd.DataFrame, pd.DataFrame, tuple[str, ...]]], autobuild: bool = True) -> str:
+    """After programs, tournaments or open days change: rebuild every scheduled run of dates the change
+    touches (the first now, the rest next), not just the one being worked on. Dates not scheduled yet
+    need nothing (they show the change right away). `changes`: (table before, after, its date columns).
+    Returns a sentence for the confirmation message."""
+    from ui.session import switch_period
+    spans: list | None = []
+    for old, new, cols in changes:
+        sp = _row_spans(_changed(old, new), cols)
+        spans = None if sp is None or spans is None else spans + sp
+    hits = [r for r in runs() if spans is None or any(x <= r[2] and r[1] <= y for x, y in spans)]
+    if not hits:
+        return "No scheduled dates are affected, so nothing needed rebuilding."
+    labels = " and ".join(range_label(s_, e_) for _, s_, e_ in hits)
+    if not autobuild:
+        st.session_state.pending_rebuild = "Programs changed"
+        return f"Press **Rebuild these dates** when you're done ({labels})."
+    keys = [k for k, _, _ in hits]
+    if active_key() in keys:
+        keys.remove(active_key())
+    else:
+        switch_period(keys.pop(0))
+    st.session_state.rebuild_queue = keys
+    st.session_state.resolve = True
+    return f"Rebuilt {labels}."

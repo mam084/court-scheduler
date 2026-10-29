@@ -120,7 +120,7 @@ def slots_overlap(a: str, b: str) -> bool:
 
 SLOTS = {"3:30": PROGRAM_SLOTS["3:30"], "3:45": WEEKDAY_SLOTS["3:45"], "4:30": PROGRAM_SLOTS["4:30"],
          "5:30": WEEKDAY_SLOTS["5:30"], "7:20": WEEKDAY_SLOTS["7:20"], **WEEKEND_SLOTS}
-SLOT_KEYS = list(SLOTS)  # display order within a day
+SLOT_KEYS = list(SLOTS)  # display order within a day (put in time order below, once SLOT_TIMES exists)
 WEEKDAY_KEYS = list(WEEKDAY_SLOTS)        # team practice slots
 PROGRAM_KEYS = list(PROGRAM_SLOTS)
 WEEKEND_KEYS = list(WEEKEND_SLOTS)
@@ -141,6 +141,10 @@ SLOT_TIMES = {
     "5PM": ((17, 0), (19, 0)),
     "7PM": ((19, 0), (21, 0)),
 }
+
+# Time order, so a day mixing weekday times and 2-hour blocks (a morning camp on a weekday) lists
+# them as they happen: 9AM, 11AM, 1PM, 3PM, 3:30, 3:45, 4:30, 5PM, 5:30, 7PM, 7:20.
+SLOT_KEYS[:] = sorted(SLOT_KEYS, key=lambda k: SLOT_TIMES[k][0])
 
 PRACTICES_PER_WEEK = 2   # default; a team can ask for more (Teams `practices` column)
 MAX_PRACTICES_PER_WEEK = 5

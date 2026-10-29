@@ -145,7 +145,7 @@ def render():
                 if own:
                     st.caption("You asked for this, so another scheduling admin has to decide it.")
                 ok_, r_go = _review(r) if r["kind"] in ("move", "extra") else (True, r)
-                c1, c2, c3 = st.columns([3, 1, 1], vertical_alignment="bottom")
+                c1, c2, c3, c4 = st.columns([3, 1, 1, 1], vertical_alignment="bottom")
                 note_ = c1.text_input("Note to the coach (optional)", key=f"rq_note_{r['id']}",
                                       placeholder="e.g. moved to Court 5 instead")
                 if c2.button("Approve", type="primary", key=f"rq_ok_{r['id']}", width="stretch",
@@ -154,9 +154,23 @@ def render():
                 if c3.button("Decline", key=f"rq_no_{r['id']}", width="stretch", disabled=own):
                     st.session_state.flash = decided(r, "denied", note_.strip())
                     st.rerun()
+                if c4.button("Remove", key=f"rq_rm_{r['id']}", width="stretch",
+                             help="Take it off the list without approving or declining it. Nobody is emailed."):
+                    store.delete_requests([r["id"]])
+                    store.log(VIEWER.log_name, "Request removed", r["summary"], MAIN_ID)
+                    st.session_state.flash = f"Removed the request: {r['summary']}."
+                    st.rerun()
         done_ = [r for r in store.requests() if r["status"] != "pending"][:50]
         if done_:
             with st.expander(f"Decided ({len(done_)})"):
+                h1, h2 = st.columns([3, 1], vertical_alignment="bottom")
+                sure_h = h1.checkbox(f"Yes, clear all {len(done_)} decided requests", key="rq_clear_sure",
+                                     help="Removes them from this list for good. The activity log keeps a record.")
+                if h2.button("Clear history", disabled=not sure_h, width="stretch", key="rq_clear"):
+                    n_ = store.delete_requests(decided=True)
+                    store.log(VIEWER.log_name, "Request history cleared", f"{n_} removed", MAIN_ID)
+                    st.session_state.flash = f"Cleared {n_} decided request{'s' if n_ != 1 else ''}."
+                    st.rerun()
                 st.dataframe(pd.DataFrame([{
                     "Asked": _req_when(r), "Who": r["who"], "Request": r["summary"],
                     "Decision": {"approved": "Approved", "denied": "Declined", "withdrawn": "Withdrawn"}.get(
@@ -169,6 +183,12 @@ def render():
         mine_ = store.requests(email=me_email) if me_email else []
         if not mine_:
             st.caption("No requests yet.")
+        elif any(r["status"] != "pending" for r in mine_):
+            if st.button("Clear my finished requests", key="rq_mine_clear",
+                         help="Removes your approved, declined and withdrawn requests from this list."):
+                store.delete_requests(decided=True, email=me_email)
+                st.session_state.flash = "Cleared your finished requests."
+                st.rerun()
         for r in mine_:
             badge = {"pending": "⏳ Waiting", "approved": "✅ Approved", "denied": "✖ Declined",
                      "withdrawn": "Withdrawn"}.get(r["status"], r["status"])

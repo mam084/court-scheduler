@@ -14,6 +14,7 @@ from scheduler.config import (
     WEEKDAY_KEYS,
     WEEKDAYS,
     WEEKEND_KEYS,
+    slots_overlap,
 )
 from scheduler.data import COLUMNS
 from ui import dates
@@ -40,20 +41,36 @@ def _from_view(tp: pd.DataFrame) -> int:
     return after[0] if after else max(0, len(tp) - 1)
 
 
-def court_pick(d, slot: str, key: str, team: str, moving: tuple | None = None):
-    """A court for a request or a hand edit: 'Any' or a court number, with which courts are open then."""
+def court_pick(d, slot: str, key: str, team: str, moving: tuple | None = None, only_open: bool = False):
+    """A court for a request or a hand edit: 'Any' or a court number, with which courts are open then.
+    only_open (requests): taken courts aren't offered, and None comes back when no court is open."""
     free = open_courts(d, slot, team, moving)
-    opts = ["Any"] + COURTS
+    if only_open and free is not None:
+        if not free:
+            st.error("No court is open then. Pick another date or time.")
+            return None
+        opts = ["Any"] + free
+    else:
+        opts = ["Any"] + COURTS
     lab = {c: ("Any open court" if c == "Any" else f"Court {c}" + ("" if free is None or c in free else " (taken)"))
            for c in opts}
     c = st.selectbox("Court", opts, format_func=lab.get, key=key,
-                     help="Pick a court if it matters. Nothing already there gets pushed out: a request on a taken "
-                          "court goes on an open one, and once dates are published a hand edit only uses open "
-                          "courts.")
-    if free is not None:
-        st.caption("Open then: " + (", ".join(f"Court {x}" for x in free) if free else
-                                    "no courts (everything's booked then, so the admins may suggest another time)"))
+                     help="Pick a court if it matters. Only courts open then are listed for a request; nothing "
+                          "already there gets pushed out." if only_open else
+                          "Pick a court if it matters. Once dates are published a hand edit only uses open courts, "
+                          "so nothing already there gets pushed out.")
+    if free is not None and not only_open:
+        st.caption("Open then: " + (", ".join(f"Court {x}" for x in free) if free else "no courts"))
     return c
+
+
+def already_on(tp: pd.DataFrame, d, slot: str, skip: tuple | None = None) -> str | None:
+    """The team's practice that already overlaps d at slot (not counting `skip`=(date, slot), the one
+    being moved), as 'Wed Nov 4 5:30–7:20 on Court 3'; None if it's free then."""
+    for r in tp.itertuples():
+        if r.date == d and slots_overlap(str(r.slot), slot) and (skip is None or (r.date, r.slot) != skip):
+            return f"{r.date:%a %b %-d} {r.slot_label} on Court {r.court}"
+    return None
 
 
 def _placed(d, slot: str, court, team: str, moving: tuple | None = None):
@@ -192,12 +209,18 @@ def render():
                         ns = st.selectbox("New time", TEAM_SLOT_CHOICES, format_func=team_slot_label,
                                           index=TEAM_SLOT_CHOICES.index(old["slot"]) if old["slot"] in TEAM_SLOT_CHOICES
                                           else 0, key=f"{rk}_ns")
-                        nc = court_pick(nd, ns, f"{rk}_nc", e_team, (od, old["slot"]))
+                        dup = already_on(tp, nd, ns, skip=(od, old["slot"]))
+                        if dup:
+                            st.error(f"{e_team} already practices then ({dup}). Pick another date or time.")
+                        nc = court_pick(nd, ns, f"{rk}_nc", e_team, (od, old["slot"]), only_open=True)
                         why = st.text_input("Why (helps the admins decide)", key=f"{rk}_why",
                                             placeholder="e.g. gym conflict at school")
                         same = nd == od and ns == old["slot"] and (nc == "Any" or str(nc) == str(old["court"]))
-                        where = "" if nc == "Any" else f", Court {nc}"
-                        if st.button("Send request", type="primary", width="stretch", disabled=same, key=f"{rk}_go"):
+                        if same:
+                            st.caption("That's where it is now. Pick a different date, time or court.")
+                        where = "" if nc in ("Any", None) else f", Court {nc}"
+                        if st.button("Send request", type="primary", width="stretch", key=f"{rk}_go",
+                                     disabled=same or bool(dup) or nc is None):
                             submit_request("move", e_team,
                                            f"Move {e_team} from {od:%a %b %-d} {old['slot']} to "
                                            f"{nd:%a %b %-d} {ns}{where}",
@@ -226,11 +249,15 @@ def render():
                 ad = st.date_input("Date", value=start, format="MM/DD/YYYY", key=f"rq_x_d_{e_team}")
                 as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1,
                                    key=f"rq_x_t_{e_team}")
-                xc = court_pick(ad, as_, f"rq_x_c_{e_team}", e_team)
+                dup = already_on(tp, ad, as_)
+                if dup:
+                    st.error(f"{e_team} already practices then ({dup}). Pick another date or time.")
+                xc = court_pick(ad, as_, f"rq_x_c_{e_team}", e_team, only_open=True)
                 why = st.text_input("Why", key=f"rq_x_why_{e_team}",
                                     placeholder="e.g. extra practice before a tournament")
-                where = "" if xc == "Any" else f", Court {xc}"
-                if st.button("Send request", type="primary", width="stretch", key=f"rq_x_go_{e_team}"):
+                where = "" if xc in ("Any", None) else f", Court {xc}"
+                if st.button("Send request", type="primary", width="stretch", key=f"rq_x_go_{e_team}",
+                             disabled=bool(dup) or xc is None):
                     submit_request("extra", e_team, f"Extra practice for {e_team} on {ad:%a %b %-d} at {as_}{where}",
                                    {"rows": [{"team": e_team, "action": "Extra", "date": f"{ad:%m/%d/%Y}", "days": "",
                                               "time": as_, "court": "" if xc == "Any" else str(xc),
@@ -291,13 +318,16 @@ def render():
                 ad = st.date_input("Date", value=start, format="MM/DD/YYYY", key="ed_ad")
                 _not_scheduled(ad)
                 as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1, key="ed_as")
+                dup_a = already_on(tp, ad, as_)
+                if dup_a:
+                    st.error(f"{e_team} already practices then ({dup_a}). Pick another date or time.")
                 ac = court_pick(ad, as_, "ed_ac", e_team)
                 how_add = st.radio("This practice is", [f"Extra (on top of the week's {e_per_week})",
                                                         "Instead of one of the week's practices"], key="ed_add_how",
                                    help="Extra: the team keeps its usual practices and gets this one too. "
                                         "Instead: the scheduler drops another practice that week to make room.")
                 extra = how_add.startswith("Extra")
-                if st.button("Add it", type="primary", width="stretch"):
+                if st.button("Add it", type="primary", width="stretch", disabled=bool(dup_a)):
                     ac = _placed(ad, as_, ac, e_team)
                     apply_overrides([{"team": e_team, "action": "Extra" if extra else "Add", "date": f"{ad:%m/%d/%Y}",
                                       "days": "", "time": as_, "court": "" if ac == "Any" else str(ac),

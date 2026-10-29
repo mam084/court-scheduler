@@ -125,9 +125,10 @@ def render():
             _pp = st.session_state.pending_prefs
             st.info(f"**Coaches changed preferences since the last build:** {'; '.join(_pp[-6:])}"
                     + (f" (+{len(_pp) - 6} more)" if len(_pp) > 6 else "")
-                    + ". Press **Auto-schedule** to fit them in.")
+                    + ". Press **Rebuild these dates** in the sidebar to fit them in.")
         if CAN and st.session_state.get("pending_rebuild"):
-            st.info(f"**{st.session_state.pending_rebuild}** since the last build. Press **Auto-schedule** "
+            st.info(f"**{st.session_state.pending_rebuild}** since the last build. Press **Rebuild these dates** "
+                    "in the sidebar "
                     "when you're done making changes.")
 
     flags_panel(key="flags_top")

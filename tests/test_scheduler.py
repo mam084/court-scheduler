@@ -564,7 +564,7 @@ def test_views_always_show_weekends():
     assert list(dd) == ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     empty = pd.DataFrame(columns=["court", "day", "slot", "club", "kind", "date", "name"])
     grid = court_grid_html(empty, dd, weekend_dates=[])
-    assert ">Sun<" in grid and ">Sat<" in grid and "weekend not open" in grid
+    assert ">Sun<" in grid and ">Sat<" in grid and "not open for practices" in grid
     cal = month_calendar_html(empty, date(2026, 11, 1), date(2026, 11, 30))
     assert ">Sun<" in cal and ">Sat<" in cal
 
@@ -1410,7 +1410,7 @@ def test_weekend_with_local_tournament_isnt_greyed_out_and_shows_under_the_day()
     a = r.assignments
     h = court_grid_html(a[a["date"].map(week_start) == ws], week_dates(ws, *NOV), {}, None, None, r.tournaments,
                         r.weekend_dates)
-    assert h.count("weekend not open") == 1   # Sunday the 1st only; Saturday the 7th shows its tournaments
+    assert h.count("not open for practices") == 1   # Sunday the 1st only; Saturday the 7th shows its tournaments
     head = h.split("</thead>")[0]
     assert "Girls Local A" in head and "Girls Local B" in head
 

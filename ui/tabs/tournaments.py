@@ -9,6 +9,7 @@ import streamlit as st
 
 from scheduler.config import ALL_COURTS, COURTS, court_name
 from scheduler.data import blank, parse_courts, parse_list, parse_names, to_date
+from ui import dates
 from ui.common import plural
 from ui.flags import flags_panel
 from ui.state import S
@@ -104,10 +105,11 @@ def render():
             add_t, rm_t = st.button("Add tournament", type="primary"), False
 
     if rm_t:
+        before = inp.tournaments.copy()
         inp.tournaments = inp.tournaments.drop(inp.tournaments.index[t_sel]).reset_index(drop=True)
         st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-        st.session_state.resolve = True
-        st.session_state.flash = f"Deleted {_tval('name')}. Schedule rebuilt."
+        st.session_state.flash = (f"Deleted {_tval('name')}. "
+                                  + dates.rebuild_for([(before, inp.tournaments, ("start_date", "end_date"))]))
         st.rerun()
     if add_t:
         problems = []
@@ -131,18 +133,19 @@ def render():
                    if t_kind == "Local" else "", "coaches": "; ".join(t_coaches),
                    "note": _tval("note") if editing else ""}
             span = f"{t_start:%b %-d}" + ("" if t_end == t_start else f"–{t_end:%b %-d}")
+            before = inp.tournaments.copy()
             if editing:
                 tdf = inp.tournaments.copy().astype(object)
                 for k_, v_ in row.items():
                     tdf.at[tdf.index[t_sel], k_] = v_
                 inp.tournaments = tdf
-                st.session_state.flash = f"Saved {row['name']} ({t_kind.lower()}, {span}). Schedule rebuilt."
+                st.session_state.flash = f"Saved {row['name']} ({t_kind.lower()}, {span})."
             else:
                 inp.tournaments = pd.concat([inp.tournaments, pd.DataFrame([row])], ignore_index=True)
-                st.session_state.flash = f"Added {row['name']} ({t_kind.lower()}, {span}). Schedule rebuilt around it."
+                st.session_state.flash = f"Added {row['name']} ({t_kind.lower()}, {span})."
                 st.session_state.pop("t_name", None)  # clear the form for the next one
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-            st.session_state.resolve = True
+            st.session_state.flash += " " + dates.rebuild_for([(before, inp.tournaments, ("start_date", "end_date"))])
             st.rerun()
 
     st.subheader("Tournaments")
@@ -160,8 +163,9 @@ def render():
         drop_t = c1.multiselect("Remove tournaments", list(tv.index), placeholder="Choose tournaments to remove")
         if c2.button("Remove", disabled=not drop_t, width="stretch", key="rm_tourn"):
             keep = [i for i, lab in enumerate(tv.index) if lab not in drop_t]
+            before = inp.tournaments.copy()
             inp.tournaments = inp.tournaments.iloc[keep].reset_index(drop=True)
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-            st.session_state.resolve = True
-            st.session_state.flash = f"Removed {plural(len(drop_t), 'tournament')}. Schedule rebuilt."
+            st.session_state.flash = (f"Removed {plural(len(drop_t), 'tournament')}. "
+                                      + dates.rebuild_for([(before, inp.tournaments, ("start_date", "end_date"))]))
             st.rerun()

@@ -6,17 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from scheduler import ScheduleInput, clean
-from scheduler.config import (
-    ALL_COURTS,
-    COURTS,
-    DAYS,
-    PROGRAM_KEYS,
-    SLOT_KEYS,
-    SLOTS,
-    WEEKDAY_KEYS,
-    WEEKEND_KEYS,
-    court_name,
-)
+from scheduler.config import ALL_COURTS, COURTS, DAYS, PROGRAM_KEYS, SLOT_KEYS, SLOTS, court_name
 from scheduler.data import (
     COLUMNS,
     blank,
@@ -27,17 +17,17 @@ from scheduler.data import (
     parse_times,
     program_side,
 )
+from ui import dates
 from ui.common import plural
 from ui.flags import flags_panel
 from ui.state import S
 
-SLOT_CHOICES = PROGRAM_KEYS + WEEKDAY_KEYS + WEEKEND_KEYS
+SLOT_CHOICES = list(SLOT_KEYS)  # every time, in time order: any of them on any day
 
 
 def slot_label(k: str) -> str:
-    """A program time for pickers: 'Weekday · 5:30–7:20', 'JumpStart · 3:30–4:30'."""
-    kind = "JumpStart" if k in PROGRAM_KEYS else "Weekday" if k in WEEKDAY_KEYS else "Weekend"
-    return f"{kind} · {SLOTS[k]}"
+    """A program time for pickers: '5:30–7:20', '9–11 AM', '3:30–4:30 (JumpStart)'."""
+    return SLOTS[k] + (" (JumpStart)" if k in PROGRAM_KEYS else "")
 
 
 SIDES = ["Girls", "Boys", "Other"]
@@ -155,8 +145,9 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         p_end = c3.date_input("End date", value=dv["p_end"], format="MM/DD/YYYY", help="The last day it runs.")
         c1, c2 = st.columns(2)
         times = c1.multiselect("Time", SLOT_CHOICES, default=dv["times"], format_func=slot_label,
-                               help="Pick every timeslot it uses (e.g. 3:45 and 5:30 for a 3:45–7:20 program). "
-                                    "JumpStart times (3:30–4:30, 4:30–5:30) block 3:45 practices on those courts.")
+                               help="Pick every time it uses, on any day: 3:45 and 5:30 for a 3:45–7:20 program, "
+                                    "9–11 AM for a morning camp. JumpStart times (3:30–4:30, 4:30–5:30) block 3:45 "
+                                    "practices on those courts.")
         courts = c2.multiselect("Courts used", ALL_COURTS, default=[c for c in dv["courts"] if c in ALL_COURTS],
                                 format_func=court_name,
                                 help="Remove a court here if sign-ups are low. Leave empty if not known yet "
@@ -205,10 +196,6 @@ def program_row(v: dict) -> tuple[list[str], dict]:
         problems.append("Give it a start date and an end date.")
     elif v["p_end"] < v["p_start"]:
         problems.append("The end date is before the start date.")
-    for d in v["days"]:
-        ok = [t for t in v["times"] if (t in WEEKEND_KEYS) == (d in ("Sat", "Sun"))]
-        if v["times"] and not ok:
-            problems.append(f"{d} needs a {'weekend' if d in ('Sat', 'Sun') else 'weekday'} timeslot.")
     row = {
         "program": v["name"].strip(), "side": "" if v["side"] == "Other" else v["side"],
         "days": ", ".join(d for d in DAYS if d in v["days"]),
@@ -232,14 +219,15 @@ def try_locals(new_locals: pd.DataFrame, what: str, new_tourn: pd.DataFrame | No
     except ValueError as e:
         st.error(f"Couldn't {what}: {e}")
         return False
+    before_l, before_t = inp.locals.copy(), inp.tournaments.copy()
     inp.locals = new_locals.reset_index(drop=True)
     if new_tourn is not None:
         inp.tournaments = new_tourn.reset_index(drop=True)
     st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-    if st.session_state.get("prog_autobuild", True):
-        st.session_state.resolve = True
-    else:
-        st.session_state.pending_rebuild = "Programs changed"
+    # Rebuild the scheduled dates the program runs on (none, if they aren't scheduled yet).
+    st.session_state.rebuild_note = dates.rebuild_for(
+        [(before_l, inp.locals, ("dates",)), (before_t, inp.tournaments, ("start_date", "end_date"))],
+        autobuild=st.session_state.get("prog_autobuild", True))
     return True
 
 
@@ -252,8 +240,7 @@ def replace_program_tournaments(old_name: str, new_rows: list[dict]) -> pd.DataF
 
 def done_msg(what: str) -> str:
     """A confirmation that says whether the schedule was rebuilt or is waiting for Auto-schedule."""
-    return f"{what}. " + ("Schedule rebuilt." if st.session_state.get("prog_autobuild", True)
-                          else "Press Auto-schedule when you're done to rebuild.")
+    return f"{what}. " + st.session_state.pop("rebuild_note", "")
 
 
 
@@ -348,10 +335,8 @@ def render():
             c1, c2, c3 = st.columns(3)
             a_day = c1.date_input("Date", value=dv["p_start"] or start, format="MM/DD/YYYY",
                                   key=f"one_add_day_{ver}")
-            wkend = a_day.weekday() >= 5
-            t_opts = [t for t in SLOT_CHOICES if (t in WEEKEND_KEYS) == wkend]
-            a_times = c2.multiselect("Time", t_opts, default=[t for t in dv["times"] if t in t_opts],
-                                     format_func=slot_label, key=f"one_add_t_{ver}_{wkend}")
+            a_times = c2.multiselect("Time", SLOT_CHOICES, default=[t for t in dv["times"] if t in SLOT_CHOICES],
+                                     format_func=slot_label, key=f"one_add_t_{ver}")
             a_courts = c3.multiselect("Courts", ALL_COURTS, default=[c for c in dv["courts"] if c in ALL_COURTS],
                                       format_func=court_name, key=f"one_add_c_{ver}")
             if st.button("Add this session", type="primary", disabled=not a_times, key=f"one_add_btn_{ver}"):

@@ -334,12 +334,20 @@ def test_book_a_private_and_it_saves(db):
     assert any("privates" in d.label.lower() for d in at.get("download_button"))
 
 
+def _free_time(at, team, day):
+    """A weekday time the team doesn't practice at on `day`."""
+    a = at.session_state["result"].assignments
+    used = set(a[(a["name"] == team) & (a["date"] == day)]["slot"])
+    return next(s for s in ("5:30", "7:20", "3:45") if s not in used)
+
+
 def test_add_extra_practice_and_three_a_week(db):
     at, _ = _open(db, "Extras", 11)
     at.radio(key="nav").set_value("Edit practices").run()
     team = at.selectbox(key="ed_team").value
     at.radio(key="ed_mode").set_value("Add a practice").run()
     at.date_input(key="ed_ad").set_value(date(2026, 11, 4)).run()   # a Wednesday
+    at.selectbox(key="ed_as").set_value(_free_time(at, team, date(2026, 11, 4))).run()
     next(b for b in at.button if b.label == "Add it").click().run()
     assert not at.exception, at.exception
     ov = at.session_state["inp"].overrides
@@ -710,6 +718,7 @@ def test_coach_request_then_another_admin_approves(db, monkeypatch):
     at.selectbox(key="ed_team").set_value(team).run()
     at.radio(key="ed_mode").set_value("Ask for an extra practice").run()
     at.date_input(key=f"rq_x_d_{team}").set_value(date(2026, 11, 4)).run()
+    at.selectbox(key=f"rq_x_t_{team}").set_value(_free_time(at, team, date(2026, 11, 4))).run()
     next(b for b in at.button if b.key == f"rq_x_go_{team}").click().run()
     assert not at.exception, at.exception
     reqs = db.requests("pending")
@@ -877,13 +886,14 @@ def test_scheduling_over_scheduled_dates_trims_them_and_keeps_practices(db):
 
 
 def test_request_shows_where_it_goes_and_never_bumps_a_team(db, monkeypatch):
-    """A coach asks for an extra practice on a court that's taken: the admin sees it on the court
-    view, it goes on an open court, and the team already there stays put."""
+    """A coach can't pick a taken court or a time the team already practices; the admin sees the
+    request on the court view, and approving leaves the team already there in place."""
     pid = _save(db, "Roles", 47)
     head, team = _head_of_first_team(db, pid)
     db.save_user("coach@sdvbc.org", "Coach", head)
     at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
     a = at.session_state["result"].assignments
+    mine = a[(a["kind"] == "Practice") & (a["name"] == team)]
     day = date(2026, 11, 4)
     taken = a[(a["kind"] == "Practice") & (a["date"] == day) & (a["slot"] == "5:30") & (a["name"] != team)]
     assert len(taken)
@@ -891,17 +901,24 @@ def test_request_shows_where_it_goes_and_never_bumps_a_team(db, monkeypatch):
     at.radio(key="nav").set_value("Edit practices").run()
     at.selectbox(key="ed_team").set_value(team).run()
     at.radio(key="ed_mode").set_value("Ask for an extra practice").run()
+    # A time the team already practices: can't send.
+    own = mine.iloc[0]
+    at.date_input(key=f"rq_x_d_{team}").set_value(own["date"]).run()
+    at.selectbox(key=f"rq_x_t_{team}").set_value(own["slot"]).run()
+    assert any("already practices then" in e.value for e in at.error)
+    assert next(b for b in at.button if b.key == f"rq_x_go_{team}").disabled
+    # A free time: the taken court isn't offered.
     at.date_input(key=f"rq_x_d_{team}").set_value(day).run()
     at.selectbox(key=f"rq_x_t_{team}").set_value("5:30").run()
-    at.selectbox(key=f"rq_x_c_{team}").set_value(court).run()
+    if ((mine["date"] == day) & (mine["slot"] == "5:30")).any():
+        return
+    assert court not in at.selectbox(key=f"rq_x_c_{team}").options
     next(b for b in at.button if b.key == f"rq_x_go_{team}").click().run()
     assert not at.exception, at.exception
     req = db.requests("pending")[0]
-    assert req["detail"]["rows"][0]["court"] == str(court)
     db.save_user("cliff@sdvbc.org", "Cliff", "", False, True)
     at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
     at.radio(key="nav").set_value("Requests").run()
-    assert any(f"Court {court} is taken" in w.value for w in at.warning)
     assert any("requested" in m.value and "cs-grid" in m.value for m in at.markdown)
     put = at.selectbox(key=f"rq_court_{req['id']}")
     assert court not in put.options
@@ -910,11 +927,10 @@ def test_request_shows_where_it_goes_and_never_bumps_a_team(db, monkeypatch):
     assert not at.exception, at.exception
     assert db.get_request(req["id"])["status"] == "approved"
     a2 = at.session_state["result"].assignments
-    mine = a2[(a2["name"] == team) & (a2["date"] == day) & (a2["slot"] == "5:30")]
-    assert len(mine) == 1 and int(mine.iloc[0]["court"]) == put_on
+    got = a2[(a2["name"] == team) & (a2["date"] == day) & (a2["slot"] == "5:30")]
+    assert len(got) == 1 and int(got.iloc[0]["court"]) == put_on
     still = a2[(a2["name"] == other) & (a2["date"] == day) & (a2["slot"] == "5:30")]
     assert len(still) == 1 and int(still.iloc[0]["court"]) == court
-
 
 def test_program_needs_start_and_end_date(db):
     from streamlit.testing.v1 import AppTest
@@ -975,3 +991,105 @@ def test_hand_edits_on_published_dates_move_nobody_else(db):
     pr2 = a2[a2["kind"] == "Practice"]
     assert ((pr2["name"] == team) & (pr2["date"] == day) & (pr2["slot"] == "5:30")).any()
     assert {(r.name, r.date, r.slot, int(r.court)) for r in pr2.itertuples() if r.name != team} == others
+
+
+# ------------------------------------------------- batch: Oct 28 (night) --
+
+def test_opening_a_weekend_rebuilds_the_dates_it_is_in(db):
+    """Opening a Saturday that's in other scheduled dates (not the ones being worked on) rebuilds
+    those dates, so the day shows as open with practices instead of 'weekend not open'."""
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.storage import all_periods
+    _save(db, "November", 50)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    _auto_schedule(at, date(2026, 12, 6), date(2026, 12, 20))
+    at.radio(key="nav").set_value("Court view").run()
+    at.date_input(key="cv_pick").set_value(date(2026, 11, 10)).run()      # back to November
+    assert at.session_state["range_start"] == date(2026, 11, 1)
+    at.radio(key="nav").set_value("Open days").run()
+    at.date_input(key="o_from").set_value(date(2026, 12, 19))
+    at.date_input(key="o_to").set_value(date(2026, 12, 19))
+    next(b for b in at.button if b.label == "Open these days").click().run()
+    assert not at.exception, at.exception
+    assert any("Rebuilt Dec 6–20" in s.value for s in at.success)
+    dec = all_periods(db.get(at.session_state["project_id"])["payload"])["2026-12-06_2026-12-20"]
+    assert "2026-12-19" in dec["result"]["weekend_dates"]
+    at.radio(key="nav").set_value("Court view").run()
+    at.date_input(key="cv_pick").set_value(date(2026, 12, 19)).run()
+    assert not at.exception
+    grid = next(m.value for m in at.markdown if "cs-grid" in m.value and "Dec 19" in m.value)
+    assert "cs-wkcell" in grid          # Saturday is open (Sunday Dec 20 still isn't)
+
+
+def test_days_opened_after_building_are_flagged(db):
+    from streamlit.testing.v1 import AppTest
+    _save(db, "November", 51)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    inp = at.session_state["inp"]
+    inp.weekends = pd.concat([inp.weekends, pd.DataFrame([{"date": "11/28/2026", "open": "9AM-1PM"}])],
+                             ignore_index=True)
+    at.radio(key="nav").set_value("Court view").run()
+    at.date_input(key="cv_pick").set_value(date(2026, 11, 28)).run()
+    assert not at.exception, at.exception
+    assert any("opened after" in w.value and "Sat Nov 28" in w.value for w in at.warning)
+
+
+def test_programs_take_any_time_on_any_day():
+    """A morning camp on weekdays that aren't a break, and a 5:30 program on a Saturday."""
+    from scheduler import clean
+    inp = simulate(4, 2, 2, seed=52, start=date(2026, 11, 1), end=date(2026, 11, 30))
+    inp.locals = pd.concat([inp.locals, pd.DataFrame([
+        {"program": "Morning Camp", "side": "Girls", "days": "Mon, Tue", "time": "9AM-11AM", "courts": "1-2",
+         "on_site": "Yes", "dates": "11/02/2026-11/10/2026"},
+        {"program": "Sat Clinic", "side": "Boys", "days": "Sat", "time": "5:30", "courts": "3",
+         "on_site": "Yes", "dates": "11/07/2026-11/07/2026"}])], ignore_index=True)
+    data = clean(inp, date(2026, 11, 1), date(2026, 11, 30))
+    camp = [lp for lp in data.locals if lp.name == "Morning Camp"]
+    assert {lp.day for lp in camp} == {"Mon", "Tue"} and {lp.slot for lp in camp} == {"9AM"}
+    assert [lp.slot for lp in data.locals if lp.name == "Sat Clinic"] == ["5:30"]
+    r = solve(inp, date(2026, 11, 1), date(2026, 11, 30), time_limit_s=10)
+    a = r.assignments
+    assert ((a["name"] == "Morning Camp") & (a["date"] == date(2026, 11, 2)) & (a["slot"] == "9AM")).any()
+
+
+def test_program_on_dates_not_scheduled_yet(db):
+    """Adding a program on dates nobody has scheduled saves it without rebuilding anything, and it
+    shows on the calendar there."""
+    from streamlit.testing.v1 import AppTest
+    _save(db, "November", 53)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    before = at.session_state["result"]
+    at.radio(key="nav").set_value("Programs").run()
+    next(t for t in reversed(at.text_input) if t.label == "Program name").set_value("Winter Camp")
+    next(m for m in reversed(at.multiselect) if m.label == "Days").set_value(["Mon", "Tue", "Wed"])
+    next(m for m in reversed(at.multiselect) if m.label == "Time").set_value(["9AM"])
+    next(m for m in reversed(at.multiselect) if m.label == "Courts used").set_value([1, 2])
+    next(d for d in reversed(at.date_input) if d.label == "Start date").set_value(date(2026, 12, 21))
+    next(d for d in reversed(at.date_input) if d.label == "End date").set_value(date(2026, 12, 23))
+    next(b for b in at.button if b.label == "Add program").click().run()
+    assert not at.exception, at.exception
+    assert any("nothing needed rebuilding" in s.value for s in at.success)
+    assert at.session_state["result"] is before
+    at.radio(key="nav").set_value("Calendar").run()
+    at.date_input(key="cal_pick").set_value(date(2026, 12, 21)).run()
+    assert any("Winter Camp" in m.value for m in at.markdown)
+
+
+def test_clear_requests(db, monkeypatch):
+    pid = _save(db, "Roles", 54)
+    r1 = db.add_request("a@sdvbc.org", "A", "extra", "t", "", "Extra one", {"rows": []})
+    r2 = db.add_request("b@sdvbc.org", "B", "extra", "t", "", "Extra two", {"rows": []})
+    db.decide_request(r2, "denied", "cliff@sdvbc.org")
+    db.save_user("cliff@sdvbc.org", "Cliff", "", False, True)
+    at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Requests").run()
+    next(b for b in at.button if b.key == f"rq_rm_{r1}").click().run()     # changed my mind: no email
+    assert not at.exception
+    assert db.get_request(r1) is None
+    at.checkbox(key="rq_clear_sure").check().run()
+    next(b for b in at.button if b.key == "rq_clear").click().run()
+    assert db.requests() == []

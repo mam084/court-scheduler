@@ -12,7 +12,7 @@ from ui.state import S
 def render():
     """Inputs section."""
     inp = S.inp
-    st.markdown("Edit any table, then press **Auto-schedule** again. "
+    st.markdown("Edit any table, then press **Rebuild these dates** in the sidebar. "
                 "Download the tables as a spreadsheet to keep your changes.")
     help_ = {
         "Teams": "Girls teams can leave head_coach blank (taken from the name, e.g. 18-Jordan). "

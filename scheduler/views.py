@@ -336,7 +336,7 @@ def court_grid_html(
             blocked[wd] = f"Closed: {html.escape(closures[d])}"
         elif (open_wk is not None and d.weekday() >= 5 and d not in open_wk and not partial[wd]
               and not (len(bookings) and (bookings["day"] == wd).any())):
-            blocked[wd] = "No practices (weekend not open)"
+            blocked[wd] = "Weekend not open for practices (open it on the Open days tab)"
 
     out = [CSS]
     out.append('<div class="cs-wrap"><table class="cs-grid"><thead><tr><th class="cs-day"></th>')

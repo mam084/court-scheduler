@@ -304,6 +304,22 @@ class Store:
                                     decision_note=note or ""))
         return bool(res.rowcount)
 
+    def delete_requests(self, ids: list[str] | None = None, decided: bool = False,
+                        email: str | None = None) -> int:
+        """Removes requests for good (no emails): the ones in `ids`, and/or with decided=True every one
+        that isn't pending (only `email`'s, if given). Returns how many were removed."""
+        self._ensure()
+        n = 0
+        with self.engine.begin() as c:
+            if ids:
+                n += c.execute(delete(requests_t).where(requests_t.c.id.in_(list(ids)))).rowcount or 0
+            if decided:
+                q = delete(requests_t).where(requests_t.c.status != "pending")
+                if email:
+                    q = q.where(requests_t.c.email == email.strip().lower())
+                n += c.execute(q).rowcount or 0
+        return n
+
 
 def new_id() -> str:
     """A random, URL-safe id."""
