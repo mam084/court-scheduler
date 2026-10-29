@@ -1093,3 +1093,40 @@ def test_clear_requests(db, monkeypatch):
     at.checkbox(key="rq_clear_sure").check().run()
     next(b for b in at.button if b.key == "rq_clear").click().run()
     assert db.requests() == []
+
+
+def test_rename_a_team_everywhere(db):
+    """Renaming a team changes it in the inputs, the built schedule, other scheduled dates, published
+    versions and waiting requests, without rebuilding."""
+    import json
+
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.storage import MAIN_ID, all_periods
+    _save(db, "November", 55)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    at.radio(key="nav").set_value("Publish").run()
+    next(b for b in at.button if "Publish this schedule" in b.label).click().run()
+    _auto_schedule(at, date(2026, 12, 6), date(2026, 12, 20))
+    at.radio(key="nav").set_value("Court view").run()
+    at.date_input(key="cv_pick").set_value(date(2026, 11, 10)).run()   # back on November
+    a = at.session_state["result"].assignments
+    old = a[a["kind"] == "Practice"]["name"].iloc[0]
+    rid = db.add_request("c@sdvbc.org", "C", "extra", old, "", f"Extra for {old}",
+                         {"rows": [{"team": old, "action": "Extra", "date": "11/20/2026", "time": "5:30"}]})
+    before = at.session_state["result"]
+    at.radio(key="nav").set_value("Pecking order").run()
+    at.selectbox(key="rn_old").set_value(old)
+    at.text_input(key="rn_new").set_value("16-Danielle&Darci").run()
+    at.button(key="rn_go").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["result"] is before                      # nothing rebuilt
+    payload = db.get(MAIN_ID)["payload"]
+    blob = json.dumps(payload)
+    assert "16-Danielle&Darci" in blob and f'"{old}"' not in blob
+    assert "16-Danielle&Darci" in set(all_periods(payload)["2026-12-06_2026-12-20"]["result"]["assignments"][i]["name"]
+                                      for i in range(len(all_periods(payload)["2026-12-06_2026-12-20"]["result"]
+                                                         ["assignments"])))
+    req = db.get_request(rid)
+    assert req["team"] == "16-Danielle&Darci" and req["detail"]["rows"][0]["team"] == "16-Danielle&Darci"

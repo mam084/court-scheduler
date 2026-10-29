@@ -1481,3 +1481,30 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
 
     return CleanInput(teams, rules, wishes, locals_, weekends, closures, warnings, tournaments, roster,
                       pins, cancels, usual, usual_court)
+
+
+def rename_team(inp: ScheduleInput, old: str, new: str) -> None:
+    """Renames a team everywhere in the club's tables (in place): Teams, its no-dates and wishlist,
+    hand edits, the tournaments it goes to, privates and its Google Calendar link."""
+    o = _norm_name(old)
+
+    def same(v) -> bool:
+        return not blank(v) and _norm_name(v) == o
+
+    for attr, col in (("teams", "team"), ("availability", "who"), ("wishlist", "team"), ("overrides", "team"),
+                      ("privates", "team")):
+        df = getattr(inp, attr, None)
+        if isinstance(df, pd.DataFrame) and col in df.columns and len(df):
+            df = df.copy().astype(object)
+            df[col] = [new if same(v) else v for v in df[col]]
+            setattr(inp, attr, df)
+    t = getattr(inp, "tournaments", None)
+    if isinstance(t, pd.DataFrame) and "teams" in t.columns and len(t):
+        t = t.copy().astype(object)
+        t["teams"] = [v if blank(v) else ", ".join(new if same(x) else x for x in parse_list(v)) for v in t["teams"]]
+        inp.tournaments = t
+    c = getattr(inp, "calendars", None)
+    if isinstance(c, pd.DataFrame) and {"kind", "name"} <= set(c.columns) and len(c):
+        c = c.copy().astype(object)
+        c["name"] = [new if str(k).strip().lower() == "team" and same(n) else n for k, n in zip(c["kind"], c["name"])]
+        inp.calendars = c

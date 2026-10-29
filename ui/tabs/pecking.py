@@ -123,3 +123,53 @@ def render():
                     _rebuild(f"Pecking order set for {plural(n, 'team')}"
                              + (f", assistants updated for {len(changes)}" if upd and changes else "")
                              + ". Schedule rebuilt.")
+
+    _rename_team()
+
+
+def _rename_team():
+    """Rename a team everywhere: its no-dates, wishlist, hand edits, tournaments, privates, calendar link,
+    every scheduled run's practices and published versions, and its waiting requests."""
+    from scheduler.data import _norm_name, rename_team
+    from scheduler.storage import rename_team_in_period
+    from ui.dates import active_key
+    inp = S.inp
+    names = [str(t).strip() for t in inp.teams["team"] if not blank(t)]
+    if not names:
+        return
+    with st.expander("Rename a team"):
+        st.caption("Changes the name everywhere: the schedule, published versions, no-dates, wishlists, hand "
+                   "edits, tournaments, privates and requests. Nothing gets rebuilt or moved.")
+        c1, c2, c3 = st.columns([2, 2, 1], vertical_alignment="bottom")
+        old = c1.selectbox("Team", names, key="rn_old")
+        new = c2.text_input("New name", key="rn_new", placeholder="e.g. 16-Danielle&Darci").strip()
+        clash = new and any(_norm_name(n) == _norm_name(new) and n != old for n in names)
+        if clash:
+            st.error(f"There's already a team called {new}.")
+        if c3.button("Rename", type="primary", width="stretch", key="rn_go",
+                     disabled=not new or new == old or bool(clash)):
+            rename_team(inp, old, new)
+            r = st.session_state.get("result")
+            if r is not None:
+                for df_attr, col in (("assignments", "name"), ("pattern", "team"), ("practice_counts", "team"),
+                                     ("issues", "team")):
+                    df = getattr(r, df_attr, None)
+                    if isinstance(df, pd.DataFrame) and col in df.columns and len(df):
+                        df = df.copy()
+                        df[col] = df[col].map(lambda v: new if v == old else v)
+                        setattr(r, df_attr, df)
+                r.broken = [dict(b, team=new) if b.get("team") == old else b for b in r.broken]
+            st.session_state.published = rename_team_in_period(
+                {"published": st.session_state.get("published") or []}, old, new)["published"]
+            for k, ent in list(st.session_state.get("periods", {}).items()):
+                if k != active_key():
+                    st.session_state.periods[k] = rename_team_in_period(ent, old, new)
+                    st.session_state.periods_dirty.add(k)
+            n_req = S.store.rename_team_in_requests(old, new)
+            st.session_state.pop("_season_cache", None)
+            st.session_state.result = r
+            st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+            st.session_state._force_save = True
+            st.session_state.flash = f"Renamed {old} to {new}" + (
+                f" (and {plural(n_req, 'waiting request')})" if n_req else "") + "."
+            st.rerun()

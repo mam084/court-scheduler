@@ -294,6 +294,25 @@ class Store:
         out["detail"] = json.loads(out["detail"] or "{}")
         return out
 
+    def rename_team_in_requests(self, old: str, new: str) -> int:
+        """Pending requests for a renamed team: their team and the rows they'd apply."""
+        n = 0
+        for r in self.requests("pending"):
+            d = r["detail"] or {}
+            rows = [dict(x, team=new) if x.get("team") == old else x for x in d.get("rows") or []]
+            rp = d.get("replace_pin")
+            if rp and rp[0] == old:
+                rp = [new] + list(rp[1:])
+            if r["team"] != old and rows == (d.get("rows") or []) and rp == d.get("replace_pin"):
+                continue
+            with self.engine.begin() as c:
+                c.execute(update(requests_t).where(requests_t.c.id == r["id"]).values(
+                    team=new if r["team"] == old else r["team"],
+                    summary=r["summary"].replace(old, new),
+                    detail=json.dumps(dict(d, rows=rows, replace_pin=rp), default=str)))
+            n += 1
+        return n
+
     def decide_request(self, rid: str, status: str, by: str, note: str = "") -> bool:
         """Approve / deny / withdraw a pending request. False if it wasn't pending any more
         (someone else got to it first)."""
@@ -508,3 +527,18 @@ def period_bookings(entry: dict) -> tuple[pd.DataFrame, list[date]]:
     r = entry.get("result") or {}
     a = _frame_in(r.get("assignments", []))
     return a, [date.fromisoformat(x) for x in r.get("weekend_dates", [])]
+
+
+def rename_team_in_period(entry: dict, old: str, new: str) -> dict:
+    """A stored run of dates (its build and published versions) with a team renamed."""
+    def fix(rows, col):
+        return [dict(r, **{col: new}) if r.get(col) == old else r for r in (rows or [])]
+    out = dict(entry)
+    r = entry.get("result")
+    if r:
+        out["result"] = dict(r, assignments=fix(r.get("assignments"), "name"), pattern=fix(r.get("pattern"), "team"),
+                             practice_counts=fix(r.get("practice_counts"), "team"), issues=fix(r.get("issues"), "team"),
+                             broken=fix(r.get("broken"), "team"))
+    out["published"] = [dict(v, practices=fix(v.get("practices"), "name"), pattern=fix(v.get("pattern"), "team"))
+                        for v in entry.get("published") or []]
+    return out
