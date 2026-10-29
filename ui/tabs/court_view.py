@@ -114,8 +114,15 @@ def render():
                                           ((ws, we) if ws else (S.start, S.end)))
         title_ = st.session_state.get("project_name") or "Court schedule"
 
+        # Gathered now: the file itself is built when the button is clicked, after this page run,
+        # when the page's values (S) are gone.
+        _w = dates.window(start, end)[0]
+        if _w is None:
+            st.caption("Nothing on the calendar on those dates.")
+            return
+
         def _win():
-            return dates.window(start, end)[0]
+            return _w
 
         d0, d1, d2 = st.columns(3)
         d0.download_button("Printable weeks · paper style", type="primary", width="stretch",

@@ -16,6 +16,12 @@ from ui.common import g_conn, g_session, plural, secret, send_mail
 from ui.state import S
 
 
+def _in_dates(tournaments) -> list:
+    """Travel tournaments that overlap the dates being sent (the email lists only those)."""
+    start, end = S.start, S.end
+    return [t for t in tournaments if t.kind == "travel" and t.start <= end and start <= t.end]
+
+
 def coach_list(ver: dict | None = None) -> list[str]:
     """Coaches on at least one team, in the order teams are listed. With a published version: only
     the coaches whose teams have travel practices in it (a coach who only works locals programs
@@ -56,7 +62,7 @@ def email_practices(ver: dict, coaches: list[str], only_me: bool, progress=None)
             problems.append(f"{c}: no email (add them in Access)")
             continue
         subj, text, html_ = mail.practices_email(c, teams_, pr_, range_label(start, end), ver["label"], APP_LINK,
-                                                 [t for t in cleaned.tournaments if t.kind == "travel"])
+                                                 _in_dates(cleaned.tournaments))
         if only_me:
             subj = f"[Test: {c}'s email] {subj}"
         err = send_mail([to], (subj, text, html_))
@@ -201,7 +207,7 @@ def _emails():
             subj_, _t, html_p = mail.practices_email(pc_, mail.teams_of(pc_, cleaned.teams),
                                                      practices_of(published[e_vi]), range_label(start, end),
                                                      published[e_vi]["label"], APP_LINK,
-                                                     [t for t in cleaned.tournaments if t.kind == "travel"])
+                                                     _in_dates(cleaned.tournaments))
             st.caption(f"To: {emails_.get(pc_, '(no email)')} · Subject: {subj_}")
             st.html(html_p)
     sure_ = e_me or st.checkbox(f"Yes, email {plural(len([c for c in e_who if c in emails_]), 'coach', 'coaches')}",

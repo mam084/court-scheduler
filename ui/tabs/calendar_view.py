@@ -48,8 +48,15 @@ def render():
         fname = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"calendar{who}_{start:%Y%m%d}-{end:%Y%m%d}")
         title = f"{st.session_state.get('project_name') or 'Practice calendar'}"
 
+        # Gathered now: the file itself is built when the button is clicked, after this page run,
+        # when the page's values (S) are gone.
+        _w = dates.window(start, end)[0]
+        if _w is None:
+            st.caption("Nothing on the calendar on those dates.")
+            return
+
         def _win():
-            return dates.window(start, end)[0]
+            return _w
 
         d1, d2, d3 = st.columns(3)
         d1.download_button("Google Calendar (.ics)",
