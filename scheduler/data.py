@@ -51,6 +51,7 @@ Field formats (all forgiving):
 
 from __future__ import annotations
 
+import contextlib
 import io
 import re
 from dataclasses import dataclass, field
@@ -465,7 +466,7 @@ def merge_import(new: ScheduleInput, old: ScheduleInput | None, start: date,
             notes.append(f"added {len(add)} new {label}{'s' if len(add) != 1 else ''} "
                          f"({', '.join(map(str, add[key]))})")
         else:
-            notes.append(f"no new {label}s")
+            notes.append("no new coaches" if sheet == "Coaches" else f"no new {label}s")
 
     # No-dates and wishlists: the file's for everyone in it.
     for sheet, who_col, date_col, label in (("Availability", "who", "dates", "no-dates"),
@@ -473,6 +474,13 @@ def merge_import(new: ScheduleInput, old: ScheduleInput | None, start: date,
         attr = ATTRS[sheet]
         mine, theirs = rows(getattr(old, attr, None)), rows(getattr(new, attr, None))
         in_file = {_norm_name(v) for v in theirs.get(who_col, [])} if len(theirs) else set()
+        file_dates = {}  # who -> dates the file covers for them (a re-import replaces those)
+        if date_col and len(theirs):
+            for _, r in theirs.iterrows():
+                if not blank(r.get(date_col)):
+                    with contextlib.suppress(ValueError, TypeError):
+                        file_dates.setdefault(_norm_name(r.get(who_col)), []).extend(
+                            parse_date_ranges(r.get(date_col), start.year))
         keep = []
         for _, r in mine.iterrows():
             who = _norm_name(r.get(who_col))
@@ -481,12 +489,20 @@ def merge_import(new: ScheduleInput, old: ScheduleInput | None, start: date,
                 continue                       # an old period's: gone
             if who in in_file and not dated:
                 continue                       # their standing ones: the file's replace them
+            if dated and who in file_dates:
+                try:
+                    mine_r = parse_date_ranges(r.get(date_col), start.year)
+                except (ValueError, TypeError):
+                    mine_r = []
+                if any(a <= y and x <= b for a, b in mine_r for x, y in file_dates[who]):
+                    continue                   # the file has those dates for them now (same import again)
             keep.append(r)
         kept = pd.DataFrame(keep, columns=mine.columns) if keep else mine.iloc[0:0]
         merged = pd.concat([theirs, kept], ignore_index=True) if len(kept) else theirs
         if len(merged):
             cols = COLUMNS[sheet]
             merged = merged.reindex(columns=cols).astype(object)
+            merged = merged.map(lambda v: "" if blank(v) else str(v).strip())  # 'nan' vs '' aren't two rows
             merged = merged.drop_duplicates(subset=cols).reset_index(drop=True)
         setattr(new, attr, merged if len(merged) else empty(sheet))
         if len(theirs):

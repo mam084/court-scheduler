@@ -1704,3 +1704,15 @@ def test_weekend_wishlist_counts_on_weekends():
     r = solve(inp, date(2026, 11, 1), date(2026, 11, 7), time_limit_s=10)
     pr = r.assignments[r.assignments["kind"] == "Practice"]
     assert len(pr) == 2 and set(pr["date"]) == {date(2026, 11, 1)} and set(pr["slot"]) <= {"9AM", "11AM"}
+
+
+def test_reimporting_the_same_file_replaces_instead_of_stacking():
+    from scheduler.data import merge_import
+    teams = [{"team": "16-D&D", "age": 16, "head_coach": "Danielle", "assistants": "Darci"}]
+    club = _inp(teams, [{"who": "Darci", "type": "Not preferred", "dates": "12/19/2026-12/20/2026"},
+                        {"who": "Darci", "type": "No", "dates": "12/16/2026", "note": float("nan")}])
+    file = _inp(teams, [{"who": "Darci", "type": "No", "dates": "12/19/2026-12/20/2026"},
+                        {"who": "Darci", "type": "No", "dates": "12/16/2026", "note": ""}])
+    merge_import(file, club, date(2026, 12, 6))
+    av = file.availability
+    assert len(av) == 2 and set(av["type"]) == {"No"}
