@@ -1180,3 +1180,16 @@ def test_hand_placed_practice_next_to_a_tournament_is_flagged(db):
     at.run()
     assert not at.exception, at.exception
     assert any("the day after SoCal Cup" in w.value and team in w.value for w in at.warning)
+
+
+def test_add_a_makeup_from_edit_practices(db):
+    at, _ = _open(db, "Makeups", 58)
+    at.radio(key="nav").set_value("Edit practices").run()
+    team = at.selectbox(key="ed_team").value
+    at.radio(key="ed_mode").set_value("Makeup practice").run()
+    at.date_input(key=f"ed_mk_d_{team}").set_value(date(2026, 11, 3)).run()
+    at.button(key=f"ed_mk_go_{team}").click().run()
+    assert not at.exception, at.exception
+    pc = at.session_state["result"].practice_counts
+    row = pc[(pc["team"] == team) & (pc["week_of"] == date(2026, 11, 1))].iloc[0]
+    assert row["target"] == 3

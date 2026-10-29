@@ -1144,6 +1144,7 @@ class CleanInput:
     cancels: dict = field(default_factory=dict)              # (team, date) -> practices cancelled (no makeup)
     usual: dict = field(default_factory=dict)                # team -> [(weekday, slot)]
     usual_court: dict = field(default_factory=dict)          # team -> court
+    makeups: dict = field(default_factory=dict)              # (team, week's Sunday) -> extra practices that week
 
     @property
     def coaches(self) -> list[str]:
@@ -1455,6 +1456,7 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
     # ---- manual overrides ------------------------------------------------------
     pins: list[Pin] = []
     cancels: dict = {}
+    makeups: dict = {}
     usual: dict = {}
     usual_court: dict = {}
     odf = getattr(inp, "overrides", None)
@@ -1497,6 +1499,11 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 rules.append(Rule(tname, "no", [], [(d, d)], times, note or "removed by hand", manual=True))
                 if action.startswith("can"):
                     cancels[(tname, d)] = cancels.get((tname, d), 0) + 1
+            elif action.startswith("make"):
+                # A makeup: one more practice that week, wherever the scheduler finds room.
+                d = to_date(r["date"], year)
+                wk = d - timedelta(days=(d.weekday() + 1) % 7)  # its Sunday
+                makeups[(tname, wk)] = makeups.get((tname, wk), 0) + 1
             elif action.startswith("usual") or action.startswith("fix"):
                 days = [x for x in parse_days(r.get("days")) if x in WEEKDAYS]
                 if not days or not times:
@@ -1508,14 +1515,14 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 if court is not None:
                     usual_court[tname] = court
             else:
-                raise ValueError("action should be Add, Extra, Remove, Cancel or Usual")
+                raise ValueError("action should be Add, Extra, Makeup, Remove, Cancel or Usual")
         except (ValueError, TypeError, KeyError) as e:
             errors.append(f"{row}: {e}")
     if errors:
         raise ValueError("Please fix these in the input:\n- " + "\n- ".join(errors))
 
     return CleanInput(teams, rules, wishes, locals_, weekends, closures, warnings, tournaments, roster,
-                      pins, cancels, usual, usual_court)
+                      pins, cancels, usual, usual_court, makeups)
 
 
 def rename_team(inp: ScheduleInput, old: str, new: str) -> None:

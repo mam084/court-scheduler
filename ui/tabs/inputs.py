@@ -38,6 +38,7 @@ def render():
         "Coaches": "Coach roster: anyone not on a team yet (e.g. coaches who only work programs), plus contact info.",
         "Overrides": "Manual changes the scheduler always keeps (easier from the Edit practices tab). action = Add "
                      "(date + time, optional court), Extra (same, on top of the week's practices), "
+                     "Makeup (a date: one more practice that week, the scheduler picks when), "
                      "Remove (date, optional time; a makeup is found), Cancel (no makeup) "
                      "or Usual (weekdays + time, optional court).",
         "Calendars": "Google Calendar links (easier: the Publish tab). kind = Team, Club or Program; name = the "

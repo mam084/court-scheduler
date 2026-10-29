@@ -158,7 +158,8 @@ def render():
 
         with c_right:
             mode = st.radio("What do you want to do?", ["Suggest a preference", "Move a practice", "Remove a practice",
-                                                        "Add a practice", "Set usual days", "Practices per week"]
+                                                        "Add a practice", "Makeup practice", "Set usual days",
+                                                        "Practices per week"]
                             if CAN else ["Suggest a preference", "Ask to move a practice", "Ask for an extra practice",
                                          "Ask to cancel a practice"],
                             key="ed_mode",
@@ -346,6 +347,22 @@ def render():
                                       "note": "extra practice" if extra else "added by hand"}],
                                     f"Added {'an extra' if extra else 'a'} practice for {e_team} "
                                     f"on {ad:%a %b %-d} at {as_}.", stage=True)
+            elif mode == "Makeup practice":
+                st.caption("One or more practices on top of the usual ones for a single week (say, a team "
+                           "that was short a practice last time). The scheduler picks when, like any other "
+                           "practice: around no-dates and tournaments, and just as important as the usual ones.")
+                mk_d = st.date_input("Week of (any day that week)", value=start, format="MM/DD/YYYY",
+                                     key=f"ed_mk_d_{e_team}")
+                ws_ = mk_d - pd.Timedelta(days=(mk_d.weekday() + 1) % 7)
+                mk_n = st.number_input("Extra practices that week", 1, 3, value=1, key=f"ed_mk_n_{e_team}")
+                mk_why = st.text_input("Note", key=f"ed_mk_why_{e_team}", placeholder="e.g. short a practice Nov 22")
+                st.caption(f"Week of {ws_:%a %b %-d}: {e_team} gets {e_per_week + int(mk_n)} practices.")
+                _not_scheduled(mk_d)
+                if st.button("Add makeup", type="primary", width="stretch", key=f"ed_mk_go_{e_team}"):
+                    apply_overrides([{"team": e_team, "action": "Makeup", "date": f"{mk_d:%m/%d/%Y}", "days": "",
+                                      "time": "", "court": "", "note": mk_why.strip() or "makeup"}] * int(mk_n),
+                                    f"{e_team} gets {plural(int(mk_n), 'makeup practice')} the week of "
+                                    f"{ws_:%b %-d}.")
             elif mode == "Practices per week":
                 st.caption("For a team that wants more (or fewer) practices every week. The scheduler gives the "
                            "first two the usual priority; a 3rd or more is added wherever there's room without "

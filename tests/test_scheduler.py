@@ -1716,3 +1716,15 @@ def test_reimporting_the_same_file_replaces_instead_of_stacking():
     merge_import(file, club, date(2026, 12, 6))
     av = file.availability
     assert len(av) == 2 and set(av["type"]) == {"No"}
+
+
+def test_makeup_adds_a_practice_that_week():
+    teams = [{"team": f"16-T{i}", "age": 16} for i in range(3)]
+    inp = _inp(teams)
+    inp.overrides = pd.DataFrame([{"team": "16-T0", "action": "Makeup", "date": "11/03/2026", "days": "", "time": "",
+                                   "court": "", "note": "short last week"}])
+    r = solve(inp, *NOV, time_limit_s=10)
+    pc = r.practice_counts.set_index(["team", "week_of"])
+    assert pc.loc[("16-T0", date(2026, 11, 1)), "scheduled"] == 3
+    assert pc.loc[("16-T0", date(2026, 11, 8)), "scheduled"] == 2
+    assert pc.loc[("16-T1", date(2026, 11, 1)), "scheduled"] == 2

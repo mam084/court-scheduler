@@ -462,7 +462,8 @@ def solve(
             elif len(free) > 1:
                 m.AddAtMostOne(free)
         for ws, wdates in weeks.items():
-            m.Add(sum(y_day(t, d) for d in wdates) <= teams[t].per_week + extras[t, ws])
+            m.Add(sum(y_day(t, d) for d in wdates)
+                  <= teams[t].per_week + extras[t, ws] + data.makeups.get((teams[t].name, ws), 0))
 
     # Share of the period's weekdays each team is actually playing (season
     # start dates), used to weigh the weekly template.
@@ -603,7 +604,8 @@ def solve(
     for t in T:
         team = teams[t]
         for ws, wdates in weeks.items():
-            week_goal = week_target(ws, team.per_week)
+            mk = data.makeups.get((team.name, ws), 0)  # makeups that week: on top, as important as the rest
+            week_goal = week_target(ws, team.per_week) + mk
             if not week_goal:
                 continue
             if team.start and team.start > ws + timedelta(days=6):
@@ -611,7 +613,7 @@ def solve(
             # A team whose season starts mid-week still gets the full two
             # practices, as long as at least two open days are left that week.
             days_left = sum(1 for d in wdates if not team.start or d >= team.start)
-            start_cap = min(team.per_week, days_left)
+            start_cap = min(team.per_week + mk, days_left)
             if not any((t, d, s) in y for d in wdates for s in slots_on(d)):
                 if start_cap:
                     no_slot_weeks.append((t, ws, min(week_goal, start_cap)))
@@ -634,7 +636,8 @@ def solve(
                     m.Add(sk <= terms[-1])
                 terms.append(sk)
                 lost = target - k + 1  # which practice of the week this one is
-                obj.append((WEIGHTS["missed_extra"] if lost > 2 else w if (lost == 2 or target == 1) else 4 * w) * sk)
+                obj.append((WEIGHTS["missed_extra"] if lost > 2 + mk else w if (lost >= 2 or target == 1) else 4 * w)
+                           * sk)
             # Extra practices placed by hand sit on top: they don't count toward the target.
             m.Add(sum(terms) >= target - (sum(y_day(t, d) for d in wdates) - extras[t, ws]))
             short_vars[t, ws] = (terms, target)
