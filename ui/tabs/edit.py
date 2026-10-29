@@ -18,7 +18,7 @@ from scheduler.config import (
 )
 from scheduler.data import COLUMNS
 from ui import dates
-from ui.common import plural
+from ui.common import plural, tournament_note
 from ui.edits import apply_overrides, change_prefs, open_courts, pref_key, submit_request
 from ui.state import S
 
@@ -90,6 +90,14 @@ def _placed(d, slot: str, court, team: str, moving: tuple | None = None):
                  "pick another time.")
         st.stop()
     return free[0] if court == "Any" else court
+
+
+def _tourney_warn(team: str, d):
+    """A warning when a practice put somewhere by hand lands on or next to the team's tournament
+    (the scheduler never does that itself, but a hand-placed practice stays where it's put)."""
+    why = tournament_note(team, d)
+    if why:
+        st.warning(f"{d:%a %b %-d} is {why} for {team}. A practice placed by hand stays there anyway.")
 
 
 def _not_scheduled(d):
@@ -167,6 +175,7 @@ def render():
                         pk = f"{e_team}_{old['date']}_{old['slot']}"  # fields reset to the chosen practice
                         nd = st.date_input("New date", value=old["date"], format="MM/DD/YYYY", key=f"ed_nd_{pk}")
                         _not_scheduled(nd)
+                        _tourney_warn(e_team, nd)
                         ns = st.selectbox("New time", TEAM_SLOT_CHOICES, format_func=team_slot_label,
                                           index=(TEAM_SLOT_CHOICES.index(old["slot"])
                                                  if old["slot"] in TEAM_SLOT_CHOICES else 0),
@@ -209,6 +218,7 @@ def render():
                         ns = st.selectbox("New time", TEAM_SLOT_CHOICES, format_func=team_slot_label,
                                           index=TEAM_SLOT_CHOICES.index(old["slot"]) if old["slot"] in TEAM_SLOT_CHOICES
                                           else 0, key=f"{rk}_ns")
+                        _tourney_warn(e_team, nd)
                         dup = already_on(tp, nd, ns, skip=(od, old["slot"]))
                         if dup:
                             st.error(f"{e_team} already practices then ({dup}). Pick another date or time.")
@@ -249,6 +259,7 @@ def render():
                 ad = st.date_input("Date", value=start, format="MM/DD/YYYY", key=f"rq_x_d_{e_team}")
                 as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1,
                                    key=f"rq_x_t_{e_team}")
+                _tourney_warn(e_team, ad)
                 dup = already_on(tp, ad, as_)
                 if dup:
                     st.error(f"{e_team} already practices then ({dup}). Pick another date or time.")
@@ -317,6 +328,7 @@ def render():
             elif mode == "Add a practice":
                 ad = st.date_input("Date", value=start, format="MM/DD/YYYY", key="ed_ad")
                 _not_scheduled(ad)
+                _tourney_warn(e_team, ad)
                 as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1, key="ed_as")
                 dup_a = already_on(tp, ad, as_)
                 if dup_a:

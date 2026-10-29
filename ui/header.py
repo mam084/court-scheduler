@@ -8,7 +8,7 @@ import streamlit as st
 from scheduler import privates as pv
 from scheduler.data import program_coach_conflicts, tournament_conflicts
 from scheduler.views import range_label, short_list_text
-from ui.common import cleaned_inputs, mine, plural
+from ui.common import cleaned_inputs, mine, plural, tournament_note
 from ui.flags import compute, flags_panel
 from ui.nav import ADMIN_ONLY, ALL_VIEWS, TAB_ACCESS
 from ui.state import S
@@ -93,6 +93,15 @@ def render():
             lines = [f"- **{b['team']}** · {b['date']:%a %b %-d} {b['slot_label']}: {b['who']}" for b in my_broken]
             alerts.append((st.warning, f"**{plural(len(my_broken), 'practice')} had to go on a no-date** so the team "
                                        "still gets 2 practices that week:\n" + "\n".join(lines)))
+        # Practices placed by hand on or next to the team's own travel tournament (pins skip that rule).
+        a_ = result.assignments
+        pins = a_[(a_["kind"] == "Practice") & (a_["pinned"] == True)] if "pinned" in a_ else a_.iloc[0:0]  # noqa: E712
+        t_lines = [f"- **{r.name}** · {r.date:%a %b %-d} {r.slot_label}: {why}"
+                   for r in pins.itertuples() if mine(r.name) and (why := tournament_note(r.name, r.date))]
+        if t_lines:
+            alerts.append((st.warning, f"**{plural(len(t_lines), 'practice')} placed by hand next to or during the "
+                                       "team's tournament** (the scheduler never puts one there; undo it in **Edit "
+                                       "practices** → Manual changes if it's a mistake):\n" + "\n".join(t_lines)))
         iss = result.issues if result.issues is not None else pd.DataFrame(columns=["issue"])
         if COACH_VIEW and len(iss):
             iss = iss[iss["team"].map(mine)]

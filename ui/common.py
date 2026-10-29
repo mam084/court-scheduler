@@ -232,3 +232,20 @@ def send_mail(to: list[str], msg: tuple[str, str, str], reply_to: str | None = N
         return None
     except Exception as e:  # noqa: BLE001
         return str(e)
+
+
+def tournament_note(team: str, d: date) -> str | None:
+    """Why `team` shouldn't practice on day d because of a travel tournament it goes to: 'at SoCal Cup
+    that day', 'the day after SoCal Cup'... None if nothing."""
+    from datetime import timedelta
+    cleaned = getattr(S, "cleaned", None)
+    for tn in (cleaned.tournaments if cleaned is not None else []):
+        if tn.kind != "travel" or team not in tn.teams:
+            continue
+        if tn.start <= d <= tn.end:
+            return f"at {tn.name} that day"
+        if d == tn.start - timedelta(days=1):
+            return f"the day before {tn.name}"
+        if d == tn.end + timedelta(days=1):
+            return f"the day after {tn.name}"
+    return None

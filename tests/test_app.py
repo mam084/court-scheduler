@@ -1162,3 +1162,21 @@ def test_moves_wait_for_update_schedule(db):
     p = r.assignments[(r.assignments["name"] == team) & (r.assignments["date"] == d)]
     assert list(p["slot"]) == [new_slot]
     assert "staged" not in at.session_state
+
+
+def test_hand_placed_practice_next_to_a_tournament_is_flagged(db):
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.storage import MAIN_ID
+    inp = simulate(4, 2, 2, seed=57, start=date(2026, 12, 6), end=date(2026, 12, 20))
+    team = inp.teams["team"].iloc[0]
+    inp.tournaments = pd.DataFrame([{"name": "SoCal Cup", "type": "Travel", "start_date": "12/11/2026",
+                                     "end_date": "12/13/2026", "teams": team}])
+    inp.overrides = pd.DataFrame([{"team": team, "action": "Extra", "date": "12/14/2026", "time": "5:30",
+                                   "note": "by hand"}])
+    r = solve(inp, date(2026, 12, 6), date(2026, 12, 20), time_limit_s=10)
+    db.save(MAIN_ID, "Dec", make_payload(inp, date(2026, 12, 6), date(2026, 12, 20), {"time_limit": 10}, r))
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    assert not at.exception, at.exception
+    assert any("the day after SoCal Cup" in w.value and team in w.value for w in at.warning)
