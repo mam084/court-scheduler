@@ -471,6 +471,36 @@ def test_outside_addresses_are_refused():
     assert access.email_allowed("matthew@sdvbc.org")
 
 
+def test_outside_guest_can_sign_in_only_when_allowed(db):
+    from scheduler import access
+    db.save_user("jane@gmail.com", "Jane", "")
+    assert not access.email_allowed("jane@gmail.com", store=db)   # listed = emails only
+    access.set_guest(db, "Jane@Gmail.com", True)
+    assert access.email_allowed("jane@gmail.com", store=db)
+    assert not access.email_allowed("other@gmail.com", store=db)
+    assert not access.email_allowed("jane@gmail.com")              # Google connect stays club-only
+    access.set_guest(db, "jane@gmail.com", False)
+    assert not access.email_allowed("jane@gmail.com", store=db)
+    assert db.get_setting(access.GUEST_KEY) is None
+
+
+def test_access_tab_shows_outside_people(db, monkeypatch):
+    from scheduler import access
+    db.save_user("jane@gmail.com", "Jane", "")
+    access.set_guest(db, "jane@gmail.com", True)
+    db.save_user("bob@gmail.com", "Bob", "")
+    at, _ = _as(db, monkeypatch, "matthew@sdvbc.org", seed=23)
+    at.radio(key="nav").set_value("Access").run()
+    assert not at.exception
+    assert any("Outside (non-club)" in c.value for c in at.caption)
+
+
+def test_outside_email_only_person_gets_publish_emails(db):
+    from scheduler import access
+    db.save_user("jane@gmail.com", "Jane", "Jane Doe")
+    assert access.coach_emails(db.users())["Jane Doe"] == "jane@gmail.com"
+
+
 def test_coach_adds_own_no_date_and_sees_only_their_things(db, monkeypatch):
     pid = _save(db, "Roles", 25)
     head, team = _head_of_first_team(db, pid)

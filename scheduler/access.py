@@ -9,7 +9,8 @@ Three roles, which can be combined:
     own teams' preferences right away. Other changes will be requests.
 
 Sign-in is with Google (Streamlit's built-in login, set up in secrets).
-Only addresses on the club's domain(s) can get in. When sign-in isn't set
+Only addresses on the club's domain(s) can get in, plus any outside
+addresses an app admin allows in the Access tab (guests). When sign-in isn't set
 up yet, the app runs as before: everyone who opens it can do everything.
 
 The app admins listed in ADMIN_EMAILS (secret, or the default below) are
@@ -118,12 +119,45 @@ def app_admins(secrets=None) -> list[str]:
     return _env_list("ADMIN_EMAILS", DEFAULT_APP_ADMINS, secrets)
 
 
-def email_allowed(email: str, secrets=None) -> bool:
-    """Can this address sign in? App admins always can; anyone else needs a club domain."""
+def is_club(email: str, secrets=None) -> bool:
+    """A club address (on the club's domain), or one of the always-on app admins."""
     email = (email or "").strip().lower()
     if email in app_admins(secrets):
         return True
     return "@" in email and email.rsplit("@", 1)[1] in allowed_domains(secrets)
+
+
+# Outside addresses (not on the club's domain) that may sign in. Kept as a
+# setting so the people table needs no new column. Outside people listed in
+# Access without this are email-only: they get the app's emails but can't sign in.
+GUEST_KEY = "guest_signin"
+
+
+def guest_emails(store) -> set[str]:
+    """Outside addresses allowed to sign in."""
+    import json
+    try:
+        raw = store.get_setting(GUEST_KEY)
+        return {str(e).strip().lower() for e in json.loads(raw)} if raw else set()
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def set_guest(store, email: str, on: bool) -> None:
+    """Lets an outside address sign in (on) or not (off)."""
+    import json
+    email = (email or "").strip().lower()
+    g = guest_emails(store)
+    g = (g | {email}) if on else (g - {email})
+    store.set_setting(GUEST_KEY, json.dumps(sorted(g)) if g else None)
+
+
+def email_allowed(email: str, secrets=None, store=None) -> bool:
+    """Can this address sign in? Club addresses and app admins always can; an
+    outside address only when it's been allowed in Access (needs `store`)."""
+    if is_club(email, secrets):
+        return True
+    return store is not None and (email or "").strip().lower() in guest_emails(store)
 
 
 def person_for(store, email: str, name: str = "", secrets=None) -> Person:

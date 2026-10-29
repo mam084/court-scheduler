@@ -99,9 +99,10 @@ def run():
             st.button("Sign in with Google", type="primary", on_click=st.login)
             st.stop()
         _email, _name = str(st.user.get("email") or ""), str(st.user.get("name") or "")
-        if not access.email_allowed(_email, SECRETS):
+        if not access.email_allowed(_email, SECRETS, store):
             st.title("Court Scheduler")
-            st.error(f"{_email} isn't a club account. Sign in with your @{access.allowed_domains(SECRETS)[0]} address.")
+            st.error(f"{_email} doesn't have access. Sign in with your @{access.allowed_domains(SECRETS)[0]} address, "
+                     "or ask a club admin to add this address in the app's Access tab.")
             st.button("Sign out", on_click=st.logout)
             st.stop()
     elif os.environ.get("COURT_DEV_USER"):

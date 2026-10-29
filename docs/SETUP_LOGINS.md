@@ -4,7 +4,7 @@ Sign-in lets coaches open the app with their club Google account. What each pers
 
 | Role | Who (to start) | Can |
 |---|---|---|
-| Coach | everyone with an @sdvbc.org account | see the whole schedule; change their own teams' preferences (saved right away, fitted in at the next rebuild) |
+| Coach | everyone with an @sdvbc.org account, plus outside addresses allowed in Access | see the whole schedule; change their own teams' preferences (saved right away, fitted in at the next rebuild) |
 | Scheduling admin | Cliff | everything on the schedule: edit, rebuild, publish, programs, tournaments, privates, inputs; approve coaches' requests (emailed about new ones) |
 | App admin | Matthew | the **Access** tab (who has which role, activity log) and **View as**, to see the app as any role |
 
@@ -62,6 +62,21 @@ Save; the app restarts with a **Sign in with Google** page.
 2. Create or import a schedule (as an app admin you're not a scheduling admin, so use **View as → Scheduling admin** to set things up, or tick your own *Scheduling admin* box in **Access**).
 3. In **Access**, link each person to their **coach name** on the schedule once they've signed in (or add them ahead of time). That's what lets a coach edit their own teams' preferences.
 4. Use **View as → Coach: …** to check what a coach sees.
+
+## Outside people (not @sdvbc.org)
+
+In **Access → Add someone**, you can add any email (Gmail, school, etc.) and link it to a coach name:
+
+- **Emails only** (leave *Can sign in* unticked): they get the app's emails, like their practice schedule when you publish. This works right away, with no Google changes.
+- **Can sign in**: they can also sign in with that Google account and see what a coach sees. Only addresses you tick get in. Anyone else outside the club is still turned away.
+
+Signing in from outside needs one Google change, because **Internal** lets only @sdvbc.org accounts through Google's sign-in screen:
+
+1. Check whether the sign-in and the Google connection (email and calendars, `docs/SETUP_GOOGLE.md`) use **the same Google Cloud project**. Internal/External applies to the whole project.
+2. **If they're separate projects:** in the sign-in project, go to **OAuth consent screen / Audience → Make external**, then **Publish app** (status *In production*). Sign-in only asks for name and email, so Google doesn't need to review it. Nothing else changes.
+3. **If they're the same project:** leave that project **Internal**, since email and calendar access on External would need Google's review or expire every 7 days. Instead, make a **new project** just for sign-in (step 2 above, but External and published), create its OAuth client with the same redirect URIs, and put its **Client ID** and **Client secret** in the `[auth]` section of the app's secrets. The email/calendar connection keeps working as it is.
+
+Outside people may see an extra Google screen the first time they sign in. That's normal.
 
 ## Moving it to the real app (later)
 

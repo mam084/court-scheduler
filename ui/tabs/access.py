@@ -76,16 +76,24 @@ def render():
 
     always = set(access.app_admins(SECRETS))
     people = store.users()
+    guests = access.guest_emails(store)
+    club = {p_["email"]: access.is_club(p_["email"], SECRETS) for p_ in people}
     names_ = coach_names()
     link_opts = [""] + sorted(set(names_) | {p_["coach"] for p_ in people if p_["coach"]})
     table = pd.DataFrame([{"email": p_["email"], "name": p_["name"], "coach": p_["coach"],
                            "app_admin": bool(p_["app_admin"]) or p_["email"] in always,
-                           "sched_admin": bool(p_["sched_admin"])} for p_ in people],
-                         columns=["email", "name", "coach", "app_admin", "sched_admin"])
+                           "sched_admin": bool(p_["sched_admin"]),
+                           "sign_in": club[p_["email"]] or p_["email"] in guests} for p_ in people],
+                         columns=["email", "name", "coach", "app_admin", "sched_admin", "sign_in"])
     st.subheader("People")
     if table.empty:
         st.caption("Nobody has signed in yet.")
     else:
+        outside_ = [e for e, c in club.items() if not c]
+        if outside_:
+            st.caption("Outside (non-club) addresses get the app's emails. Tick **Can sign in** to also let them sign "
+                       "in as a coach (needs the sign-in set to External in Google: `docs/SETUP_LOGINS.md`). Club "
+                       "addresses can always sign in.")
         unlinked = table[(table["coach"] == "") & ~table["sched_admin"]]["email"].tolist()
         if unlinked:
             st.info(f"Not linked to a coach name yet: {', '.join(unlinked)}. Pick their name in the **Coach** column "
@@ -99,11 +107,14 @@ def render():
                                                           help="Their name on the schedule (Teams / Locals sheets)"),
                 "app_admin": st.column_config.CheckboxColumn("App admin", help="Manages this page"),
                 "sched_admin": st.column_config.CheckboxColumn("Scheduling admin",
-                                                               help="Edits the schedule and approves requests")})
+                                                               help="Edits the schedule and approves requests"),
+                "sign_in": st.column_config.CheckboxColumn(
+                    "Can sign in", help="Club addresses always can. For an outside address: unticked = emails only")})
         changes = []
         for (_, old), (_, new) in zip(table.iterrows(), edited.iterrows()):
             diff_ = [f"{lab} {old[c]!s} → {new[c]!s}" for c, lab in (("name", "name"), ("coach", "coach"),
-                     ("app_admin", "app admin"), ("sched_admin", "scheduling admin")) if old[c] != new[c]]
+                     ("app_admin", "app admin"), ("sched_admin", "scheduling admin"), ("sign_in", "can sign in"))
+                     if old[c] != new[c] and not (c == "sign_in" and club[new["email"]])]
             if diff_:
                 changes.append((new, diff_))
         if st.button("Save changes", type="primary", disabled=not changes, key="access_save"):
@@ -114,6 +125,8 @@ def render():
                     admin = True
                     kept.append(new["email"])
                 store.save_user(new["email"], new["name"] or "", new["coach"] or "", admin, bool(new["sched_admin"]))
+                if not club[new["email"]]:
+                    access.set_guest(store, new["email"], bool(new["sign_in"]))
                 store.log(VIEWER.log_name, "Access", f"{new['email']}: " + "; ".join(diff_))
             st.session_state.pop("_me", None)
             st.session_state.access_ver = st.session_state.get("access_ver", 0) + 1
@@ -145,13 +158,10 @@ def render():
             pick_ = [r for r in ed_s.to_dict("records") if r["add"] and "@" in str(r["email"])]
             if st.button(f"Add {plural(len(pick_), 'coach', 'coaches')}", type="primary", disabled=not pick_,
                          key="acc_sugg_go"):
-                added, skipped = [], []
+                added, skipped, outside_added = [], [], []
                 linked_to = {u["email"]: u["coach"] for u in people if u.get("coach")}
                 for r in pick_:
                     e_ = str(r["email"]).strip().lower()
-                    if not access.email_allowed(e_, SECRETS):
-                        skipped.append(f"{r['coach']} ({e_} isn't a club address)")
-                        continue
                     if linked_to.get(e_) and linked_to[e_] != r["coach"]:
                         skipped.append(f"{r['coach']} ({e_} is {linked_to[e_]}'s)")
                         continue
@@ -159,46 +169,61 @@ def render():
                     store.save_user(e_, (ex or {}).get("name") or r["coach"], r["coach"],
                                     bool((ex or {}).get("app_admin")), bool((ex or {}).get("sched_admin")))
                     added.append(r["coach"])
+                    if not access.is_club(e_, SECRETS) and e_ not in guests:
+                        outside_added.append(e_)
                 if added:
                     store.log(VIEWER.log_name, "Access", f"added from the schedule: {', '.join(added)}")
                 st.session_state.pop("_me", None)
                 st.session_state.access_ver = st.session_state.get("access_ver", 0) + 1
                 st.session_state.flash = (f"Added {plural(len(added), 'coach', 'coaches')}."
+                                          + (f" Outside addresses ({', '.join(outside_added)}) get emails only; "
+                                             "tick **Can sign in** in the table to let them sign in."
+                                             if outside_added else "")
                                           + (" Skipped: " + "; ".join(skipped) if skipped else ""))
                 st.rerun()
 
-    with st.expander("Add someone before they sign in"), st.form("access_add", clear_on_submit=True):
+    with st.expander("Add someone (club or outside address)"), st.form("access_add", clear_on_submit=True):
         c1, c2, c3 = st.columns(3)
-        n_email = c1.text_input("Club email")
+        n_email = c1.text_input("Email", help="A club address, or an outside one (Gmail, school...)")
         n_name = c2.text_input("Name")
         n_coach = c3.selectbox("Coach name on the schedule", link_opts)
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         n_app = c1.checkbox("App admin")
         n_sched = c2.checkbox("Scheduling admin")
+        n_guest = c3.checkbox("Can sign in (outside address)",
+                              help="Club addresses can always sign in. Leave unticked for an outside address that "
+                                   "should only get the app's emails.")
         if st.form_submit_button("Add", type="primary"):
             e_ = n_email.strip().lower()
             if not e_ or "@" not in e_:
                 st.error("Enter an email address.")
-            elif not access.email_allowed(e_, SECRETS):
-                st.error(f"Only @{', @'.join(access.allowed_domains(SECRETS))} addresses can sign in.")
             elif store.get_user(e_):
                 st.warning(f"{e_} is already listed above.")
             else:
+                outside = not access.is_club(e_, SECRETS)
                 store.save_user(e_, n_name.strip(), n_coach, n_app, n_sched)
+                if outside and n_guest:
+                    access.set_guest(store, e_, True)
                 store.log(VIEWER.log_name, "Access", f"added {e_}"
-                          + "".join(f"; {r}" for r, on in (("app admin", n_app), ("scheduling admin", n_sched)) if on))
+                          + "".join(f"; {r}" for r, on in (("app admin", n_app), ("scheduling admin", n_sched),
+                                                          ("outside, can sign in", outside and n_guest),
+                                                          ("outside, emails only", outside and not n_guest)) if on))
                 st.session_state.access_ver = st.session_state.get("access_ver", 0) + 1
-                st.session_state.flash = f"Added {e_}."
+                st.session_state.flash = f"Added {e_}." + (
+                    "" if not outside else " They can sign in once Google sign-in is set to External."
+                    if n_guest else " They'll get the app's emails but can't sign in.")
                 st.rerun()
 
     removable = [p_["email"] for p_ in people if p_["email"] not in always and (ME is None or p_["email"] != ME.email)]
     if removable:
         c1, c2 = st.columns([3, 1])
         gone = c1.multiselect("Remove access", removable, key="access_rm",
-                              help="They can still sign in with a club address, but come back as a plain coach.")
+                              help="A club address can still sign in but comes back as a plain coach. "
+                                   "An outside address loses sign-in and emails.")
         if c2.button("Remove", disabled=not gone, width="stretch", key="access_rm_btn"):
             for e_ in gone:
                 store.delete_user(e_)
+                access.set_guest(store, e_, False)
                 store.log(VIEWER.log_name, "Access", f"removed {e_}")
             st.session_state.access_ver = st.session_state.get("access_ver", 0) + 1
             st.session_state.flash = f"Removed {plural(len(gone), 'person', 'people')}."
