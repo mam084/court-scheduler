@@ -343,6 +343,11 @@ def solve(
                     cost += WEIGHTS["weekend"]
                     if team.weekend_pref and not any(w.matches(d, s) for w in team.weekend_pref):
                         cost += WEIGHTS["weekend_pref"]
+                    # Weekend days and times on the wishlist ("Sun mornings"): a weekend practice that
+                    # isn't one of them costs like missing the AM/PM preference.
+                    wk_wish = [w for w in data.wishes.get(team.name, []) if w.days and set(w.days) & {"Sat", "Sun"}]
+                    if wk_wish and not any(w.matches(d, s) for w in wk_wish):
+                        cost += WEIGHTS["weekend_pref"]
                 else:
                     if not (s == "3:45" and wants_345[t]):
                         cost += WEIGHTS["slot_fit"] * slot_cost(team.age, s)

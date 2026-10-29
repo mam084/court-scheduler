@@ -30,10 +30,10 @@ def major_holidays(year: int) -> dict[date, str]:
 
 
 def default_closures(start: date, end: date) -> list[tuple[date, str]]:
-    """Weekday closures between start and end (inclusive)."""
+    """Closures between start and end (inclusive), weekends included."""
     out = []
     for year in range(start.year, end.year + 1):
         for d, name in major_holidays(year).items():
-            if start <= d <= end and d.weekday() < 5:
+            if start <= d <= end:
                 out.append((d, name))
     return sorted(out)

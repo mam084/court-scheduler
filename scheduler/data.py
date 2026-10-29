@@ -140,6 +140,11 @@ class ScheduleInput:
     privates: pd.DataFrame = field(default_factory=lambda: empty("Privates"))
     calendars: pd.DataFrame = field(default_factory=lambda: empty("Calendars"))
     resolved: pd.DataFrame = field(default_factory=lambda: empty("Resolved"))
+    # Weekends not on the Open days list are open (the club's rule). False: only listed ones are
+    # (kept for tests written around a closed-unless-listed weekend).
+    weekends_open: bool = True
+    # The big family holidays are closed without being listed (False: only the Closures list; tests).
+    holidays_closed: bool = True
 
     def sheets(self) -> dict[str, pd.DataFrame]:
         out = {}
@@ -925,6 +930,7 @@ class WeekendDay:
     group: str | None
     required: bool
     note: str = ""
+    auto: bool = False  # a weekend that's open because weekends are, not because it's on the Open days list
 
 
 @dataclass
@@ -1349,6 +1355,19 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             closures[to_date(r["date"], year)] = "" if blank(r.get("reason")) else str(r["reason"])
         except (ValueError, TypeError) as e:
             errors.append(f"Closures row {i + 2}: {e}")
+    # The big family holidays are always closed (weekends too); the list adds any other closed days.
+    from .closures import major_holidays
+    for y in (range(start.year - 1, end.year + 2) if getattr(inp, "holidays_closed", True) else ()):
+        for d, name in major_holidays(y).items():
+            closures.setdefault(d, name)
+
+    # Weekends are open (9 AM-9 PM, every court) unless they're closed; the Open days list only
+    # changes a weekend's hours or courts, or opens weekdays in blocks (a school break).
+    d = start - timedelta(days=400)
+    while getattr(inp, "weekends_open", True) and d <= end + timedelta(days=400):
+        if d.weekday() >= 5 and d not in weekends:
+            weekends[d] = WeekendDay(d, list(WEEKEND_KEYS), list(COURTS), None, False, "", auto=True)
+        d += timedelta(days=1)
 
     # Two on-site locals on one court at the same time is a data error.
     for msg in local_conflicts(locals_):

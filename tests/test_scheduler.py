@@ -107,8 +107,10 @@ def _inp(teams, availability=(), wishlist=(), locals_=(), weekends=(), closures=
             if c not in df:
                 df[c] = ""
         return df[COLUMNS[sheet]]
+    # These tests were written for weekends that are closed unless listed, and only listed closures.
     return ScheduleInput(_team_frame(teams), frame("Availability", availability), frame("Wishlist", wishlist),
-                         frame("Locals", locals_), frame("Weekends", weekends), frame("Closures", closures))
+                         frame("Locals", locals_), frame("Weekends", weekends), frame("Closures", closures),
+                         weekends_open=False, holidays_closed=False)
 
 
 def test_age_rules_are_hard():
@@ -1668,3 +1670,32 @@ def test_form_names_match_the_club():
     assert m.coach("Matthew Mitchell") == "Matthew Mitchell" and m.coach("Madison-Leigh Ines") == "Madi Ines"
     assert m.coach("Arianna Donnelly", "ari@sdvbc.org") == "Ari"
     assert m.coach("Someone New") is None
+
+
+
+def test_weekends_open_and_holidays_closed_by_default():
+    """With nothing listed, weekends are open 9 AM-9 PM on every court and the big holidays are closed
+    (weekends too); weekdays still come first."""
+    teams = [{"team": f"16-T{i}", "age": 16} for i in range(4)]
+    inp = _inp(teams)
+    inp.weekends_open, inp.holidays_closed = True, True
+    data = clean(inp, date(2026, 11, 1), date(2027, 1, 9))
+    assert date(2026, 12, 19) in data.weekends and data.weekends[date(2026, 12, 19)].blocks[0] == "9AM"
+    assert data.closures[date(2026, 11, 26)] == "Thanksgiving" and date(2026, 12, 25) in data.closures
+    r = solve(inp, *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert not pr["date"].map(lambda d: d.weekday() >= 5).any()       # open weekdays win
+    assert not (pr["date"] == date(2026, 11, 26)).any()
+
+
+
+def test_weekend_wishlist_counts_on_weekends():
+    """A team that asks for Sunday mornings gets a Sunday morning when it has to practice on a weekend."""
+    teams = [{"team": "16-A", "age": 16, "practices": 1}, {"team": "16-B", "age": 16, "practices": 1}]
+    no = [{"who": t, "type": "No", "days": "Mon-Fri"} for t in ("16-A", "16-B")]
+    wish = [{"team": t, "choice": 1, "days": "Sun", "times": "9AM, 11AM"} for t in ("16-A", "16-B")]
+    inp = _inp(teams, no, wish, weekends=[{"date": "11/01/2026", "open": "9AM-9PM"},
+                                          {"date": "11/07/2026", "open": "9AM-9PM"}])
+    r = solve(inp, date(2026, 11, 1), date(2026, 11, 7), time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert len(pr) == 2 and set(pr["date"]) == {date(2026, 11, 1)} and set(pr["slot"]) <= {"9AM", "11AM"}

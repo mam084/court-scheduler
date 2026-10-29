@@ -178,13 +178,15 @@ def _days(a: date, b: date) -> list[date]:
     return [a + timedelta(days=i) for i in range((b - a).days + 1)]
 
 
-def open_now(a: date, b: date) -> set[date]:
-    """Days from a to b the Open days tab opens now (in 2-hour blocks), minus closures."""
+def open_now(a: date, b: date, listed_only: bool = False) -> set[date]:
+    """Days from a to b open in 2-hour blocks now (weekends, and the Open days list), minus closures.
+    listed_only: just the days on the Open days list."""
     cleaned = getattr(S, "cleaned", None) if _has(S, "cleaned") else None
     if cleaned is None:
         return set()
     closures = (getattr(S, "closures", None) if _has(S, "closures") else None) or {}
-    return {d for d in cleaned.weekends if a <= d <= b and d not in closures}
+    return {d for d, w in cleaned.weekends.items() if a <= d <= b and d not in closures
+            and not (listed_only and w.auto)}
 
 
 def not_built_open_days(a: date, b: date) -> list[tuple[str, date, date, list[date]]]:
@@ -195,7 +197,7 @@ def not_built_open_days(a: date, b: date) -> list[tuple[str, date, date, list[da
     for k, s_, e_ in runs():
         if s_ > b or e_ < a:
             continue
-        new = sorted(open_now(s_, e_) - parts.get((s_, e_), set()))
+        new = sorted(open_now(s_, e_, listed_only=True) - parts.get((s_, e_), set()))
         if new:
             out.append((k, s_, e_, new))
     return out

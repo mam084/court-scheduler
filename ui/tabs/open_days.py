@@ -20,11 +20,13 @@ OPEN_HOURS = [("9AM", "9 AM"), ("11AM", "11 AM"), ("1PM", "1 PM"), ("3PM", "3 PM
 def render():
     """Open days section."""
     inp, start, end, cleaned, closures = S.inp, S.start, S.end, S.cleaned, S.closures
-    st.markdown("Days the gym runs in **2-hour blocks** (9–11, 11–1 … 7–9): open **weekends**, and **school "
-                "breaks**, when weekday practices switch to blocks too (e.g. Dec 21 – Jan 2). Closed days "
-                "(Christmas, New Year's) stay closed. Break **camps** are programs: add one on the **Programs** tab "
-                "with the days (Mon–Fri), the time **9AM-11AM** and its courts, and it's blocked off like any program. "
-                "Weekday programs that don't run over a break need their dates or a skip set there too.")
+    st.markdown("**Weekends are open** 9 AM–9 PM on every court, in **2-hour blocks** (9–11, 11–1 … 7–9), and are "
+                "used only when weekdays can't fit a practice. The big holidays (Thanksgiving and the day after, "
+                "Christmas Eve and Day, New Year's Eve and Day, July 4th) are always closed. Add a weekend here only "
+                "to change its hours or courts. **School breaks:** list the weekdays here (e.g. Dec 21 – Jan 2) and "
+                "they run in blocks too; a week that's all open days gets no practices automatically, and coaches "
+                "add the ones they want. Break **camps** are programs (the **Programs** tab, e.g. Mon–Fri 9–11 AM). "
+                "To close any other day, use **Close a day** below.")
     with st.container(border=True):
         c1, c2 = st.columns(2)
         o_from = c1.date_input("From", value=start, format="MM/DD/YYYY", key="o_from")
@@ -82,7 +84,7 @@ def render():
     wk = inp.weekends.dropna(how="all")
     if wk.empty:
         st.caption("None yet. Weekdays not listed here use the usual 3:45 / 5:30 / 7:20 times; weekends not listed "
-                   "are closed for practices.")
+                   "are open 9 AM–9 PM on every court.")
     else:
         view_ = wk.fillna("").astype(str)
         _lab = [f"{r['date']} · {r['open'] or 'all day'}" + (f" · {r['note']}" if r["note"] else "")
@@ -104,4 +106,44 @@ def render():
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
             st.session_state.flash = (f"Removed {plural(len(drop_o), 'row')}. "
                                       + dates.rebuild_for([(before, inp.weekends, ("date",))]))
+            st.rerun()
+
+    _closed_days()
+
+
+def _closed_days():
+    """Closing a day (no practices, programs or privates): any date, weekends included."""
+    from scheduler.closures import major_holidays
+    inp, start = S.inp, S.start
+    st.subheader("Closed days")
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([1, 2, 1], vertical_alignment="bottom")
+        c_day = c1.date_input("Close a day", value=start, format="MM/DD/YYYY", key="cl_day")
+        c_why = c2.text_input("Why", key="cl_why", placeholder="e.g. gym rented out")
+        if c3.button("Close it", type="primary", width="stretch", key="cl_go"):
+            before = inp.closures.copy()
+            row = pd.DataFrame([{"date": f"{c_day:%m/%d/%Y}", "reason": c_why.strip() or "Closed"}],
+                               columns=COLUMNS["Closures"])
+            inp.closures = pd.concat([inp.closures, row], ignore_index=True).astype(object)
+            st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+            st.session_state.flash = (f"Closed {c_day:%a %b %-d}. "
+                                      + dates.rebuild_for([(before, inp.closures, ("date",))]))
+            st.rerun()
+    hol = sorted((d, n) for y in (start.year, start.year + 1) for d, n in major_holidays(y).items() if d >= start)
+    st.caption("Always closed: " + ", ".join(f"{n} ({d:%a %b %-d})" for d, n in hol[:7]) + ".")
+    cl = inp.closures.dropna(how="all")
+    if not cl.empty:
+        view_ = cl.fillna("").astype(str)
+        labs = [f"{r['date']} · {r['reason']}" for _, r in view_.iterrows()]
+        labs = [lab if labs.count(lab) == 1 else f"{lab} (#{i + 1})" for i, lab in enumerate(labs)]
+        st.dataframe(view_[["date", "reason"]].rename(columns=str.title), hide_index=True, width="stretch")
+        c1, c2 = st.columns([3, 1])
+        drop_c = c1.multiselect("Reopen", labs, placeholder="Choose closed days to reopen", key="cl_drop")
+        if c2.button("Reopen", disabled=not drop_c, width="stretch", key="cl_rm",
+                     help="The big holidays stay closed even if they're listed here."):
+            before = inp.closures.copy()
+            inp.closures = cl.iloc[[i for i, lab in enumerate(labs) if lab not in drop_c]].reset_index(drop=True)
+            st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+            st.session_state.flash = (f"Reopened {plural(len(drop_c), 'day')}. "
+                                      + dates.rebuild_for([(before, inp.closures, ("date",))]))
             st.rerun()

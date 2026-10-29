@@ -1029,12 +1029,12 @@ def test_days_opened_after_building_are_flagged(db):
     at = AppTest.from_file("../app.py", default_timeout=180)
     at.run()
     inp = at.session_state["inp"]
-    inp.weekends = pd.concat([inp.weekends, pd.DataFrame([{"date": "11/28/2026", "open": "9AM-1PM"}])],
+    inp.weekends = pd.concat([inp.weekends, pd.DataFrame([{"date": "11/16/2026", "open": "9AM-1PM"}])],
                              ignore_index=True)
     at.radio(key="nav").set_value("Court view").run()
-    at.date_input(key="cv_pick").set_value(date(2026, 11, 28)).run()
+    at.date_input(key="cv_pick").set_value(date(2026, 11, 16)).run()
     assert not at.exception, at.exception
-    assert any("opened after" in w.value and "Sat Nov 28" in w.value for w in at.warning)
+    assert any("opened after" in w.value and "Mon Nov 16" in w.value for w in at.warning)
 
 
 def test_programs_take_any_time_on_any_day():

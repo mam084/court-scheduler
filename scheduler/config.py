@@ -254,8 +254,11 @@ WEIGHTS = {
     #    more than all of them together), and it's never used for a 3rd practice.
     "pairing": 120000,
     # 7. Weekday before weekend: a weekend practice only when the weekdays
-    #    can't take it (two weekday practices, even doubled up, win).
-    "weekend": 1500,
+    #    can't take it (two weekday practices, even doubled up, win). More than
+    #    every preference below put together (a weekday the team didn't ask
+    #    for, at a time it didn't ask for, marked not preferred is ~1,800), so
+    #    a weekend never wins over an open weekday just on preferences.
+    "weekend": 2500,
     # 8. Preferred days: the wishlist's days and days marked not preferred.
     "wish_day_miss": 600,
     "not_preferred_day": 550,
