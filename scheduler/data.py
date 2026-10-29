@@ -263,6 +263,143 @@ def _norm_name(v) -> str:
     return re.sub(r"[\s_-]+", " ", str(v or "")).strip().lower()
 
 
+def _tokens(v) -> list[str]:
+    return [t for t in re.split(r"[^a-z0-9&]+", str(v or "").lower()) if t]
+
+
+def _team_key(v) -> tuple[str, frozenset] | None:
+    """'15-1 Drea' / '15 Drea' / '15-Drea' -> ('15', {'drea'}); the age and the words after it (a rank
+    number like the 1 in '15-1' left out)."""
+    toks = _tokens(v)
+    if not toks or not toks[0].isdigit():
+        return None
+    return toks[0], frozenset(t for t in toks[1:] if not t.isdigit())
+
+
+class NameMatcher:
+    """Matches the names people write on a form to the club's: teams ('15-1 Drea' -> 15-Drea,
+    '16-4 hannah' -> the 16s ranked 4th) and coaches ('Madison-Leigh Ines' -> Madi, by first name, a
+    nickname it starts with, or their email). Only a single clear match counts."""
+
+    def __init__(self, teams: pd.DataFrame, roster: pd.DataFrame | None = None):
+        teams = teams.dropna(how="all") if isinstance(teams, pd.DataFrame) else pd.DataFrame()
+        self.teams = [str(t).strip() for t in teams.get("team", []) if not blank(t)]
+        self.ranks = {}
+        for _, r in teams.iterrows():
+            rk = r.get("rank")
+            if not blank(rk) and not blank(r.get("team")):
+                self.ranks[_norm_name(rk)] = str(r["team"]).strip()
+        coaches = []
+        for col in ("head_coach", "assistants"):
+            for v in teams.get(col, []):
+                coaches += parse_names(v)
+        self.emails = {}
+        if isinstance(roster, pd.DataFrame):
+            for _, r in roster.dropna(how="all").iterrows():
+                if blank(r.get("coach")):
+                    continue
+                coaches.append(str(r["coach"]).strip())
+                if not blank(r.get("email")):
+                    self.emails[str(r["email"]).strip().lower()] = str(r["coach"]).strip()
+        self.coaches = list(dict.fromkeys(c for c in coaches if c))
+
+    def team(self, name) -> str | None:
+        n = _norm_name(name)
+        hit = [t for t in self.teams if _norm_name(t) == n]
+        if len(hit) == 1:
+            return hit[0]
+        squash = re.sub(r"[^a-z0-9&]", "", n)
+        hit = [t for t in self.teams if re.sub(r"[^a-z0-9&]", "", _norm_name(t)) == squash]
+        if len(hit) == 1:
+            return hit[0]
+        key = _team_key(name)
+        if key is None:
+            return None
+        age, words = key
+        hit = [t for t in self.teams if (k := _team_key(t)) and k[0] == age and k[1] and k[1] <= words]
+        if len(hit) == 1:
+            return hit[0]
+        m = re.match(r"^\s*(\d+)\s*-\s*(\d+)\b", str(name))  # '16-4 hannah': the 16s ranked 4th
+        if m and (t := self.ranks.get(f"{m.group(1)} {m.group(2)}")):
+            return t
+        return None
+
+    def coach(self, name, email: str = "") -> str | None:
+        n = _norm_name(name)
+        hit = [c for c in self.coaches if _norm_name(c) == n]
+        if len(hit) == 1:
+            return hit[0]
+        em = (email or "").strip().lower()
+        if em in self.emails:
+            return self.emails[em]
+        toks = set(_tokens(name))
+        if not toks:
+            return None
+        hit = [c for c in self.coaches if set(_tokens(c)) and set(_tokens(c)) <= toks]
+        if len(hit) == 1:
+            return hit[0]
+        first = _tokens(name)[0]
+        local = em.split("@")[0] if "@" in em else ""
+        last = _tokens(name)[-1]
+
+        def nick(c):  # 'Madi' or 'Madi Ines' for Madison-Leigh Ines; 'Drea' by drea@...
+            ct = _tokens(c)
+            starts = len(ct[0]) >= 3 and first.startswith(ct[0])
+            if len(ct) == 1:
+                return starts or ct[0] == local
+            return (starts or ct[0] == local) and ct[-1] == last
+        hit = [c for c in self.coaches if nick(c)]
+        return hit[0] if len(set(hit)) == 1 else None
+
+    def who(self, name, email: str = "") -> str | None:
+        """An Availability 'who': a team, else a coach."""
+        return self.team(name) or self.coach(name, email)
+
+
+def match_file_names(new: ScheduleInput, old: ScheduleInput) -> list[str]:
+    """Rewrites the names in a coaches' file (in place) to the club's: Availability 'who', Wishlist
+    'team' and the Coaches sheet. Returns notes: what was matched to what, and what wasn't."""
+    m = NameMatcher(old.teams, getattr(old, "coaches", None))
+    if not m.teams and not m.coaches:
+        return []
+    file_roster = getattr(new, "coaches", None)
+    emails = {}
+    if isinstance(file_roster, pd.DataFrame):
+        for _, r in file_roster.dropna(how="all").iterrows():
+            if not blank(r.get("coach")) and not blank(r.get("email")):
+                emails[_norm_name(r["coach"])] = str(r["email"]).strip()
+    matched, unmatched = {}, []
+
+    def fix(df: pd.DataFrame, col: str, how) -> pd.DataFrame:
+        if not isinstance(df, pd.DataFrame) or df.empty or col not in df.columns:
+            return df
+        df = df.copy().astype(object)
+        for i, v in df[col].items():
+            if blank(v):
+                continue
+            got = how(v)
+            if got is None:
+                if str(v).strip() not in unmatched:
+                    unmatched.append(str(v).strip())
+            else:
+                if str(v).strip() != got:
+                    matched[str(v).strip()] = got
+                df.at[i, col] = got
+        return df
+
+    new.availability = fix(new.availability, "who", lambda v: m.who(v, emails.get(_norm_name(v), "")))
+    new.wishlist = fix(new.wishlist, "team", m.team)
+    if isinstance(file_roster, pd.DataFrame) and not file_roster.empty:
+        new.coaches = fix(file_roster, "coach", lambda v: m.coach(v, emails.get(_norm_name(v), "")))
+    notes = []
+    if matched:
+        notes.append("matched names to the club's: " + ", ".join(f"{a} → {b}" for a, b in matched.items()))
+    if unmatched:
+        notes.append("couldn't match " + ", ".join(unmatched) + " to a team or coach (new coaches are added; "
+                     "check the spelling of any that should already be here)")
+    return notes
+
+
 def merge_import(new: ScheduleInput, old: ScheduleInput | None, start: date,
                  use_file_programs: bool = False) -> list[str]:
     """Brings a coaches' spreadsheet into the club's data (in place, into
@@ -281,7 +418,8 @@ def merge_import(new: ScheduleInput, old: ScheduleInput | None, start: date,
     Returns one line per change."""
     if old is None:
         return keep_programs(new, None, use_file=use_file_programs)
-    notes = keep_programs(new, old, use_file=use_file_programs)
+    notes = match_file_names(new, old)
+    notes += keep_programs(new, old, use_file=use_file_programs)
 
     def rows(df):
         return df.dropna(how="all").reset_index(drop=True) if isinstance(df, pd.DataFrame) else pd.DataFrame()
@@ -293,11 +431,32 @@ def merge_import(new: ScheduleInput, old: ScheduleInput | None, start: date,
         if mine.empty:
             continue
         have = {_norm_name(v) for v in mine.get(key, [])}
+        if sheet == "Coaches" and len(theirs):  # contact info for coaches already here: fill in what's missing
+            mine = mine.copy().astype(object)
+            byname = {_norm_name(r[key]): r for _, r in theirs.iterrows() if not blank(r.get(key))}
+            filled = 0
+            for i, r in mine.iterrows():
+                f = byname.get(_norm_name(r.get(key)))
+                for c in ("email", "phone"):
+                    if f is not None and c in mine.columns and blank(r.get(c)) and not blank(f.get(c)):
+                        mine.at[i, c] = f[c]
+                        filled += c == "email"
+            if filled:
+                notes.append(f"added {filled} email{'s' if filled != 1 else ''} to the coach list")
         add = theirs[~theirs[key].map(_norm_name).isin(have)] if len(theirs) else theirs
         add = add[~add[key].map(blank)] if len(add) else add
         merged = pd.concat([mine, add], ignore_index=True) if len(add) else mine
         setattr(new, attr, merged.astype(object).reset_index(drop=True))
-        if len(add):
+        if sheet == "Coaches" and len(add):
+            on_team = {_norm_name(c) for col in ("head_coach", "assistants")
+                       for v in rows(old.teams).get(col, []) for c in parse_names(v)}
+            known = [str(x) for x in add[key] if _norm_name(x) in on_team]
+            fresh = [str(x) for x in add[key] if _norm_name(x) not in on_team]
+            if known:
+                notes.append(f"contact info for {len(known)} coach{'es' if len(known) != 1 else ''} already on teams")
+            notes.append(f"added {len(fresh)} new coach{'es' if len(fresh) != 1 else ''} ({', '.join(fresh)})"
+                         if fresh else "no new coaches")
+        elif len(add):
             notes.append(f"added {len(add)} new {label}{'s' if len(add) != 1 else ''} "
                          f"({', '.join(map(str, add[key]))})")
         else:
@@ -371,9 +530,15 @@ def parse_days(value) -> list[str]:
     if blank(value):
         return []
     out: list[str] = []
-    for p in re.split(r"[;,/&.]|\s+and\s+|\s+or\s+|\s+", str(value)):
+    text = re.sub(r"\s+to\s+", "-", re.sub(r"\s*[-–]\s*", "-", str(value)), flags=re.I)  # 'Mon - Fri' -> 'Mon-Fri'
+    for p in re.split(r"[;,/&.]|\s+and\s+|\s+or\s+|\s+", text):
         p = p.strip().lower()
         if not p:
+            continue
+        rng = re.match(r"^([a-z]{3})[a-z]*\s*(?:-|–|to)\s*([a-z]{3})[a-z]*$", p)
+        if rng and rng.group(1).title() in DAYS and rng.group(2).title() in DAYS:  # 'Mon-Fri', 'tue-thu'
+            i, j = DAYS.index(rng.group(1).title()), DAYS.index(rng.group(2).title())
+            out.extend(DAYS[i:j + 1] if i <= j else DAYS[i:] + DAYS[:j + 1])
             continue
         if p in _DAY_WORDS:
             out.extend(_DAY_WORDS[p])

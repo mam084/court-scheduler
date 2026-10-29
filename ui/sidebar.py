@@ -61,9 +61,11 @@ def render():
             run = _auto_schedule()
             _no_teams = st.session_state.inp.teams.dropna(how="all").empty
             with st.expander("Import coaches' spreadsheet", expanded=_no_teams):
-                st.caption("Adds any new teams and coaches (the ones already here stay as they are) and brings in "
-                           "everyone's no-dates and wishlists from the file, replacing their old ones. Programs, "
-                           "tournaments and open days stay.")
+                st.caption("Brings in the no-dates and wishlists of everyone in the file (replacing theirs; "
+                           "everyone else keeps their own) and fills in missing coach emails. Teams, coaches, "
+                           "programs, tournaments and open days stay as they are; only new ones are added. Names "
+                           "are matched to the club's (\"Madison-Leigh Ines\" → Madi, \"15-1 Drea\" → the 15s "
+                           "team), and any it can't match are listed.")
                 rep = st.file_uploader("Club spreadsheet (.xlsx)", type=["xlsx"], key="replace_main")
                 use_file = st.checkbox("Also replace programs and tournaments", key="replace_kept_main",
                                        help="Off: the Programs and Tournaments tabs stay as they are. On: use the "

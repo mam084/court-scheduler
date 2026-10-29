@@ -1642,3 +1642,29 @@ def test_open_weeks_get_no_automatic_practices():
     assert list(zip(brk["name"], brk["date"])) == [(team, date(2026, 12, 22))]
     assert (p["date"].map(week_start) == date(2026, 12, 13)).sum() > 0
     assert r.shortfalls.empty or not r.shortfalls["week_of"].isin([date(2026, 12, 20), date(2026, 12, 27)]).any()
+
+
+def test_day_ranges():
+    from scheduler.data import parse_days
+    assert parse_days("Mon-Fri") == ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    assert parse_days("Tue - Thu") == ["Tue", "Wed", "Thu"]
+    assert parse_days("Tuesday, Thursday") == ["Tue", "Thu"]
+
+
+def test_form_names_match_the_club():
+    import pandas as pd
+
+    from scheduler.data import NameMatcher
+    teams = pd.DataFrame([
+        {"team": "15-Drea", "age": 15, "head_coach": "Drea", "assistants": "", "rank": "15-1"},
+        {"team": "16-Hannah", "age": 16, "head_coach": "Hannah", "assistants": "", "rank": "16-4"},
+        {"team": "14 Black", "age": 14, "head_coach": "Matthew Mitchell", "assistants": "", "rank": "14-1"},
+        {"team": "16-D&D", "age": 16, "head_coach": "Danielle; Darci", "assistants": "", "rank": "16-2"},
+        {"team": "12-Madi", "age": 12, "head_coach": "Madi Ines", "assistants": "", "rank": "12-1"}])
+    m = NameMatcher(teams, pd.DataFrame([{"coach": "Ari", "email": "ari@sdvbc.org"}]))
+    assert m.team("15-1 Drea") == "15-Drea" and m.team("16-4 hannah") == "16-Hannah"
+    assert m.team("14-Black") == "14 Black" and m.team("16 D&D") == "16-D&D" and m.team("13-Zed") is None
+    assert m.coach("Andrea Richardson", "drea@sdvbc.org") == "Drea"
+    assert m.coach("Matthew Mitchell") == "Matthew Mitchell" and m.coach("Madison-Leigh Ines") == "Madi Ines"
+    assert m.coach("Arianna Donnelly", "ari@sdvbc.org") == "Ari"
+    assert m.coach("Someone New") is None
