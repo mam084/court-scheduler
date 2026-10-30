@@ -7,7 +7,7 @@ import re
 import streamlit as st
 
 from scheduler.export import calendar_excel, calendar_ics, team_dates_excel
-from scheduler.prints import calendar_print_html, team_dates_print_html
+from scheduler.prints import calendar_pretty_html, calendar_print_html, team_dates_print_html
 from scheduler.views import month_calendar_html
 from ui import dates
 from ui.common import is_app_admin, off_preference, people_options, team_coaches, team_order, team_sections
@@ -60,19 +60,29 @@ def render():
         def _win():
             return _w
 
-        d1, d2, d3 = st.columns(3)
+        d1, d3 = st.columns(2)
         d1.download_button("Google Calendar (.ics)",
                            lambda: calendar_ics(_win(), hl or None, show_locals, title), f"{fname}.ics",
                            mime="text/calendar", width="stretch",
                            help="In Google Calendar: Settings → Import & export → Import. Tip: import into a new "
                                 "calendar (e.g. 'Club practices') so it's easy to remove and re-import after "
                                 "changes.")
-        d2.download_button("Printable calendar",
+        p1, p2 = st.columns(2)
+        p1.download_button("Printable calendar · color", type="primary", width="stretch",
+                           data=lambda: (lambda r: calendar_pretty_html(
+                               r.assignments, start, end, closures, hl or None, show_locals, r.weekend_dates,
+                               r.tournaments, title).encode())(_win()),
+                           file_name=f"{fname}_color.html", mime="text/html",
+                           help="The good-looking one: every practice in its age color with its court and "
+                                "coaches written out, tournaments with their teams. One week per landscape "
+                                "page. Opens in your browser; print it or save it as a PDF.")
+        p2.download_button("Printable calendar · one page a month",
                            lambda: (lambda r: calendar_print_html(
                                r.assignments, start, end, closures, hl or None, show_locals, r.weekend_dates,
                                r.tournaments, title, cal_lc).encode())(_win()),
                            f"{fname}.html", mime="text/html", width="stretch",
-                           help="Opens in your browser; print it or save it as a PDF. One month per page.")
+                           help="Compact: a whole month on one landscape page, one line per practice. "
+                                "Opens in your browser; print it or save it as a PDF.")
         d3.download_button("Calendar (Excel)", lambda: calendar_excel(_win(), closures, hl or None, show_locals),
                            f"{fname}.xlsx", width="stretch",
                            help="The club's calendar layout: a block per week, each day with time · what · courts.")

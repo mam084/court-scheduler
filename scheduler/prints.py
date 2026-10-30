@@ -152,18 +152,13 @@ def _cal_line(r) -> str:
             f'<span class="pc-nm" style="border-color:{color}">{html.escape(str(r["name"]))}{extra}</span></div>')
 
 
-def calendar_print_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,
-                        highlight: set[str] | None = None, include_locals: bool = False,
-                        weekend_dates: list[date] | None = None, tournaments: list | None = None,
-                        title: str = "Practice calendar", local_coaches: bool = False) -> str:
-    """The month calendar, one month to a landscape page. Each day lists its practices by start
-    time, one per line with the court first; girls marked blue, boys green, programs grey."""
+def _by_date(assignments: pd.DataFrame, include_locals: bool, highlight) -> dict:
+    """{date: bookings in time order (practices by court, then programs)}; one row per program
+    and time, with its courts in `courts_text`."""
     from .views import _hit
-    closures, tournaments = closures or {}, tournaments or []
-    weekend_dates = set(weekend_dates or [])
     df = assignments if include_locals else assignments[assignments["kind"] == "Practice"]
     if len(df) and include_locals and (df["kind"] == "Local").any():
-        loc = df["kind"] == "Local"  # one line per program, listing its courts
+        loc = df["kind"] == "Local"
         cts = df[loc].groupby(["date", "slot", "name"])["court"].agg(courts_label).rename("courts_text")
         df = df.merge(cts, left_on=["date", "slot", "name"], right_index=True, how="left")
         df = df.drop_duplicates(subset=["date", "slot", "name"])
@@ -175,6 +170,18 @@ def calendar_print_html(assignments: pd.DataFrame, start: date, end: date, closu
             .sort_values(["date", "o", "loc", "court"], kind="stable")
         for r in df.to_dict("records"):
             by_date.setdefault(r["date"], []).append(r)
+    return by_date
+
+
+def calendar_print_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,
+                        highlight: set[str] | None = None, include_locals: bool = False,
+                        weekend_dates: list[date] | None = None, tournaments: list | None = None,
+                        title: str = "Practice calendar", local_coaches: bool = False) -> str:
+    """The month calendar, one month to a landscape page. Each day lists its practices by start
+    time, one per line with the court first; girls marked blue, boys green, programs grey."""
+    closures, tournaments = closures or {}, tournaments or []
+    weekend_dates = set(weekend_dates or [])
+    by_date = _by_date(assignments, include_locals, highlight)
 
     who = f" · {', '.join(sorted(highlight))}" if highlight else ""
     pages = []
@@ -226,6 +233,148 @@ def calendar_print_html(assignments: pd.DataFrame, start: date, end: date, closu
         m = last + timedelta(days=1)
     return _page(title, f"<style>{CAL_CSS}</style>" + "".join(pages), landscape=True,
                  tip="Each month prints on its own landscape page.")
+
+
+# ------------------------------------------------- the pretty calendar --
+
+PRETTY_CSS = """
+.pw-head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 10px; }
+.pw-head h1 { font-size: 26px; margin: 0; letter-spacing: -.3px; }
+.pw-head h1 small { font-size: 15px; font-weight: 600; color: #5b6475; margin-left: 10px; letter-spacing: 0; }
+.pw-head .pp-sub { font-size: 12px; color: #5b6475; text-align: right; }
+.pw { display: grid; gap: 6px; }
+.pw-day { background: #fff; border: 1px solid #dfe3ea; border-radius: 10px; overflow: hidden;
+          display: flex; flex-direction: column; min-height: 100%; }
+.pw-day.pw-wk { background: #f7f8fb; }
+.pw-day.pw-out { background: #fafbfc; border-style: dashed; }
+.pw-dh { display: flex; align-items: baseline; gap: 6px; padding: 6px 8px 5px; border-bottom: 1px solid #eef0f4; }
+.pw-dh b { font-size: 20px; line-height: 1; } .pw-dh span { font-size: 11px; font-weight: 700; color: #5b6475;
+           text-transform: uppercase; letter-spacing: .6px; }
+.pw-dh i { margin-left: auto; font-size: 10px; font-style: normal; color: #8a93a3; }
+.pw-in { padding: 5px 6px 7px; display: flex; flex-direction: column; gap: 3px; }
+.pw-t { font-size: 10px; font-weight: 800; color: #5b6475; letter-spacing: .4px; margin: 4px 1px 0;
+        display: flex; align-items: center; gap: 6px; }
+.pw-t::after { content: ""; flex: 1; height: 1px; background: #e3e6ec; }
+.pw-t:first-child { margin-top: 0; }
+.pw-c { border-radius: 6px; padding: 3px 6px 3px 5px; border-left: 4px solid; display: flex; gap: 6px;
+        align-items: flex-start; }
+.pw-ct { flex: 0 0 auto; background: rgba(255,255,255,.75); border-radius: 4px; font-size: 10px; font-weight: 800;
+         padding: 1px 4px; margin-top: 1px; min-width: 18px; text-align: center; }
+.pw-nm { min-width: 0; } .pw-nm b { display: block; font-size: 12.5px; line-height: 1.2; }
+.pw-nm span { display: block; font-size: 10px; opacity: .8; line-height: 1.2; }
+.pw-c.pw-x { outline: 1.5px dashed currentColor; outline-offset: -1.5px; }
+.pw-tn { border-radius: 6px; padding: 4px 7px; font-size: 11px; font-weight: 700; line-height: 1.25; }
+.pw-tn span { display: block; font-weight: 500; font-size: 10px; }
+.pw-tn.pw-travel { border: 2px solid #B21E1E; color: #B21E1E; background: #fff; }
+.pw-closed { padding: 14px 8px; color: #5b6475; font-style: italic; font-size: 12px; text-align: center; }
+.pw-key { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-top: 10px; font-size: 11px;
+          color: #5b6475; }
+.pw-key .pw-k { border-radius: 5px; padding: 2px 8px; border-left: 4px solid; font-weight: 600; }
+"""
+
+
+def _pretty_chip(r) -> str:
+    from .views import CLUB_STRIPES, OTHER_STRIPE, _colors
+    bg, fg = _colors(r)
+    side = (r.get("side") or "") if r["kind"] == "Local" else _side(r)
+    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(side, OTHER_STRIPE)
+    if r["kind"] == "Local":
+        ct = _text(r.get("courts_text")) or court_short(r["court"])
+        sub = ""
+    else:
+        ct = court_short(r["court"])
+        names = [c.strip() for c in str(r.get("coach") or "").split(";") if c.strip()]
+        sub = " · ".join(names)
+    tags = []
+    if r.get("extra") == True:  # noqa: E712
+        tags.append("extra practice")
+    if _text(r.get("paired")):
+        tags.append("paired · 3 on 2")
+    sub = " · ".join([x for x in [sub] + tags if x])
+    moved = r["kind"] != "Local" and r.get("on_pattern") is False
+    return (f'<div class="pw-c{" pw-x" if moved else ""}" style="background:{bg};color:{fg};border-color:{stripe}">'
+            f'<span class="pw-ct">{html.escape(ct)}</span><span class="pw-nm"><b>{html.escape(str(r["name"]))}</b>'
+            + (f"<span>{html.escape(sub)}</span>" if sub else "") + "</span></div>")
+
+
+def _pretty_tourn(tn) -> str:
+    from .views import CLUB_STRIPES, LOCAL_COLORS, OTHER_STRIPE, SIDE_COLORS
+    if tn.kind == "travel":
+        teams = f"<span>{html.escape(', '.join(tn.teams))}</span>" if tn.teams else ""
+        return f'<div class="pw-tn pw-travel">✈ {html.escape(tn.label())}{teams}</div>'
+    side = getattr(tn, "side", "") or ""
+    bg, fg = SIDE_COLORS.get(side, LOCAL_COLORS)
+    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(side, OTHER_STRIPE)
+    return (f'<div class="pw-tn" style="background:{bg};color:{fg};border-left:4px solid {stripe}">'
+            f'{html.escape(tn.label())}<span>Local tournament · Ct {courts_label(tn.courts)} until 7 PM</span></div>')
+
+
+def calendar_pretty_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,
+                         highlight: set[str] | None = None, include_locals: bool = False,
+                         weekend_dates: list[date] | None = None, tournaments: list | None = None,
+                         title: str = "Practice calendar") -> str:
+    """The calendar in full color, one week to a landscape page: every practice as a chip in its age
+    color (girls' stripe blue, boys' green), with its court and coaches written out, under its start
+    time; tournaments named with their teams."""
+    from .views import AGE_COLORS, CLUB_STRIPES, LOCAL_COLORS, OTHER_STRIPE, SIDE_COLORS
+    closures, tournaments = closures or {}, tournaments or []
+    weekend_dates = set(weekend_dates or [])
+    by_date = _by_date(assignments, include_locals, highlight)
+    who = f" · {', '.join(sorted(highlight))}" if highlight else ""
+    ages = sorted({int(a) for a in assignments.loc[assignments["kind"] == "Practice", "age"].dropna()}) \
+        if len(assignments) else []
+    key = "".join(f'<span class="pw-k" style="background:{AGE_COLORS[a][0]};color:{AGE_COLORS[a][1]};'
+                  f'border-color:transparent">{a}s</span>' for a in ages if a in AGE_COLORS)
+    key += (f'<span class="pw-k" style="background:#fff;border-color:{CLUB_STRIPES[0]}">SDVBC</span>'
+            f'<span class="pw-k" style="background:#fff;border-color:{CLUB_STRIPES[1]}">Seaside</span>')
+    if include_locals:
+        for lab, (bg, fg) in SIDE_COLORS.items():
+            st_ = CLUB_STRIPES[0] if lab == "Girls" else CLUB_STRIPES[1]
+            key += f'<span class="pw-k" style="background:{bg};color:{fg};border-color:{st_}">{lab} programs</span>'
+        key += (f'<span class="pw-k" style="background:{LOCAL_COLORS[0]};color:{LOCAL_COLORS[1]};'
+                f'border-color:{OTHER_STRIPE}">Other</span>')
+    key += '<span>Number = court · dashed = moved or makeup</span>'
+
+    pages = []
+    ws = week_start(start)
+    while ws <= end:
+        days = [ws + timedelta(days=i) for i in range(7)]
+        busy = [d for d in days if start <= d <= end]
+        cols = []
+        for d in days:
+            wk = d.weekday() >= 5
+            has = by_date.get(d) or any(tn.covers(d) for tn in tournaments)
+            cols.append("1fr" if not wk or (has and start <= d <= end) else "0.55fr")
+        cells = []
+        for d in days:
+            wk = d.weekday() >= 5 or d in weekend_dates
+            dh = (f'<div class="pw-dh"><b>{d.day}</b><span>{d:%a}</span>'
+                  + (f"<i>{d:%b}</i>" if d.day == 1 or d == start else "") + "</div>")
+            if d < start or d > end:
+                cells.append(f'<div class="pw-day pw-out" style="opacity:.45">{dh}</div>')
+                continue
+            if d in closures:
+                cells.append(f'<div class="pw-day pw-wk">{dh}<div class="pw-closed">Closed<br>'
+                             f'{html.escape(closures[d])}</div></div>')
+                continue
+            inner = [_pretty_tourn(tn) for tn in tournaments if tn.covers(d)
+                     and (not highlight or tn.kind == "local" or set(tn.teams) & set(highlight))]
+            cur = None
+            for r in by_date.get(d, []):
+                if r["slot"] != cur:
+                    cur = r["slot"]
+                    inner.append(f'<div class="pw-t">{html.escape(str(r["slot_label"]))}</div>')
+                inner.append(_pretty_chip(r))
+            cells.append(f'<div class="pw-day{" pw-wk" if wk else ""}">{dh}<div class="pw-in">{"".join(inner)}'
+                         "</div></div>")
+        lab = f"{busy[0]:%b %-d}" + (f" – {busy[-1]:%b %-d}" if busy[-1] != busy[0] else "")
+        pages.append(f'<section class="pp-page"><div class="pw-head"><h1>{busy[0]:%B %Y}<small>Week of {lab}'
+                     f'</small></h1><span class="pp-sub">{html.escape(title)}{html.escape(who)}</span></div>'
+                     f'<div class="pw" style="grid-template-columns:{" ".join(cols)}">{"".join(cells)}</div>'
+                     f'<div class="pw-key">{key}</div></section>')
+        ws += timedelta(days=7)
+    return _page(title, f"<style>{PRETTY_CSS}</style>" + "".join(pages), landscape=True,
+                 tip="Each week prints on its own landscape page.")
 
 
 # ------------------------------------------------------- coverage flags --

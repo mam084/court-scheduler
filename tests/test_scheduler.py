@@ -1773,3 +1773,17 @@ def test_flags_print_lists_open_then_covered():
                          date(2026, 12, 1), date(2026, 12, 31))
     assert "size: portrait" in h and "<b>Kai</b>" in h
     assert h.index("Needs coverage (1)") < h.index("Already covered (1)") and "Cliff subs" in h
+
+
+def test_color_calendar_one_week_a_page():
+    from scheduler.prints import calendar_pretty_html
+    s, e = date(2026, 12, 1), date(2026, 12, 31)
+    inp = simulate(4, 2, 2, seed=3, start=s, end=e)
+    r = solve(inp, s, e, time_limit_s=10)
+    data = clean(inp, s, e)
+    h = calendar_pretty_html(r.assignments, s, e, data.closures, None, True, r.weekend_dates, r.tournaments)
+    assert h.count('class="pp-page"') == 5 and "size: landscape" in h        # Nov 29 – Jan 2 weeks
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert h.count('class="pw-c') >= len(pr) and "Christmas" in h
+    t = pr.iloc[0]
+    assert t["name"] in h and str(t["coach"]).split(";")[0].strip() in h
