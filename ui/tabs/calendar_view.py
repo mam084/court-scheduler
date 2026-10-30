@@ -15,7 +15,7 @@ from ui.state import S
 
 def render():
     """Calendar section."""
-    CAN, closures, MY_COACH, MY_TEAMS = S.CAN, S.closures, S.MY_COACH, S.MY_TEAMS
+    closures, MY_COACH, MY_TEAMS = S.closures, S.MY_COACH, S.MY_TEAMS
     first, last = dates.month_picker("cal")
     result, gaps = dates.window(first, last)
     dates.where_note(first, last, gaps)
@@ -31,10 +31,7 @@ def render():
     show_locals = c2.toggle("Include locals programs", value=True)
     cal_lc = c2.toggle("Show program coaches", key="cal_lc", disabled=not show_locals,
                        help="List the coaches working each locals program.") and show_locals
-    show_moved = c2.toggle("Outline moved practices", key="show_moved",
-                           help="Outline makeups and practices that aren't on the team's usual day "
-                                "or time.") if CAN else False
-    st.markdown(month_calendar_html(a if show_moved else a.assign(on_pattern=True), first, last, closures,
+    st.markdown(month_calendar_html(a, first, last, closures,
                                     hl or None, show_locals, result.weekend_dates, result.tournaments, cal_lc),
                 unsafe_allow_html=True)
 

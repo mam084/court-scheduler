@@ -16,7 +16,6 @@ import pandas as pd
 from .config import (
     ALL_COURTS,
     COURTS,
-    DAYS,
     PRACTICE_COURT,
     SLOT_KEYS,
     SLOT_TIMES,
@@ -201,9 +200,6 @@ def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str
     cls = ["cs-chip"]
     if is_local:
         cls.append("cs-local")
-    weekday = DAYS.index(r["day"]) < 5 if r.get("day") in DAYS else True
-    if not is_local and weekday and not r.get("on_pattern", True):
-        cls.append("cs-moved")
     if not _hit(r, highlight):
         cls.append("cs-dim")
     name = html.escape(str(r["name"]))
@@ -211,8 +207,8 @@ def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str
     style = f"background:{bg};color:{fg};border-left-color:{stripe}"
     paired = _text(r.get("paired"))
     extra = r.get("extra") == True  # noqa: E712
-    title = f"{r['slot_label']} · {coaches}" + ("" if "cs-moved" not in cls else " · moved from usual time") \
-        + (" · extra practice" if extra else "") + (f" · {paired}" if paired else "")
+    title = f"{r['slot_label']} · {coaches}" + (" · extra practice" if extra else "") \
+        + (f" · {paired}" if paired else "")
     tags = ""
     if paired:
         tags += f'<span class="cs-tag" title="{html.escape(paired)}">Paired · 3 on 2</span> '
@@ -521,7 +517,7 @@ def open_slot_map(day_dates: dict | None, data, closures: dict | None = None) ->
     return out
 
 
-def legend_html(ages, stripes: dict, show_moved: bool = True) -> str:
+def legend_html(ages, stripes: dict, show_moved: bool = False) -> str:
     """The color key above the court view: age groups, clubs, programs and tags."""
     items = ['<span class="cs-lbl">Age</span>']
     for a in sorted({int(x) for x in ages if pd.notna(x)}):
@@ -624,6 +620,9 @@ def month_calendar_html(
                 chips = "".join(_chip(r, stripes, None, compact=True, local_coaches=local_coaches) for r in day
                                 if _band(_minutes(r["slot"])) == band)
                 rows[band + 1].append(f'<td class="cs-calband cs-b{band}">{chips}</td>')
+        if not any(rows[1][1:]):  # no weekday times this week (a break in 2-hour blocks, closed or out)
+            rows = [["<td class=\"cs-bandlbl cs-datelbl\"></td>"] + [c.replace(f' rowspan="{n_rows}"', "")
+                                                                       for c in rows[0][1:]]]
         out += ["<tr" + (' class="cs-weektop"' if i == 0 else "") + ">" + "".join(r) + "</tr>"
                 for i, r in enumerate(rows)]
         ws += timedelta(days=7)

@@ -28,7 +28,6 @@ from ui.state import S
 
 def render():
     """Court view section."""
-    CAN = S.CAN
     published = S.published
     cleaned = S.cleaned
     closures = S.closures
@@ -56,16 +55,14 @@ def render():
     a = result.assignments
     stripes = club_stripes(a["club"]) if "club" in a else {}
     hl = set(c2.multiselect("Highlight a club, team or coach", people_options(a)))
-    tcols = iter(st.columns(5 if MY_COACH else 4))
+    tcols = iter(st.columns(4 if MY_COACH else 3))
     if MY_COACH:
         if next(tcols).toggle("Highlight my practices", key="hl_mine",
                               help="Your teams' practices and the programs you work."):
             hl |= {MY_COACH} | MY_TEAMS
     show_open = next(tcols).toggle("Show open court times", value=True, key="show_open",
                                    help="A dashed “Open” box marks every free practice time on each court.")
-    show_moved = next(tcols).toggle("Outline moved practices", key="show_moved",
-                                    help="Outline makeups and practices that aren't on the team's usual day "
-                                         "or time.") if CAN else False
+    show_moved = False  # moved practices aren't outlined
     show_priv = next(tcols).toggle("Show privates", value=True, key="show_priv",
                                    help="Private lessons booked in the Privates tab (weeks only).")
     show_lc = next(tcols).toggle("Show program coaches", key="show_lc",
