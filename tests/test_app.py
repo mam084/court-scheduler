@@ -224,7 +224,8 @@ def test_pecking_order_page_and_calendar_downloads(db):
     at.radio(key="nav").set_value("Calendar").run()
     assert not at.exception
     labels = [d.proto.label for d in at.get("download_button")]
-    assert {"Google Calendar (.ics)", "Printable calendar", "Calendar (Excel)"} <= set(labels)
+    assert {"Google Calendar (.ics)", "Printable calendar · color", "Printable calendar · one page a month",
+            "Calendar (Excel)"} <= set(labels)
 
 
 def test_hand_placed_practice_can_be_moved_again_and_removed(db):
