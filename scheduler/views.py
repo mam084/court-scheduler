@@ -74,7 +74,17 @@ CSS = """
              font-size: 12px; align-items:center; }
 .cs-legend .cs-chip { margin: 0; }
 .cs-legend .cs-lbl { color: #5A6478; margin: 0 2px 0 8px; }
-.cs-cal td { height: 92px; }
+.cs-cal td { height: auto; }
+.cs-cal td.cs-dayhead { border-bottom: none; padding-bottom: 0; }
+.cs-cal td.cs-calband { height: 26px; padding: 2px 4px; }
+.cs-cal td.cs-calband.cs-b0, .cs-cal td.cs-calband.cs-b1 { border-bottom: 1px dotted #C9CED8; }
+.cs-cal td.cs-calband.cs-b1, .cs-cal td.cs-calband.cs-b2 { border-top: 1px dotted #C9CED8; }
+.cs-cal td.cs-calband.cs-b0 { border-top: none; }
+.cs-cal th.cs-bandcol { width: 38px; }
+.cs-cal td.cs-bandlbl { width: 38px; background: #EEF1F6; color: #5A6478; font-size: 10.5px; font-weight: 700;
+                        text-align: center; vertical-align: middle; padding: 2px; }
+.cs-cal td.cs-datelbl { background: #EEF1F6; }
+.cs-cal tr.cs-weektop td { border-top: 2px solid #9AA3B2; }
 .cs-cal .cs-datenum { font-weight: 700; color: #1F2A44; margin-bottom: 3px; }
 .cs-cal .cs-out { background: #F1F2F4; }
 .cs-cal .cs-chip { padding: 2px 5px; margin-bottom: 3px; font-size: 11.5px; }
@@ -137,6 +147,9 @@ body .cs-grid tr.cs-pc td:not(.cs-daycell) { border-top-color: #8A93A8; }
 body .cs-open { border-color: #566079; color: #A0A9BC; }
 body .cs-cal .cs-datenum { color: #E8ECF3; }
 body .cs-cal td.cs-out { background: #161A24; }
+body .cs-cal td.cs-bandlbl { background: #283044; color: #A3AAB8; }
+body .cs-cal td.cs-calband { border-color: #394155; }
+body .cs-cal tr.cs-weektop td { border-top-color: #566079; }
 body .cs-legend .cs-lbl { color: #A3AAB8; }
 body .cs-counts td.cs-ok { background: #1D3A25; color: #A6E3B0; }
 body .cs-counts td.cs-short1 { background: #4A1F24; color: #F6B8B8; }
@@ -569,32 +582,50 @@ def month_calendar_html(
             by_date.setdefault(r["date"], []).append(r)
 
     show_days = list(WEEK_ORDER)
-    out = [CSS, '<div class="cs-wrap"><table class="cs-grid cs-cal"><thead><tr>']
+    n_rows = 1 + len(BAND_STARTS)  # the date row, then one row per weekday time band
+    band_names = ["3:45", "5:30", "7:20"]
+    out = [CSS, '<div class="cs-wrap"><table class="cs-grid cs-cal"><thead><tr><th class="cs-bandcol"></th>']
     out += [f'<th{" class=cs-wkend" if wd not in WEEKDAYS else ""}>{wd}</th>' for wd in show_days]
     out.append("</tr></thead><tbody>")
     ws = week_start(start)
     while ws <= end:
-        out.append("<tr>")
+        # Each week: a row of dates (and tournaments), then a row for each weekday time, so every 3:45,
+        # 5:30 and 7:20 lines up across the week. Weekends, break days and closed days are one tall box.
+        rows = [[] for _ in range(n_rows)]
+        rows[0].append('<td class="cs-bandlbl cs-datelbl"></td>')
+        for i, nm in enumerate(band_names):
+            rows[i + 1].append(f'<td class="cs-bandlbl">{nm}</td>')
         for wd in show_days:
             d = ws + timedelta(days=WEEK_ORDER.index(wd))
+            span = f' rowspan="{n_rows}"'
             if d < start or d > end:
-                out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.4">{d:%-d}</div></td>')
+                rows[0].append(f'<td class="cs-out"{span}><div class="cs-datenum" style="opacity:.4">'
+                               f'{d:%-d}</div></td>')
                 continue
             if d in closures:
-                out.append(f'<td class="cs-closed"><div class="cs-datenum">{_daynum(d, start)}</div>'
-                           f'{html.escape(closures[d])}</td>')
+                rows[0].append(f'<td class="cs-closed"{span}><div class="cs-datenum">{_daynum(d, start)}</div>'
+                               f'{html.escape(closures[d])}</td>')
                 continue
             has_tourn = any(tn.covers(d) for tn in (tournaments or []))
             if d.weekday() >= 5 and d not in weekend_dates and d not in by_date and not has_tourn:
-                out.append(f'<td class="cs-out"><div class="cs-datenum" style="opacity:.5">{d:%-d}</div></td>')
+                rows[0].append(f'<td class="cs-out"{span}><div class="cs-datenum" style="opacity:.5">'
+                               f'{d:%-d}</div></td>')
                 continue
-            chips = "".join(_tourn_chip(tn, compact=True) for tn in (tournaments or []) if tn.covers(d)
-                            and (not highlight or tn.kind == "local" or set(tn.teams) & set(highlight)))
-            chips += "".join(_chip(r, stripes, None, compact=True, local_coaches=local_coaches)
-                             for r in by_date.get(d, []))
-            cls = ' class="cs-wkend"' if d.weekday() >= 5 or d in weekend_dates else ""
-            out.append(f'<td{cls}><div class="cs-datenum">{_daynum(d, start)}</div>{chips}</td>')
-        out.append("</tr>")
+            tchips = "".join(_tourn_chip(tn, compact=True) for tn in (tournaments or []) if tn.covers(d)
+                             and (not highlight or tn.kind == "local" or set(tn.teams) & set(highlight)))
+            day = by_date.get(d, [])
+            if d.weekday() >= 5 or d in weekend_dates:  # 2-hour blocks: one box, in time order
+                chips = "".join(_chip(r, stripes, None, compact=True, local_coaches=local_coaches) for r in day)
+                rows[0].append(f'<td class="cs-wkend"{span}><div class="cs-datenum">{_daynum(d, start)}</div>'
+                               f'{tchips}{chips}</td>')
+                continue
+            rows[0].append(f'<td class="cs-dayhead"><div class="cs-datenum">{_daynum(d, start)}</div>{tchips}</td>')
+            for band in range(len(BAND_STARTS)):
+                chips = "".join(_chip(r, stripes, None, compact=True, local_coaches=local_coaches) for r in day
+                                if _band(_minutes(r["slot"])) == band)
+                rows[band + 1].append(f'<td class="cs-calband cs-b{band}">{chips}</td>')
+        out += ["<tr" + (' class="cs-weektop"' if i == 0 else "") + ">" + "".join(r) + "</tr>"
+                for i, r in enumerate(rows)]
         ws += timedelta(days=7)
     out.append("</tbody></table></div>")
     return "".join(out)
