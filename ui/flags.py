@@ -65,13 +65,14 @@ def sub_flags(result) -> list[dict]:
     return out
 
 
-def flags_print(start: date, end: date, result=None, title: str = "Coverage flags") -> bytes:
+def flags_print(flags: list[dict], resolved: dict, start: date, end: date,
+                title: str = "Coverage flags") -> bytes:
     """The printable coverage-flag list for the scheduling admin (open flags to cover, then the
-    resolved ones), for these dates."""
+    resolved ones), for these dates. Takes everything as arguments: the file is built when the
+    button is clicked, after the page run, when the page's values (S) are gone."""
     from scheduler.prints import flags_print_html
-    flags = [f for f in S.FLAGS if f["sort"] <= end] + [f for f in sub_flags(result) if f["sort"] <= end]
-    flags.sort(key=lambda f: (f["sort"], f["text"]))
-    return flags_print_html(flags, S.RESOLVED, start, end, title).encode()
+    flags = sorted((f for f in flags if f["sort"] <= end), key=lambda f: (f["sort"], f["text"]))
+    return flags_print_html(flags, resolved, start, end, title).encode()
 
 
 def compute():
@@ -119,9 +120,11 @@ def flags_panel(area: str | None = None, key: str = "flags", expanded: bool = Fa
             st.caption("A coach who can't be in two places at once (or needs a sub to make a practice work). "
                        "Once you've found coverage, mark it resolved.")
         if CAN and result is not None:
+            # Gathered now: the file is built on the click, after this run, when S is gone.
             start, end, title = S.start, S.end, st.session_state.get("project_name") or ""
-            st.download_button("🖨 Print coverage flags", lambda: flags_print(start, end, result, "Coverage flags"
-                                                                             + (f" · {title}" if title else "")),
+            p_flags, p_res = list(flags), dict(RESOLVED)
+            p_title = "Coverage flags" + (f" · {title}" if title else "")
+            st.download_button("🖨 Print coverage flags", lambda: flags_print(p_flags, p_res, start, end, p_title),
                                f"coverage_flags_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html",
                                key=f"{key}_print",
                                help="Every coach who needs coverage on these dates (tournaments, programs, and "
