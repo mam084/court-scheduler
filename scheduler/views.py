@@ -38,13 +38,13 @@ AGE_COLORS = {
     15: ("#F3E1FF", "#5B1A8C"),
     16: ("#EBDDCB", "#5C3A1A"),   # tan (blue is the girls side)
     17: ("#D8F4F6", "#0B5C66"),
-    18: ("#F5B8B8", "#861212"),   # red (green is the boys side)
+    18: ("#ECD9E6", "#6B3253"),   # mauve (green is the boys side)
 }
 DEFAULT_COLOR = ("#E6E9FF", "#2E3A9E")
-# Programs and local tournaments that are neither side ("Other"): tangerine, not grey,
+# Programs and local tournaments that are neither side ("Other"): butterscotch, not grey,
 # so they never look like open court.
-LOCAL_COLORS = ("#FFD7AE", "#7A3300")
-OTHER_STRIPE = "#F57C00"
+LOCAL_COLORS = ("#FAEBCB", "#7A5410")
+OTHER_STRIPE = "#E0B45A"
 SIDE_COLORS = {"Girls": ("#DCE7FF", "#1E3A8A"), "Boys": ("#DDF3E2", "#1E5B2A")}
 # Club -> stripe color (matches the club sheet: red/pink girls, green boys).
 CLUB_STRIPES = ["#2563EB", "#2E7D32", "#D7263D", "#F29E4C", "#6A4C93"]  # girls blue, boys green
@@ -91,7 +91,7 @@ CSS = """
 .cs-cal .cs-datenum { font-weight: 700; color: #1F2A44; margin-bottom: 3px; }
 .cs-cal .cs-out { background: #F1F2F4; }
 .cs-cal .cs-chip { padding: 2px 5px; margin-bottom: 3px; font-size: 11.5px; }
-.cs-tourn { background-color: #FFD7AE; color: #7A3300; font-weight: 700;
+.cs-tourn { background-color: #FAEBCB; color: #7A5410; font-weight: 700;
             background-image: repeating-linear-gradient(135deg, transparent, transparent 6px,
                                                         rgba(0,0,0,.04) 6px, rgba(0,0,0,.04) 12px); }
 .cs-travel { background: #E8F0FF; color: #1F3F7A; border-left-color: #4A7BD0 !important; font-weight: 600; }
