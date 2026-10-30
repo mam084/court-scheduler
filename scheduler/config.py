@@ -264,9 +264,15 @@ WEIGHTS = {
     "not_preferred_day": 550,
     # 9. Preferred times: the wishlist's times (a 2nd-choice match costs a
     #    little), times marked not preferred (3:45 a bit more: often a coach
-    #    who can't get off work), weekend AM/PM preference.
+    #    who can't get off work), weekend AM/PM preference. A time someone
+    #    marked "rather not" costs more than a time they just didn't pick
+    #    (Oct 30, 2026): a stated objection beats silence, even another team's.
     "wish_time_miss": 250,
-    "not_preferred": 220,
+    "not_preferred": 350,
+    # A young team moved to a 3:45 it didn't ask for (its wishlist names other
+    # times), on top of the wrong-time cost: worse than an older team moved to
+    # a 7:20 it didn't ask for.
+    "unasked_345": 60,
     "not_preferred_345": 40,
     "weekend_pref": 220,
     "wish_second": 60,

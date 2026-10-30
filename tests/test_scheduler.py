@@ -1729,3 +1729,15 @@ def test_makeup_adds_a_practice_that_week():
     assert pc.loc[("16-T0", date(2026, 11, 1)), "scheduled"] == 3
     assert pc.loc[("16-T0", date(2026, 11, 8)), "scheduled"] == 2
     assert pc.loc[("16-T1", date(2026, 11, 1)), "scheduled"] == 2
+
+
+def test_stated_rather_not_outranks_a_time_nobody_mentioned():
+    """A coach's 'rather not' time costs more than another team's time it just didn't pick; a young team
+    moved to an unasked 3:45 costs more than a 15s team moved to an unasked 7:20."""
+    from scheduler.config import WEIGHTS, slot_cost
+    rather_not = WEIGHTS["not_preferred"] + WEIGHTS["slot_fit"] * slot_cost(14, "7:20") + WEIGHTS["late_exception"]
+    unasked_345 = WEIGHTS["wish_time_miss"] + WEIGHTS["slot_fit"] * slot_cost(13, "3:45") + WEIGHTS["unasked_345"]
+    assert rather_not > unasked_345 > WEIGHTS["wish_time_miss"]
+    fifteen_720 = WEIGHTS["wish_time_miss"] + WEIGHTS["slot_fit"] * slot_cost(15, "7:20")
+    assert unasked_345 > fifteen_720 + 50
+    assert WEIGHTS["not_preferred"] < WEIGHTS["wish_day_miss"]   # still below a day they didn't pick

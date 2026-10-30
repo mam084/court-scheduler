@@ -352,6 +352,9 @@ def solve(
                     if not (s == "3:45" and wants_345[t]):
                         cost += WEIGHTS["slot_fit"] * slot_cost(team.age, s)
                     cost += _wish_cost(data.wishes.get(team.name), DAYS[d.weekday()], s)
+                    if s == "3:45" and not wants_345[t] and any(
+                            w.times for w in data.wishes.get(team.name, [])):
+                        cost += WEIGHTS["unasked_345"]
                 cost += _not_preferred_cost([r for w_ in [team.name] + team.staff for r in rules_for[w_]
                                              if r.kind == "not_preferred" and r.matches(d, s)], s)
                 need = [(c, programs_of(c, d, s)) for c in team.staff if c in coach_prog[d, s]]
