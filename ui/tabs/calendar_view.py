@@ -9,7 +9,7 @@ import streamlit as st
 from scheduler.export import calendar_excel, calendar_ics, team_dates_excel
 from scheduler.views import calendar_print_html, month_calendar_html
 from ui import dates
-from ui.common import people_options, team_order, team_sections
+from ui.common import is_app_admin, off_preference, people_options, team_order, team_sections
 from ui.state import S
 
 
@@ -31,6 +31,10 @@ def render():
     show_locals = c2.toggle("Include locals programs", value=True)
     cal_lc = c2.toggle("Show program coaches", key="cal_lc", disabled=not show_locals,
                        help="List the coaches working each locals program.") and show_locals
+    if is_app_admin() and c2.toggle("Highlight practices not at preferred days/times", key="cal_offpref",
+                                    help="Only you (app admin) see this. Rings every practice on a no-date or "
+                                         "'rather not', or off the team's wishlist; hover one to see why."):
+        a = off_preference(a)
     st.markdown(month_calendar_html(a, first, last, closures,
                                     hl or None, show_locals, result.weekend_dates, result.tournaments, cal_lc),
                 unsafe_allow_html=True)

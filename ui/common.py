@@ -249,3 +249,50 @@ def tournament_note(team: str, d: date) -> str | None:
         if d == tn.end + timedelta(days=1):
             return f"the day after {tn.name}"
     return None
+
+
+def is_app_admin() -> bool:
+    """The signed-in app admin, looking as themselves (not 'View as' someone else)."""
+    v = getattr(S, "VIEWER", None)
+    return bool(v is not None and v.person is not None and v.person.app_admin and v.acting_as is None)
+
+
+def off_preference(a: pd.DataFrame) -> pd.DataFrame:
+    """The bookings with an 'off_pref' column: for each team practice that isn't at its coaches'
+    preferred days and times, why (a no-date or 'rather not' of the team or its coaches; or a day
+    or time its wishlist doesn't name). '' for the rest. Weekend wishlist rows only count on
+    weekends, weekday ones on weekdays."""
+    from scheduler.config import DAYS
+    cleaned = getattr(S, "cleaned", None)
+    if cleaned is None or not len(a):
+        return a.assign(off_pref="")
+    teams = {t.name: t for t in cleaned.teams}
+    rules: dict[str, list] = {}
+    for r in cleaned.rules:
+        rules.setdefault(r.who, []).append(r)
+    out = []
+    for r in a.to_dict("records"):
+        t = teams.get(r.get("name"))
+        if r.get("kind") != "Practice" or t is None:
+            out.append("")
+            continue
+        d, s_ = r["date"], r["slot"]
+        why = []
+        for who in [t.name] + t.staff:
+            for rl in rules.get(who, []):
+                if not rl.manual and rl.matches(d, s_):  # (hand edits' removals aren't preferences)
+                    kind = "no-date" if rl.kind == "no" else "rather not"
+                    whose = "team" if who == t.name else who
+                    why.append(f"{whose}'s {kind} ({rl.describe()}" + (f": {rl.note}" if rl.note else "") + ")")
+        weekend = d.weekday() >= 5
+        wishes = [w for w in cleaned.wishes.get(t.name, [])
+                  if not w.days or (any(x in ("Sat", "Sun") for x in w.days) == weekend)]
+        if wishes:
+            hit = [w.choice for w in wishes if w.matches(d, s_)]
+            if not hit:
+                on_day = [w for w in wishes if not w.days or DAYS[d.weekday()] in w.days]
+                why.append("wishlist has another time that day" if on_day else "not a wishlist day")
+            elif min(hit) > 1:
+                why.append("2nd-choice wishlist time")
+        out.append("; ".join(dict.fromkeys(why)))
+    return a.assign(off_pref=out)

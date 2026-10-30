@@ -22,7 +22,16 @@ from scheduler.views import (
     weeks_print_html,
 )
 from ui import dates
-from ui.common import mine, people_options, plural, team_order, team_sections, template_locals
+from ui.common import (
+    is_app_admin,
+    mine,
+    off_preference,
+    people_options,
+    plural,
+    team_order,
+    team_sections,
+    template_locals,
+)
 from ui.state import S
 
 
@@ -67,6 +76,13 @@ def render():
                                    help="Private lessons booked in the Privates tab (weeks only).")
     show_lc = next(tcols).toggle("Show program coaches", key="show_lc",
                                  help="List the coaches working each locals program on its box.")
+    show_off = is_app_admin() and st.toggle(
+        "Highlight practices not at preferred days/times", key="show_offpref",
+        help="Only you (app admin) see this. Rings every practice on a no-date or 'rather not', or off the team's "
+             "wishlist; hover one to see why.")
+    if show_off:
+        a = off_preference(a)
+        st.caption("🟧 Ringed: not at the coaches' preferred days/times. Hover for why.")
     week_privs = privs if show_priv else []
     if hl and week_privs:
         week_privs = [p for p in week_privs if p["coach"] in hl or p["team"] in hl]

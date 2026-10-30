@@ -68,6 +68,7 @@ CSS = """
                                                                  rgba(0,0,0,.04) 6px, rgba(0,0,0,.04) 12px); }
 .cs-chip.cs-moved { outline: 2px dashed #C0392B; outline-offset: -2px; }
 .cs-chip.cs-dim { opacity: .2; }
+.cs-chip.cs-offpref { box-shadow: 0 0 0 2px #F59E0B, 0 0 0 4px rgba(245,158,11,.25); }
 .cs-time { font-variant-numeric: tabular-nums; font-weight: 600; }
 .cs-legend { display:flex; flex-wrap:wrap; gap:6px; margin: 6px 0 10px; font-family: system-ui, sans-serif;
              font-size: 12px; align-items:center; }
@@ -200,6 +201,9 @@ def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str
     cls = ["cs-chip"]
     if is_local:
         cls.append("cs-local")
+    off = _text(r.get("off_pref"))
+    if off and not is_local:
+        cls.append("cs-offpref")
     if not _hit(r, highlight):
         cls.append("cs-dim")
     name = html.escape(str(r["name"]))
@@ -208,7 +212,7 @@ def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str
     paired = _text(r.get("paired"))
     extra = r.get("extra") == True  # noqa: E712
     title = f"{r['slot_label']} · {coaches}" + (" · extra practice" if extra else "") \
-        + (f" · {paired}" if paired else "")
+        + (f" · {paired}" if paired else "") + (f" · Not preferred: {off}" if off and not is_local else "")
     tags = ""
     if paired:
         tags += f'<span class="cs-tag" title="{html.escape(paired)}">Paired · 3 on 2</span> '

@@ -1223,3 +1223,44 @@ def test_add_a_makeup_from_edit_practices(db):
     pc = at.session_state["result"].practice_counts
     row = pc[(pc["team"] == team) & (pc["week_of"] == date(2026, 11, 1))].iloc[0]
     assert row["target"] == 3
+
+
+def test_off_preference_highlight_is_for_the_app_admin_only(db, monkeypatch):
+    pid = _save(db, "Prefs", 59)
+    at, _ = _as(db, monkeypatch, "matthew@sdvbc.org", pid=pid)          # app admin
+    at.radio(key="nav").set_value("Court view").run()
+    at.toggle(key="show_offpref").set_value(True).run()
+    assert not at.exception, at.exception
+    at.radio(key="nav").set_value("Calendar").run()
+    at.toggle(key="cal_offpref").set_value(True).run()
+    assert not at.exception, at.exception
+    assert any("cs-offpref" in m.value or "cs-cal" in m.value for m in at.markdown)
+    head, _team = _head_of_first_team(db, pid)
+    db.save_user("coach@sdvbc.org", "Coach", head)
+    at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)            # a coach doesn't get it
+    at.radio(key="nav").set_value("Court view").run()
+    assert not any(t.key == "show_offpref" for t in at.toggle)
+
+
+def test_off_preference_reasons():
+    from types import SimpleNamespace
+
+    from scheduler import clean
+    from ui import common
+    from ui.state import S  # noqa: F401
+    inp = simulate(4, 2, 2, seed=60, start=date(2026, 11, 1), end=date(2026, 11, 30))
+    team = inp.teams["team"].iloc[0]
+    inp.availability = pd.DataFrame([{"who": team, "type": "Not preferred", "days": "Mon"}])
+    inp.wishlist = pd.DataFrame([{"team": team, "choice": 1, "days": "Tue, Thu", "times": "5:30"}])
+    data = clean(inp, date(2026, 11, 1), date(2026, 11, 30))
+    a = pd.DataFrame([
+        {"kind": "Practice", "name": team, "date": date(2026, 11, 2), "slot": "5:30"},   # Mon: rather not
+        {"kind": "Practice", "name": team, "date": date(2026, 11, 3), "slot": "5:30"},   # Tue 5:30: preferred
+        {"kind": "Practice", "name": team, "date": date(2026, 11, 5), "slot": "7:20"}])  # Thu 7:20: wrong time
+    common.S = SimpleNamespace(cleaned=data)
+    try:
+        out = list(common.off_preference(a)["off_pref"])
+    finally:
+        from ui.state import S as real
+        common.S = real
+    assert "rather not" in out[0] and out[1] == "" and "another time" in out[2]
