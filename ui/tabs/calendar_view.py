@@ -7,9 +7,10 @@ import re
 import streamlit as st
 
 from scheduler.export import calendar_excel, calendar_ics, team_dates_excel
-from scheduler.views import calendar_print_html, month_calendar_html
+from scheduler.prints import calendar_print_html, team_dates_print_html
+from scheduler.views import month_calendar_html
 from ui import dates
-from ui.common import is_app_admin, off_preference, people_options, team_order, team_sections
+from ui.common import is_app_admin, off_preference, people_options, team_coaches, team_order, team_sections
 from ui.state import S
 
 
@@ -77,8 +78,16 @@ def render():
                            help="The club's calendar layout: a block per week, each day with time · what · courts.")
         # Worked out now: the file itself is only built when the button is clicked, after this run.
         order, sections, title_ = team_order(), team_sections(), st.session_state.get("project_name") or ""
-        st.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
+        coaches = team_coaches()
+        e1, e2 = st.columns(2)
+        e1.download_button("Every team's dates · print", lambda: team_dates_print_html(
+                               _win(), closures, order, title_, sections, coaches).encode(),
+                           f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html", key="team_print_cal",
+                           width="stretch",
+                           help="Like the handwritten sheet: each team's coaches, then the dates it practices "
+                                "across in date order, tournament days circled. One portrait page.")
+        e2.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
                                _win(), closures, order, title_, sections),
-                           f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", key="team_dates_cal",
+                           f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", key="team_dates_cal", width="stretch",
                            help="One row per team with every practice and tournament date; tournament days are "
                                 "circled.")

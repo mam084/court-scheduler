@@ -50,6 +50,30 @@ def coverage_flags() -> list[dict]:
 
 
 
+def sub_flags(result) -> list[dict]:
+    """Practices the scheduler could only place if a coach finds a sub for a program ("Needs a sub"),
+    as flags like the others."""
+    iss = getattr(result, "issues", None)
+    if iss is None or not len(iss):
+        return []
+    out = []
+    for r in iss[iss["issue"].astype(str).str.startswith("Needs a sub")].itertuples():
+        when = str(r.issue).split(": ", 1)[-1]
+        detail = str(r.detail).replace("Possible if ", "")
+        out.append({"id": f"sub|{r.team}|{when}", "when": when, "sort": pd.Timestamp(r.week_of).date(),
+                    "text": f"**{r.team}** practice needs {detail}", "tag": "Needs a sub", "area": "program"})
+    return out
+
+
+def flags_print(start: date, end: date, result=None, title: str = "Coverage flags") -> bytes:
+    """The printable coverage-flag list for the scheduling admin (open flags to cover, then the
+    resolved ones), for these dates."""
+    from scheduler.prints import flags_print_html
+    flags = [f for f in S.FLAGS if f["sort"] <= end] + [f for f in sub_flags(result) if f["sort"] <= end]
+    flags.sort(key=lambda f: (f["sort"], f["text"]))
+    return flags_print_html(flags, S.RESOLVED, start, end, title).encode()
+
+
 def compute():
     """Every flag for these dates and which are resolved."""
     inp = S.inp
@@ -76,11 +100,14 @@ def reopen_flag(fid: str):
     inp.resolved = inp.resolved[inp.resolved["flag"] != fid].reset_index(drop=True)
 
 
-def flags_panel(area: str | None = None, key: str = "flags", expanded: bool = False):
+def flags_panel(area: str | None = None, key: str = "flags", expanded: bool = False, result=None):
     """A collapsible list of coverage flags, one line each, with a Resolve
-    button per flag (admins) and the resolved ones tucked underneath."""
+    button per flag (admins) and the resolved ones tucked underneath. With
+    `result`, admins also get a printable list (including practices that need a sub)."""
     CAN, FLAGS, RESOLVED = S.CAN, S.FLAGS, S.RESOLVED
     flags = [f for f in FLAGS if area is None or f["area"] == area]
+    if result is not None and area is None:  # the top panel also lists practices that need a sub
+        flags = sorted(flags + sub_flags(result), key=lambda f: (f["sort"], f["text"]))
     if not flags:
         return
     open_ = [f for f in flags if f["id"] not in RESOLVED]
@@ -89,7 +116,17 @@ def flags_panel(area: str | None = None, key: str = "flags", expanded: bool = Fa
         + (f" · {len(done)} resolved" if done else "")
     with st.expander(label, expanded=expanded and bool(open_), key=f"{key}_box"):
         if open_:
-            st.caption("A coach who can't be in two places at once. Once you've found coverage, mark it resolved.")
+            st.caption("A coach who can't be in two places at once (or needs a sub to make a practice work). "
+                       "Once you've found coverage, mark it resolved.")
+        if CAN and result is not None:
+            start, end, title = S.start, S.end, st.session_state.get("project_name") or ""
+            st.download_button("🖨 Print coverage flags", lambda: flags_print(start, end, result, "Coverage flags"
+                                                                             + (f" · {title}" if title else "")),
+                               f"coverage_flags_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html",
+                               key=f"{key}_print",
+                               help="Every coach who needs coverage on these dates (tournaments, programs, and "
+                                    "practices that need a sub), with a line to write in who covers it. "
+                                    "Portrait. Open it in your browser, then print or save as PDF.")
         for f in open_:
             c1, c2 = st.columns([5, 1], vertical_alignment="center")
             c1.markdown(f"🔴 **{f['when']}** · {f['text']}  \n<small>{f['tag']}</small>", unsafe_allow_html=True)

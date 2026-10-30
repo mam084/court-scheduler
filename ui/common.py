@@ -188,6 +188,12 @@ def team_sections() -> dict[str, str]:
     return {t.name: "Boys" if team_is_boys(t.club, t.name) else "Girls" for t in (cleaned.teams if cleaned else [])}
 
 
+def team_coaches() -> dict[str, list[str]]:
+    """Each team's coaches, head coach(es) first, for the printed team dates."""
+    cleaned = S.cleaned
+    return {t.name: t.staff for t in (cleaned.teams if cleaned else [])}
+
+
 def people_options(a: pd.DataFrame) -> list[str]:
     """Clubs, teams and coaches for the 'highlight' / 'only show' pickers."""
     cleaned = S.cleaned

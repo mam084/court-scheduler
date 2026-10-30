@@ -142,7 +142,7 @@ def render():
                     "in the sidebar "
                     "when you're done making changes.")
 
-    flags_panel(key="flags_top")
+    flags_panel(key="flags_top", result=result)
 
     if alerts:
         n_red = sum(f is st.error for f, _ in alerts)

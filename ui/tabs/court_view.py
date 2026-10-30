@@ -10,6 +10,7 @@ import streamlit as st
 from scheduler.changes import diff, practices_of
 from scheduler.export import team_dates_excel, to_excel
 from scheduler.paper import paper_weeks_html
+from scheduler.prints import team_dates_print_html
 from scheduler.solver import week_start
 from scheduler.views import (
     club_stripes,
@@ -28,6 +29,7 @@ from ui.common import (
     off_preference,
     people_options,
     plural,
+    team_coaches,
     team_order,
     team_sections,
     template_locals,
@@ -161,8 +163,14 @@ def render():
                                 "With **Show open court times** on, every open court time prints with a line to "
                                 "write a name in. Open it in your browser, then print or save as PDF.")
         # Worked out now: the file itself is only built when the button is clicked, after this run.
-        order, sections = team_order(), team_sections()
-        st.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
+        order, sections, coaches = team_order(), team_sections(), team_coaches()
+        e1, e2 = st.columns(2)
+        e1.download_button("Every team's dates · print", lambda: team_dates_print_html(
+                               _win(), closures, order, title_, sections, coaches).encode(),
+                           f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html", width="stretch",
+                           help="Like the handwritten sheet: each team's coaches, then the dates it practices "
+                                "across in date order, tournament days circled. One portrait page.")
+        e2.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
                                _win(), closures, order, title_, sections),
                            f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", width="stretch",
                            help="One row per team (girls, then boys, each in the pecking order) with every "

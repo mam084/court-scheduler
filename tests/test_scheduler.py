@@ -1124,7 +1124,7 @@ def test_calendar_exports(tmp_path):
     from openpyxl import load_workbook
 
     from scheduler.export import calendar_excel, calendar_ics, to_excel
-    from scheduler.views import calendar_print_html
+    from scheduler.prints import calendar_print_html
     inp = simulate(4, 2, 2, start=date(2026, 11, 1), end=date(2026, 11, 30))
     r = solve(inp, *NOV, time_limit_s=10)
     data = clean(inp, *NOV)
@@ -1532,7 +1532,8 @@ def test_team_dates_spreadsheet_circles_tournaments():
 
 def test_print_pages_have_a_print_button():
     from scheduler.paper import paper_weeks_html
-    from scheduler.views import calendar_print_html, weeks_print_html
+    from scheduler.prints import calendar_print_html
+    from scheduler.views import weeks_print_html
     s, e = date(2026, 11, 1), date(2026, 11, 14)
     r = solve(simulate(4, 2, 2, seed=3, start=s, end=e), s, e, time_limit_s=10)
     a = r.assignments
@@ -1741,3 +1742,34 @@ def test_stated_rather_not_outranks_a_time_nobody_mentioned():
     fifteen_720 = WEIGHTS["wish_time_miss"] + WEIGHTS["slot_fit"] * slot_cost(15, "7:20")
     assert unasked_345 > fifteen_720 + 50
     assert WEIGHTS["not_preferred"] < WEIGHTS["wish_day_miss"]   # still below a day they didn't pick
+
+
+def test_team_dates_print_one_portrait_page_with_circled_tournaments():
+    from scheduler.prints import team_dates_print_html
+    s, e = date(2026, 12, 5), date(2026, 12, 20)
+    inp = simulate(6, 4, 4, seed=7, start=s, end=e)
+    r = solve(inp, s, e, time_limit_s=10)
+    data = clean(inp, s, e)
+    from scheduler.config import team_is_boys
+    order = [t.name for t in sorted(data.teams, key=lambda t: team_is_boys(t.club, t.name))]
+    sec = {t.name: "Boys" if team_is_boys(t.club, t.name) else "Girls" for t in data.teams}
+    coaches = {t.name: t.staff for t in data.teams}
+    h = team_dates_print_html(r, data.closures, order, "Dec", sec, coaches)
+    assert "size: portrait" in h and h.count('class="pp-page"') == 1
+    assert "SDVBC" in h and "Seaside" in h
+    assert h.index(order[0]) < h.index(order[-1])                          # in the given order
+    travel = [tn for tn in r.tournaments if tn.kind == "travel"]
+    # one circle per team per run of tournament days
+    assert h.count('class="pt-tn') == sum(len(tn.teams) for tn in travel)
+    t0 = order[0]
+    assert coaches[t0][0] in h
+
+
+def test_flags_print_lists_open_then_covered():
+    from scheduler.prints import flags_print_html
+    flags = [{"id": "a", "when": "Sat Dec 12", "text": "**Kai** is on **X** and **Y**", "tag": "Two programs"},
+             {"id": "b", "when": "Sun Dec 13", "text": "**Uma** has two travel tournaments", "tag": "Two travel"}]
+    h = flags_print_html(flags, {"b": {"note": "Cliff subs", "who": "Matt", "at": "10/30/2026"}},
+                         date(2026, 12, 1), date(2026, 12, 31))
+    assert "size: portrait" in h and "<b>Kai</b>" in h
+    assert h.index("Needs coverage (1)") < h.index("Already covered (1)") and "Cliff subs" in h
