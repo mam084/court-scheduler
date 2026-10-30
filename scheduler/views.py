@@ -36,12 +36,15 @@ AGE_COLORS = {
     13: ("#FFE3D6", "#8A2E0B"),
     14: ("#FFDDEA", "#8C1340"),
     15: ("#F3E1FF", "#5B1A8C"),
-    16: ("#DCEBFF", "#0B3D91"),
+    16: ("#EBDDCB", "#5C3A1A"),   # tan (blue is the girls side)
     17: ("#D8F4F6", "#0B5C66"),
-    18: ("#DFF5E1", "#1B5E20"),
+    18: ("#F5B8B8", "#861212"),   # red (green is the boys side)
 }
 DEFAULT_COLOR = ("#E6E9FF", "#2E3A9E")
-LOCAL_COLORS = ("#ECEFF3", "#3B4250")
+# Programs and local tournaments that are neither side ("Other"): tangerine, not grey,
+# so they never look like open court.
+LOCAL_COLORS = ("#FFD7AE", "#7A3300")
+OTHER_STRIPE = "#F57C00"
 SIDE_COLORS = {"Girls": ("#DCE7FF", "#1E3A8A"), "Boys": ("#DDF3E2", "#1E5B2A")}
 # Club -> stripe color (matches the club sheet: red/pink girls, green boys).
 CLUB_STRIPES = ["#2563EB", "#2E7D32", "#D7263D", "#F29E4C", "#6A4C93"]  # girls blue, boys green
@@ -88,7 +91,7 @@ CSS = """
 .cs-cal .cs-datenum { font-weight: 700; color: #1F2A44; margin-bottom: 3px; }
 .cs-cal .cs-out { background: #F1F2F4; }
 .cs-cal .cs-chip { padding: 2px 5px; margin-bottom: 3px; font-size: 11.5px; }
-.cs-tourn { background-color: #ECEFF3; color: #3B4250; font-weight: 700;
+.cs-tourn { background-color: #FFD7AE; color: #7A3300; font-weight: 700;
             background-image: repeating-linear-gradient(135deg, transparent, transparent 6px,
                                                         rgba(0,0,0,.04) 6px, rgba(0,0,0,.04) 12px); }
 .cs-travel { background: #E8F0FF; color: #1F3F7A; border-left-color: #4A7BD0 !important; font-weight: 600; }
@@ -195,7 +198,7 @@ def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str
     is_local = r["kind"] == "Local"
     bg, fg = _colors(r)
     if is_local:
-        stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(r.get("side") or "", "#9AA3B2")
+        stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(r.get("side") or "", OTHER_STRIPE)
     else:
         stripe = stripes.get(r.get("club"), "#9AA3B2")
     cls = ["cs-chip"]
@@ -283,7 +286,7 @@ def _tourn_style(tn) -> str:
     if tn.kind != "local":
         return ""
     bg, fg = SIDE_COLORS.get(getattr(tn, "side", "") or "", LOCAL_COLORS)
-    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(getattr(tn, "side", "") or "", "#9AA3B2")
+    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(getattr(tn, "side", "") or "", OTHER_STRIPE)
     return f' style="background:{bg};color:{fg};border-left-color:{stripe}"'
 
 
@@ -308,7 +311,7 @@ def _tourn_block(tns: list, weekend: bool = False) -> str:
     sides = {getattr(tn, "side", "") or "" for tn in tns}
     side = sides.pop() if len(sides) == 1 else ""
     bg, fg = SIDE_COLORS.get(side, LOCAL_COLORS)
-    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(side, "#9AA3B2")
+    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(side, OTHER_STRIPE)
     head = f"Local tournament{'s' if len(tns) > 1 else ''} · until 7 PM"
     names = "".join(f'<div class="cs-tb-name">{html.escape(tn.label())}</div>' for tn in tns)
     title = "; ".join(f"{tn.name} (until 7 PM)" for tn in tns)
@@ -539,7 +542,7 @@ def legend_html(ages, stripes: dict, show_moved: bool = False) -> str:
                      f'{side}</div>')
     bg, fg = LOCAL_COLORS
     items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};'
-                 'border-left-color:#9AA3B2">Other</div>')
+                 f'border-left-color:{OTHER_STRIPE}">Other</div>')
     if show_moved:
         items.append('<div class="cs-chip cs-moved" style="background:#fff;color:#C0392B;border-left-color:#fff">'
                      'Moved / makeup</div>')

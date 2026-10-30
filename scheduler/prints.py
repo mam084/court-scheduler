@@ -17,7 +17,7 @@ import pandas as pd
 from .config import SLOT_KEYS, WEEK_ORDER, court_short, team_is_boys, week_start
 from .views import PRINT_BUTTON, _text, courts_label
 
-GIRLS, BOYS, LOCAL = "#2563EB", "#2E7D32", "#8A93A3"
+GIRLS, BOYS, LOCAL = "#2563EB", "#2E7D32", "#F57C00"  # programs on neither side: tangerine
 SECTION_NAMES = {"Girls": "SDVBC", "Boys": "Seaside"}
 
 BASE_CSS = """
