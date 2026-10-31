@@ -163,14 +163,17 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
 
 
 def _head(d: date, start: date, end: date, closures: dict, tourns: list, wd: str) -> str:
+    """The day's name and date, with closures and tournaments under it. Local tournaments that day
+    share one line; each travel tournament gets its own."""
     notes = []
     if start <= d <= end:
         if d in closures:
             notes.append(html.escape(closures[d] or "Closed"))
-        for tn in tourns:
-            if tn.covers(d):
-                kind = "" if tn.kind == "local" else " (travel)"
-                notes.append(html.escape(tn.name + kind))
+        here = [tn for tn in tourns if tn.covers(d)]
+        local = [tn.name for tn in here if tn.kind == "local"]
+        if local:
+            notes.append(html.escape(" / ".join(local)))
+        notes += [html.escape(f"{tn.name} (travel)") for tn in here if tn.kind != "local"]
     note = "".join(f'<span class="note">{n}</span>' for n in notes)
     return f'<th class="dh">{wd} <span class="num">{d.day}</span>{note}</th>'
 
@@ -226,7 +229,9 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
         month = f"{days[0]:%b %Y}" if days[0].month == days[-1].month else f"{days[0]:%b} – {days[-1]:%b %Y}"
         for i, (courts, label) in enumerate(HALVES):
             rows = ['<table class="pp"><thead><tr><th class="ct"></th>'
-                    + "".join(_head(d, start, end, closures, tourns, wd) for d, wd in zip(days, WEEK_ORDER))
+                    # tournaments go on the first page only (the second has room for the courts)
+                    + "".join(_head(d, start, end, closures, tourns if i == 0 else [], wd)
+                              for d, wd in zip(days, WEEK_ORDER))
                     + "</tr></thead><tbody>"]
             for c in courts:
                 cls = ' class="pc"' if c not in COURTS else ""

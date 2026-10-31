@@ -1787,3 +1787,16 @@ def test_color_calendar_one_week_a_page():
     assert h.count('class="pw-c') >= len(pr) and "Christmas" in h
     t = pr.iloc[0]
     assert t["name"] in h and str(t["coach"]).split(";")[0].strip() in h
+
+
+def test_paper_tournaments_on_first_page_and_locals_share_a_line():
+    from scheduler.data import Tournament
+    from scheduler.paper import paper_weeks_html
+    s, e = date(2026, 12, 6), date(2026, 12, 12)
+    t = [Tournament("Boys Local", "local", e, e, [], [1, 2], [], side="Boys"),
+         Tournament("Girls Local", "local", e, e, [], [5], [], side="Girls"),
+         Tournament("Far Away Cup", "travel", e, e, ["15 Black"], [], [])]
+    h = paper_weeks_html(pd.DataFrame(columns=["date", "court", "slot", "kind", "name"]), s, e, {}, t)
+    first, second = h.split('class="cs-week"')[1:3]
+    assert '<span class="note">Boys Local / Girls Local</span>' in first and "Far Away Cup (travel)" in first
+    assert 'class="note"' not in second and "Girls Local" in second      # still on the court it uses
