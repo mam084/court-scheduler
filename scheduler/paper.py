@@ -50,15 +50,20 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .pp .dh { text-align: left; height: 46px; }
 .pp .dh .num { display: inline-block; border: 1px solid #555; min-width: 20px; padding: 0 3px; font-size: 13px; }
 .pp .dh .note { display: block; font-size: 11.5px; font-weight: 600; margin-top: 2px; line-height: 1.2; }
-/* Lines sit at the bottom of each box (7:20 last), leaving room above for early privates.
-   Sized so a week fits its two pages at full size (no shrinking). */
-.pp td.box { padding: 4px 5px 2px; text-align: left; vertical-align: bottom; }
+/* The practice times sit at the bottom of each box (7:20 last). Above them on a weekday is
+   blank space to write in privates and anything else happening during the day; whatever's already booked
+   before the first practice (a private, a local tournament) is printed there. */
+.pp td.box { padding: 0 0 2px; text-align: left; vertical-align: bottom; }
+.wi { min-height: 66px; display: flex; flex-direction: column; justify-content: flex-start; padding: 3px 5px 2px; }
+.wi .sl { background: #fff; border-bottom: none; padding: 0 2px; margin: 0 -2px 2px; }
+.slots { background: #fff; border-top: 1.5px solid #555; padding: 0 5px; }
 .sl { border-bottom: 1px dotted #9aa0aa; }
-.sl:last-child { border-bottom: none; }
-.ln { display: flex; gap: 4px; line-height: 15px; min-height: 19px; padding-top: 3px; box-sizing: border-box; }
+.slots .sl:last-child { border-bottom: none; }
+.ln { display: flex; gap: 4px; line-height: 15px; min-height: 18px; padding-top: 2px; box-sizing: border-box; }
 .ln .t { flex: 0 0 auto; color: #555b66; font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ln .w { flex: 1 1 0; min-width: 0; font-weight: 600; font-size: 13px; text-align: right; overflow-wrap: break-word; }
 .wk .ln { min-height: 21px; padding-top: 4px; }
+.pp td.box.wkb { padding: 4px 5px 2px; }
 .ln .w small { font-weight: 400; color: #555; }
 .pv .ln .w { font-weight: 500; font-style: italic; }
 .tn .ln .w { letter-spacing: .2px; }
@@ -148,7 +153,13 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
             who = html.escape(p["coach"] + (f" · {p['team']}" if p.get("team") else ""))
             items.append((p["start"] + 0.5, _slot(html.escape(p["time"].replace(" ", "").lower()),
                                                   f"Private · {who}", "pv", two=False)))
-    return "".join(h for _, h in sorted(items, key=lambda x: x[0]))
+    items.sort(key=lambda x: x[0])
+    if weekend:  # the 2-hour blocks already cover the whole day
+        return "".join(h for _, h in items)
+    first = min(_start(s) for s in slots) if slots else 24 * 60
+    early = "".join(h for m, h in items if m < first)
+    rest = "".join(h for m, h in items if m >= first)
+    return f'<div class="wi">{early}</div><div class="slots">{rest}</div>'
 
 
 def _head(d: date, start: date, end: date, closures: dict, tourns: list, wd: str) -> str:
@@ -227,7 +238,9 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
                     elif d in closures:
                         cells.append(f'<td class="off">{html.escape(closures[d] or "Closed")}</td>')
                     else:
-                        cells.append(f'<td class="box">{_box(d, c, book, tourns, pv, local_coaches, block_days)}</td>')
+                        kind = "wkb" if d.weekday() >= 5 or d in block_days else "day"
+                        cells.append(f'<td class="box {kind}">'
+                                     f'{_box(d, c, book, tourns, pv, local_coaches, block_days)}</td>')
                 rows.append(f'<tr{cls}><td class="ct">{cname}</td>{"".join(cells)}</tr>')
             if SHOW_COUNTS and i == len(HALVES) - 1:
                 rows.append(_footer(book, days, start, end, need_by_week.get(ws), block_days))
@@ -243,7 +256,8 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
 <div class="cs-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y}</div>
 <div class="cs-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P).
 Each week prints on two landscape pages
-(courts 1–4, then courts 5–7 and the practice court). Every open time is a blank line to write in.</div>
+(courts 1–4, then courts 5–7 and the practice court). Every open time is a blank line to write in, and
+the blank space above each weekday's practices is for privates and anything else during the day.</div>
 {''.join(parts)}
 {FIT_SCRIPT}
 </body></html>"""

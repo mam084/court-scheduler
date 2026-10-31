@@ -738,9 +738,9 @@ PRINT_BUTTON = """<style>
 FIT_SCRIPT = """<script>
 // Only a page that's still too tall (a very busy week) gets shrunk to fit.
 // The box is sized for the smaller of US Letter and A4 landscape inside the
-// 0.35in margins, minus a safety buffer, so nothing spills onto an extra page.
+// 0.35in margins (A4: 7.57in tall), minus a small safety buffer, so nothing spills onto an extra page.
 function fitWeeks() {
-  var pageH = 7.25 * 96, pageW = 10.1 * 96;
+  var pageH = 7.45 * 96, pageW = 10.1 * 96;
   document.querySelectorAll('.cs-week').forEach(function (s) {
     s.style.zoom = 1; s.style.width = pageW + 'px';
     var z = 1;
