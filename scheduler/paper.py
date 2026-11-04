@@ -68,10 +68,15 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .pp td.box.wkb { padding: 4px 5px 2px; }
 .ln .w small { font-weight: 400; color: #555; }
 .pv .ln .w { font-weight: 500; font-style: italic; }
-/* A local tournament, big on Court 1 (or its first court). */
-.tnbig { text-align: center; font-weight: 800; font-size: 17px; line-height: 1.15; letter-spacing: .3px;
-         padding: 6px 2px 4px; overflow-wrap: break-word; }
-.tnbig small { display: block; font-weight: 500; font-size: 10.5px; letter-spacing: 0; color: #555; margin-top: 2px; }
+/* Nov 2026: a local tournament blocks out the times it takes on each of its courts (like the color
+   view), in black and white: a hatched, outlined block in place of those times. */
+.tnb { border: 1.6px solid #1f2329; margin: 2px 0 3px; padding: 3px 4px; box-sizing: border-box;
+       display: flex; flex-direction: column; justify-content: center; text-align: center;
+       background: repeating-linear-gradient(45deg, #fff, #fff 5px, #d9d9d9 5px, #d9d9d9 7px); }
+.tnb b { display: block; font-size: 12.5px; line-height: 1.15; overflow-wrap: break-word; background: #fff;
+         padding: 0 2px; }
+.tnb small { display: block; font-size: 9.5px; letter-spacing: .3px; text-transform: uppercase; color: #333;
+             background: #fff; padding: 0 2px; margin: 0 auto 1px; }
 /* A locals program's last session, circled like on the board. */
 .last { display: inline-block; border: 1.4px solid #1f2329; border-radius: 999px; padding: 0 4px; margin-left: 3px;
         font-size: 9.5px; font-weight: 700; line-height: 12px; letter-spacing: .4px; vertical-align: 1px; }
@@ -169,16 +174,17 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
     slots += [s for s in by_slot if s not in slots]  # anything else booked
     items = []  # (minutes, html)
     tn_here = [tn for tn in tourns if tn.kind == "local" and c in tn.courts and tn.covers(d)]
-    if tn_here:  # a local tournament takes the court until 7 PM
-        # Its name goes big on Court 1 (or the first court it uses, without Court 1); a small line elsewhere.
-        big = [tn for tn in tn_here if c == (1 if 1 in tn.courts else min(tn.courts))]
-        if big:
-            items.append((0, '<div class="tnbig">' + "<br>".join(html.escape(tn.name) for tn in big)
-                          + "<small>until 7 PM</small></div>"))
-        rest_tn = [tn for tn in tn_here if tn not in big]
-        if rest_tn:
-            items.append((0, _slot("until 7 PM", html.escape(" / ".join(tn.name for tn in rest_tn)), "tn")))
-        slots = [s for s in slots if not blocked_by_local_tournament(s) or s in by_slot]
+    tn_min = None
+    if tn_here:  # a local tournament takes the court until 7 PM: one block in place of those times
+        gone = [x for x in slots if blocked_by_local_tournament(x) and x not in by_slot]
+        if gone:
+            tn_min = min(_start(x) for x in gone)
+            # about as tall as the lines it replaces, so the times after it stay where they'd be
+            h = len(gone) * (25 if weekend else 38) - 5
+            head = f"Local tournament{'s' if len(tn_here) > 1 else ''} · until 7 PM"
+            names = "".join(f"<b>{html.escape(tn.name)}</b>" for tn in tn_here)
+            items.append((tn_min, f'<div class="tnb" style="min-height:{h}px"><small>{head}</small>{names}</div>'))
+        slots = [x for x in slots if x not in gone]
     for s in slots:
         items.append((_start(s), _slot(labels.get(s, s), " / ".join(by_slot.get(s, [])),
                                        "wk" if weekend else "", two=not weekend)))
@@ -190,7 +196,8 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
     items.sort(key=lambda x: x[0])
     if weekend:  # the 2-hour blocks already cover the whole day
         return "".join(h for _, h in items)
-    first = min(_start(s) for s in slots) if slots else 24 * 60
+    first = min([_start(s) for s in slots] + ([tn_min] if tn_min is not None else [])) if (slots or tn_min) \
+        else 24 * 60
     early = "".join(h for m, h in items if m < first)
     rest = "".join(h for m, h in items if m >= first)
     return f'<div class="wi">{early}</div><div class="slots">{rest}</div>'

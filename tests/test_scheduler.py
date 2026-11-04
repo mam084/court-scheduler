@@ -2140,7 +2140,7 @@ def test_assistant_at_tournament_late_practice_beats_missing():
     assert (date(2026, 11, 19), "5:30") in got and not any(d == date(2026, 11, 20) for d, _ in got)
 
 
-def test_paper_print_big_local_tournament_and_last_session():
+def test_paper_print_local_tournament_blocks_and_last_session():
     from scheduler.paper import last_sessions, paper_weeks_html
     s, e = date(2026, 11, 29), date(2026, 12, 5)
     inp = simulate(4, 2, 2, seed=57, start=s, end=e)
@@ -2154,7 +2154,9 @@ def test_paper_print_big_local_tournament_and_last_session():
     assert last == {date(2026, 12, 3)}
     h = paper_weeks_html(r.assignments, s, e, data.closures, r.tournaments, "T", [], r.practice_counts, False,
                          r.weekend_dates, data.locals)
-    assert h.count('<div class="tnbig">') == 1 and "Boys Local Tourney" in h   # big on Court 1 only
+    # Nov 2026: the tournament blocks out its times on each of its courts (1-7), not big on Court 1.
+    assert h.count('<div class="tnb"') == 7 and h.count("<b>Boys Local Tourney</b>") == 7
+    assert "tnbig" not in h
     n_last = len(r.assignments[(r.assignments["name"] == lp.name) & (r.assignments["date"] == date(2026, 12, 3))]
                  .drop_duplicates(["court", "slot"]))
     assert h.count('class="last"') == n_last > 0
