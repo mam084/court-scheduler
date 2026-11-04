@@ -874,7 +874,8 @@ def test_wished_back_to_back_days_beat_a_neighbors_swap():
     mb = r.pattern[r.pattern["team"] == "14 Black"]
     assert set(zip(mb["day"], mb["slot"])) == {("Tue", "5:30"), ("Wed", "5:30")}
     mine = r.issues[r.issues["team"] == "14 Black"]
-    assert not mine["issue"].str.contains("Back-to-back").any()  # asked for, so not flagged
+    b2b = mine[mine["issue"].str.contains("Back-to-back")]     # flagged (Nov 2026), but only as Low: asked for
+    assert (b2b["severity"] == "Low").all() and b2b["detail"].str.contains("asked").all()
 
 
 def test_open_requested_slot_beats_sticking_to_usual():
@@ -1958,3 +1959,31 @@ def test_coach_schedule_flags():
             "Changes courts"} <= issues
     assert not len(f[f["coach"] == "Bea"])
     assert list(bad_coaches(f)["coach"]) == ["Ana"]
+
+
+def test_team_back_to_back_days_flagged():
+    from scheduler.coach_load import back_to_back_days, team_back_to_back
+    from scheduler.views import court_grid_html
+    d = date(2026, 11, 10)  # Tuesday
+    a = pd.DataFrame([{"date": d, "day": "Tue", "slot": "5:30", "slot_label": "5:30–7:20", "kind": "Practice",
+                       "name": "16-Ana", "club": "Girls", "age": 16, "court": 1, "coach": "Ana", "on_pattern": True},
+                      {"date": d + timedelta(days=1), "day": "Wed", "slot": "5:30", "slot_label": "5:30–7:20",
+                       "kind": "Practice", "name": "16-Ana", "club": "Girls", "age": 16, "court": 1, "coach": "Ana",
+                       "on_pattern": True},
+                      {"date": d, "day": "Tue", "slot": "5:30", "slot_label": "5:30–7:20", "kind": "Practice",
+                       "name": "16-Bea", "club": "Girls", "age": 16, "court": 3, "coach": "Bea", "on_pattern": True}])
+    assert team_back_to_back(a) == [("16-Ana", d, d + timedelta(days=1))]
+    assert back_to_back_days(a) == {("16-Ana", d), ("16-Ana", d + timedelta(days=1))}
+    from scheduler.config import WEEK_ORDER, day_in_week
+    ws = date(2026, 11, 8)
+    h = court_grid_html(a, {wd: day_in_week(ws, wd) for wd in WEEK_ORDER})
+    assert h.count('class="cs-tag cs-b2b"') == 2
+
+
+def test_back_to_back_days_in_review():
+    # Only Tue and Wed open for this team: every week is back-to-back, and each one is flagged.
+    teams = [{"team": "16-Ana", "age": 16}]
+    avail = [{"who": "16-Ana", "type": "No", "days": "Mon, Thu, Fri"}]
+    r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
+    b2b = r.issues[r.issues["issue"].str.startswith("Back-to-back days")]
+    assert len(b2b) >= 4 and (b2b["severity"] == "Medium").all()

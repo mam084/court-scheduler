@@ -165,3 +165,22 @@ def bad_coaches(flags: pd.DataFrame) -> pd.DataFrame:
                         "issues": g["issues"].agg(lambda s: "; ".join(dict.fromkeys("; ".join(s).split("; "))))})
     return out.reset_index().sort_values(["worst", "total", "coach"], ascending=[False, False, True]) \
         .reset_index(drop=True)
+
+
+def team_back_to_back(assignments: pd.DataFrame) -> list[tuple[str, object, object]]:
+    """Every time a team practices two days in a row: [(team, first day, second day)], in date order.
+    Read off the finished schedule, so practices placed by hand count too."""
+    if assignments is None or not len(assignments) or "kind" not in assignments:
+        return []
+    pr = assignments[assignments["kind"] == "Practice"]
+    on = set(zip(pr["name"], pr["date"]))
+    return sorted(((n, d, d + timedelta(days=1)) for n, d in on if (n, d + timedelta(days=1)) in on),
+                  key=lambda k: (k[1], k[0]))
+
+
+def back_to_back_days(assignments: pd.DataFrame) -> set:
+    """{(team, date)} for every practice that has one the day before or after."""
+    out = set()
+    for n, d1, d2 in team_back_to_back(assignments):
+        out.update({(n, d1), (n, d2)})
+    return out

@@ -113,6 +113,14 @@ def render():
             alerts.append((st.warning, f"**{plural(len(satsun), 'team')} practice{'s' if len(satsun) == 1 else ''} "
                                        "Saturday then Sunday**, the only way to avoid a missed practice or a head "
                                        "coach's no-date:\n" + "\n".join(lines)))
+        b2b = iss[iss["issue"].astype(str).str.startswith("Back-to-back days")] if len(iss) else iss
+        asked = b2b["detail"].astype(str).str.contains("asked") if len(b2b) else b2b
+        if len(b2b) and (~asked).any():
+            lines = [f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}" for r in b2b[~asked].itertuples()]
+            more = f"\n\n({int(asked.sum())} more the team asked for, e.g. Tue/Wed: see Review.)" \
+                if asked.any() else ""
+            alerts.append((st.warning, f"**{plural(int((~asked).sum()), 'time')} a team practices two days in a "
+                                       "row:**\n" + "\n".join(lines) + more))
         pair = iss[iss["issue"].astype(str).str.startswith("Paired:")] if len(iss) else iss
         if len(pair):
             pair = pair.assign(_o=pair["issue"].map(lambda x: x.split(": ", 1)[-1])).sort_values(["week_of", "_o"])

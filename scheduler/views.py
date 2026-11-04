@@ -105,6 +105,7 @@ CSS = """
 .cs-tag { display: inline-block; font-size: 10.5px; font-weight: 700; border-radius: 4px; padding: 0 4px;
           margin-top: 2px; background: #FDE68A; color: #6B4A00; }
 .cs-tag.cs-xtra { background: #E0E7FF; color: #3730A3; }
+.cs-tag.cs-b2b { background: #FECACA; color: #8A1C1C; }
 .cs-tblock { border-radius: 6px; padding: 6px 8px 6px 9px; margin: 0 0 4px 0; min-height: 56px;
              border: 1px solid rgba(0,0,0,.08); border-left-width: 5px; display: flex; flex-direction: column;
              justify-content: center; line-height: 1.25;
@@ -221,13 +222,18 @@ def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str
         tags += f'<span class="cs-tag" title="{html.escape(paired)}">Paired · 3 on 2</span> '
     if extra:
         tags += '<span class="cs-tag cs-xtra">Extra</span>'
+    b2b = r.get("b2b") == True  # noqa: E712
+    if b2b and not is_local:
+        tags += '<span class="cs-tag cs-b2b" title="This team also practices the day before or after">2 days in a row</span>'
+        title += " · 2 days in a row"
     if compact:
         if is_local:
             cts = _text(r.get("courts_text"))
             court = f" · Ct {html.escape(cts)}" if cts else ""
         else:
             court = f" · Ct {court_short(r['court'])}"
-        small = (" · paired" if paired else "") + (" · extra" if extra else "")
+        small = (" · paired" if paired else "") + (" · extra" if extra else "") + \
+            (" · 2 days in a row" if b2b and not is_local else "")
         lc = f' · {html.escape(coaches)}' if is_local and local_coaches and coaches else ""
         return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
                 f'<span class="cs-time">{r["slot"]}</span> {name}{court}{small}{lc}</div>')
@@ -356,6 +362,10 @@ def court_grid_html(
     closures = closures or {}
     stripes = stripes or club_stripes(bookings.get("club", []))
     cols = list(day_dates) if day_dates else list(WEEK_ORDER)
+    if day_dates and len(bookings) and "date" in bookings:  # a real week: tag teams on 2 days in a row
+        from .coach_load import back_to_back_days
+        b2b = back_to_back_days(bookings)
+        bookings = bookings.assign(b2b=[(n, d) in b2b for n, d in zip(bookings["name"], bookings["date"])])
     open_wk = None if weekend_dates is None else set(weekend_dates)
 
     def block_day(wd) -> bool:
@@ -546,7 +556,8 @@ def legend_html(ages, stripes: dict, show_moved: bool = False) -> str:
     if show_moved:
         items.append('<div class="cs-chip cs-moved" style="background:#fff;color:#C0392B;border-left-color:#fff">'
                      'Moved / makeup</div>')
-    items.append('<span class="cs-tag">Paired · 3 on 2</span><span class="cs-tag cs-xtra">Extra</span>')
+    items.append('<span class="cs-tag">Paired · 3 on 2</span><span class="cs-tag cs-xtra">Extra</span>'
+                 '<span class="cs-tag cs-b2b">2 days in a row</span>')
     return CSS + '<div class="cs-legend">' + "".join(items) + "</div>"
 
 

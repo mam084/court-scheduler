@@ -61,6 +61,7 @@ from .config import (
     slot_cost,
     slots_overlap,
 )
+from .coach_load import team_back_to_back
 from .config import week_start as _week_start
 from .data import CleanInput, ScheduleInput, clean, span_text, tournament_conflicts
 
@@ -1632,11 +1633,17 @@ def _issues(data, teams, solver, short_vars, off_vars, consec_vars, asst_conflic
                                 "issue": f"Practice the day {when} {tn.name}: {d:%a %-m/%-d} {r['slot']}",
                                 "detail": "no other open slot that week kept both practices"})
 
-    for (t, d), v in consec_vars.items():
-        if solver.Value(v) and d.weekday() != 5:
-            out.append({"severity": "Low", "team": teams[t].name, "week_of": week_start(d),
-                        "issue": f"Back-to-back days: {d:%a} & {(d + timedelta(days=1)):%a %-m/%-d}",
-                        "detail": ""})
+    # Two practices on consecutive days (Nov 2026: flagged every time, read off the finished
+    # schedule so hand-placed ones count too). Sat -> Sun has its own flag below.
+    for name, d1, d2 in team_back_to_back(a):
+        if d1.weekday() == 5:
+            continue
+        asked = any(w.choice == 1 and DAYS[d1.weekday()] in w.days and DAYS[d2.weekday()] in w.days
+                    for w in data.wishes.get(name, []))
+        out.append({"severity": "Low" if asked else "Medium", "team": name, "week_of": week_start(d1),
+                    "issue": f"Back-to-back days: {d1:%a %-m/%-d} & {d2:%a %-m/%-d}",
+                    "detail": "the team asked for both days" if asked else
+                    "two practices on consecutive days"})
 
     # Read off the finished schedule, so hand-placed practices are caught too.
     if len(a):
