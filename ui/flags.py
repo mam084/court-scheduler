@@ -45,9 +45,17 @@ def coverage_flags() -> list[dict]:
         out.append({"id": f"pp|{c['coach']}|{pa}|{pb}|{sa}|{sb}", "when": when, "sort": ds[0],
                     "text": f"**{c['coach']}** is on **{pa}** ({sa}) and **{pb}** ({sb}) at the same time",
                     "tag": "Two programs", "area": "program"})
-    return sorted(out, key=lambda f: (f["sort"], f["text"]))
+    return _unique(out)
 
 
+def _unique(flags: list[dict]) -> list[dict]:
+    """One flag per id, in date order. Two flags can share an id (e.g. two local tournaments with the
+    same name on the same day); they're one clash to cover and one Resolve box (Nov 2026: a duplicate
+    id crashed the page with StreamlitDuplicateElementKey)."""
+    seen: dict[str, dict] = {}
+    for f in flags:
+        seen.setdefault(f["id"], f)
+    return sorted(seen.values(), key=lambda f: (f["sort"], f["text"]))
 
 
 def sub_flags(result) -> list[dict]:
@@ -71,7 +79,7 @@ def flags_print(flags: list[dict], resolved: dict, start: date, end: date,
     resolved ones), for these dates. Takes everything as arguments: the file is built when the
     button is clicked, after the page run, when the page's values (S) are gone."""
     from scheduler.prints import flags_print_html
-    flags = sorted((f for f in flags if f["sort"] <= end), key=lambda f: (f["sort"], f["text"]))
+    flags = _unique([f for f in flags if f["sort"] <= end])
     return flags_print_html(flags, resolved, start, end, title).encode()
 
 
@@ -108,7 +116,8 @@ def flags_panel(area: str | None = None, key: str = "flags", expanded: bool = Fa
     CAN, FLAGS, RESOLVED = S.CAN, S.FLAGS, S.RESOLVED
     flags = [f for f in FLAGS if area is None or f["area"] == area]
     if result is not None and area is None:  # the top panel also lists practices that need a sub
-        flags = sorted(flags + sub_flags(result), key=lambda f: (f["sort"], f["text"]))
+        flags = flags + sub_flags(result)
+    flags = _unique(flags)
     if not flags:
         return
     open_ = [f for f in flags if f["id"] not in RESOLVED]

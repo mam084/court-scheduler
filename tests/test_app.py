@@ -1307,3 +1307,26 @@ def test_imported_week_already_scheduled_drops_the_rest(db):
     assert sorted(zip(got["name"], got["date"], got["court"])) == [(t0, date(2026, 11, 16), 3), (t0, date(2026, 11, 18), 3)]
     others = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["date"] >= date(2026, 11, 22))]
     assert len(others)  # the other weeks are still scheduled
+
+
+def test_flags_with_the_same_id_show_once(db):
+    """Two local tournaments with the same name on the same day, worked by a coach who's at a travel
+    tournament then: one flag, not a StreamlitDuplicateElementKey crash (Nov 2026)."""
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler import clean
+    from scheduler.storage import make_payload, read_payload
+    pid = _save(db, "Dup flags", 40)
+    inp, s_, e_, settings, r = read_payload(db.get(pid)["payload"])
+    t = clean(inp, s_, e_).teams[0]
+    coach = t.heads[0]
+    local = {"name": "Boys Local", "type": "Local", "start_date": "11/14/2026", "end_date": "11/14/2026",
+             "coaches": coach}
+    inp.tournaments = pd.DataFrame([
+        {"name": "Vegas Classic", "type": "Travel", "start_date": "11/14/2026", "end_date": "11/15/2026",
+         "teams": t.name}, dict(local, courts="1-3"), dict(local, courts="4-6")])
+    db.save(pid, "Dup flags", make_payload(inp, s_, e_, settings, r))
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    assert not at.exception, at.exception
+    assert any("1 coverage flag to sort out" in e.label for e in at.expander)
