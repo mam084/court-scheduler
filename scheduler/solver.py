@@ -383,12 +383,15 @@ def solve(
                         continue  # removed by hand: never put back
                     if any(h in coach_tourn[d, s] for h in team.heads):
                         continue
-                    # A head coach's no-date is never broken (Nov 2026): an
+                    # A girls (SDVBC) head coach's no-date is never broken (Nov 2026): an
                     # assistant covering doesn't count, so that slot stays
                     # empty and the team is flagged as missing a practice.
+                    # Boys (Seaside) teams roll that back (Nov 4, 2026): a coach's
+                    # no-date gives way, as a last resort, if the team would
+                    # otherwise miss the practice.
                     head_out = [h for h in team.heads
                                 if any(r.kind == "no" and r.matches(d, s) for r in rules_for[h])]
-                    if head_out:
+                    if head_out and not team_is_boys(team.club, team.name):
                         continue
                     y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
                     # The team's own no-dates are kept unless it's the only way

@@ -603,6 +603,27 @@ def test_head_coach_no_dates_never_broken_team_flagged_with_openings():
     assert all("Kit marked unavailable" in x["notes"] for x in op[0]["options"])
 
 
+@pytest.mark.usefixtures("alone_ok")
+def test_boys_head_coach_no_date_gives_way_rather_than_a_missed_practice():
+    """Boys side rollback (Nov 4, 2026): the same week as above for a Seaside team. Only the
+    head coach's no-dates block Mon-Thu and the team's own Fri, so the coach's no-date gives
+    way (flagged) instead of the team going short. Girls teams keep it unbreakable."""
+    teams = [{"team": "15 Black", "club": "Seaside", "age": 15, "head_coach": "Kit", "assistants": "Ash"}]
+    avail = [{"who": "Kit", "type": "No", "dates": "11/9-11/12"},
+             {"who": "Ash", "type": "No", "dates": "11/9-11/10"},
+             {"who": "15 Black", "type": "No", "dates": "11/13"}]
+    r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
+    wk = r.assignments[(r.assignments["kind"] == "Practice")
+                       & r.assignments["date"].between(date(2026, 11, 9), date(2026, 11, 13))]
+    assert len(wk) == 2
+    assert not ((r.shortfalls["team"] == "15 Black") & (r.shortfalls["week_of"] == date(2026, 11, 8))).any()
+    hb = [b for b in r.broken if b["head_out"]]
+    assert hb and all(b["head_out"] == ["Kit"] for b in hb)
+    # Still a last resort: breaking Kit's no-date wins over the team's own Fri no-date,
+    # and with Ash free on Wed/Thu those days are used first.
+    assert set(wk["day"]) <= {"Wed", "Thu", "Fri"}
+
+
 def test_second_weekend_practice_avoided():
     """Weekdays full: a team gets 1 weekend practice a week, not 2."""
     teams = [{"team": f"16-W{i}", "age": 16} for i in range(4)]
