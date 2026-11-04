@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import pandas as pd
 import streamlit as st
 
@@ -15,6 +17,7 @@ from scheduler.config import (
     WEEKDAYS,
     WEEKEND_KEYS,
     slots_overlap,
+    week_start,
 )
 from scheduler.data import COLUMNS
 from ui import dates
@@ -133,9 +136,51 @@ def _import_sheet(cleaned):
                        f"{'goes' if n_extra == 1 else 'go'} in as **extra** practices, on top of the usual ones.")
         st.dataframe(pd.DataFrame(fresh)[["date", "time", "court", "team", "action"]].rename(columns=str.title),
                      hide_index=True, width="stretch", height=min(360, 38 + 35 * len(fresh)))
+        weeks = sorted({week_start(pd.to_datetime(r["date"]).date()) for r in fresh})
+        st.caption("Only these practices and the locals programs go on "
+                   + ("the week of " + ", ".join(f"{w:%b %-d}" for w in weeks)) + ": the scheduler won't add "
+                   "any others those weeks.")
         if st.button(f"Add these {plural(len(fresh), 'practice')}", type="primary", width="stretch",
                      key="ed_import_go"):
-            apply_overrides(fresh, f"Added {plural(len(fresh), 'practice')} from {up.name}.")
+            _add_imported(fresh, weeks, up.name)
+
+
+def _add_imported(rows: list[dict], weeks: list, filename: str):
+    """Puts imported practices on the calendar with their weeks hand-only (nothing else scheduled
+    then). Weeks already scheduled are rebuilt; weeks that aren't are scheduled now."""
+    from datetime import timedelta
+
+    from ui.session import schedule_dates
+    have = S.inp.overrides.fillna("")
+    marked = set()
+    for _, r in have.iterrows():
+        if str(r.get("action", "")).strip().lower().startswith("hand"):
+            with contextlib.suppress(ValueError, TypeError):
+                marked.add(week_start(pd.to_datetime(str(r["date"])).date()))
+    hand = [{"team": "", "action": "Hand only", "date": f"{w:%m/%d/%Y}", "days": "", "time": "", "court": "",
+             "note": f"only the practices from {filename}"} for w in weeks if w not in marked]
+    msg = (f"Added {plural(len(rows), 'practice')} from {filename}. The week"
+           + ("s" if len(weeks) > 1 else "") + " of " + ", ".join(f"{w:%b %-d}" for w in weeks)
+           + " only " + ("have" if len(weeks) > 1 else "has") + " these practices and the locals programs.")
+    days = [pd.to_datetime(r["date"]).date() for r in rows]
+    if all(dates.run_at(d) for d in days):
+        apply_overrides(hand + rows, msg)  # (reruns, rebuilding those dates)
+        return
+    # Not on the calendar yet: schedule exactly those weeks now (hand-only, so nothing else is added).
+    a, b = weeks[0], weeks[-1] + timedelta(days=6)
+    backup = S.inp.overrides.copy()
+    S.inp.overrides = pd.concat([S.inp.overrides, pd.DataFrame(hand + rows)], ignore_index=True)
+    problem = schedule_dates(a, b)
+    if problem:
+        S.inp.overrides = backup
+        st.error(f"Couldn't put those weeks on the calendar: {problem}")
+        return
+    st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+    st.session_state.overrides_backup = backup  # if they can't all fit, the import is undone
+    dates.set_day(a)
+    st.session_state.build_now = True
+    st.session_state.build_note = msg + " "
+    st.rerun()
 
 
 def render():

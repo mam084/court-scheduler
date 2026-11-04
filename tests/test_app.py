@@ -1265,3 +1265,45 @@ def test_off_preference_reasons():
         from ui.state import S as real
         common.S = real
     assert "rather not" in out[0] and out[1] == "" and "another time" in out[2]
+
+
+def _import_list(at, rows):
+    """Upload a practice list under Edit practices and press Add."""
+    csv = "date,court,start,team\n" + "".join(f"{d},{c},{s},{t}\n" for d, c, s, t in rows)
+    at.radio(key="nav").set_value("Edit practices").run()
+    at.get("file_uploader")[0].set_value(("list.csv", csv.encode(), "text/csv")).run()
+    assert not at.exception, at.exception
+    at.button(key="ed_import_go").click().run()
+    assert not at.exception, at.exception
+    return at
+
+
+def test_imported_week_not_yet_scheduled_has_only_the_list(db):
+    at, _ = _open(db, "Import new week", 21)
+    teams = list(at.session_state["inp"].teams["team"])
+    t0, t1 = teams[0], teams[1]
+    _import_list(at, [("2026-12-07", 1, "17:30", t0), ("2026-12-09", 1, "17:30", t0),
+                      ("2026-12-11", 1, "17:30", t0), ("2026-12-08", 2, "19:20", t1)])
+    r = at.session_state["result"]
+    assert r is not None and r.ok and (r.start, r.end) == (date(2026, 12, 6), date(2026, 12, 12))
+    p = r.assignments[r.assignments["kind"] == "Practice"]
+    assert sorted(zip(p["name"], p["date"])) == sorted([(t0, date(2026, 12, 7)), (t0, date(2026, 12, 9)),
+                                                        (t0, date(2026, 12, 11)), (t1, date(2026, 12, 8))])
+    ov = at.session_state["inp"].overrides
+    assert (ov["action"] == "Hand only").sum() == 1
+    assert any("only" in str(m.value) for m in at.success) or "Scheduled" in str(at.session_state.get("flash", ""))
+
+
+def test_imported_week_already_scheduled_drops_the_rest(db):
+    at, _ = _open(db, "Import old week", 22)
+    before = at.session_state["result"].assignments
+    wk = lambda a: a[(a["kind"] == "Practice") & a["date"].map(lambda d: date(2026, 11, 15) <= d <= date(2026, 11, 21))]  # noqa: E731
+    assert len(wk(before)) > 2
+    t0 = at.session_state["inp"].teams["team"].iloc[0]
+    _import_list(at, [("2026-11-16", 3, "17:30", t0), ("2026-11-18", 3, "17:30", t0)])
+    r = at.session_state["result"]
+    assert r.ok and (r.start, r.end) == (date(2026, 11, 1), date(2026, 11, 30))
+    got = wk(r.assignments)
+    assert sorted(zip(got["name"], got["date"], got["court"])) == [(t0, date(2026, 11, 16), 3), (t0, date(2026, 11, 18), 3)]
+    others = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["date"] >= date(2026, 11, 22))]
+    assert len(others)  # the other weeks are still scheduled

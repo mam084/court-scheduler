@@ -58,7 +58,7 @@ def render():
                        "cancellations and privates there or in **Privates**. The scheduling admins approve those on "
                        "the **Requests** tab.")
         else:
-            run = _auto_schedule()
+            run = _auto_schedule() or bool(st.session_state.pop("build_now", False))
             _no_teams = st.session_state.inp.teams.dropna(how="all").empty
             with st.expander("Import coaches' spreadsheet", expanded=_no_teams):
                 st.caption("Brings in the no-dates and wishlists of everyone in the file (replacing theirs; "

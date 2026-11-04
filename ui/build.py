@@ -166,7 +166,7 @@ def run():
         _r = st.session_state.get("result")
         if S.run_pressed and _r is not None and _r.ok and not st.session_state.get("rebuild_queue"):
             sf = _r.shortfalls
-            st.session_state.flash = (f"Scheduled {range_label(start, end)}. "
+            st.session_state.flash = (st.session_state.pop("build_note", "") + f"Scheduled {range_label(start, end)}. "
                                       + (f"{plural(sf['team'].nunique(), 'team')} short of practices in "
                                          f"{plural(sf['week_of'].nunique(), 'week')}: see the warning above."
                                          if len(sf) else "Every team got all its practices."))

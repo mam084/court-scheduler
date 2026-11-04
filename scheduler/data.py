@@ -1145,6 +1145,7 @@ class CleanInput:
     usual: dict = field(default_factory=dict)                # team -> [(weekday, slot)]
     usual_court: dict = field(default_factory=dict)          # team -> court
     makeups: dict = field(default_factory=dict)              # (team, week's Sunday) -> extra practices that week
+    hand_weeks: set = field(default_factory=set)             # week's Sunday -> only hand-placed practices that week
 
     @property
     def coaches(self) -> list[str]:
@@ -1459,8 +1460,18 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
     makeups: dict = {}
     usual: dict = {}
     usual_court: dict = {}
+    hand_weeks: set = set()
     odf = getattr(inp, "overrides", None)
     for i, r in (odf.iterrows() if isinstance(odf, pd.DataFrame) else []):
+        if not blank(r.get("action")) and str(r["action"]).strip().lower().startswith("hand"):
+            # "Hand only": that week (Sun-Sat) gets no practices from the scheduler, just the ones
+            # placed by hand (an imported practice list) and the programs.
+            try:
+                d = to_date(r["date"], year)
+                hand_weeks.add(d - timedelta(days=(d.weekday() + 1) % 7))
+            except (ValueError, TypeError, KeyError):
+                errors.append(f"Manual change row {i + 2} (hand-only week): can't read the date")
+            continue
         if blank(r.get("team")):
             continue
         tname = str(r["team"]).strip()
@@ -1515,14 +1526,14 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 if court is not None:
                     usual_court[tname] = court
             else:
-                raise ValueError("action should be Add, Extra, Makeup, Remove, Cancel or Usual")
+                raise ValueError("action should be Add, Extra, Makeup, Remove, Cancel, Usual or Hand only")
         except (ValueError, TypeError, KeyError) as e:
             errors.append(f"{row}: {e}")
     if errors:
         raise ValueError("Please fix these in the input:\n- " + "\n- ".join(errors))
 
     return CleanInput(teams, rules, wishes, locals_, weekends, closures, warnings, tournaments, roster,
-                      pins, cancels, usual, usual_court, makeups)
+                      pins, cancels, usual, usual_court, makeups, hand_weeks)
 
 
 def rename_team(inp: ScheduleInput, old: str, new: str) -> None:

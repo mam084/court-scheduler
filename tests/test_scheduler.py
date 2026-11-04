@@ -1943,6 +1943,14 @@ def test_team_dates_print_week_before_and_next_tournament():
     order = [t.name for t in sorted(data.teams, key=lambda t: team_is_boys(t.club, t.name))]
     h = team_dates_print_html(win, data.closures, order, "Dec", None, None, before=a[a["date"] < first])
     assert "Week before" in h and "pt-prev" in h
+    # One column for the week before, each team's dates there as a comma list (Nov 2026).
+    import re
+    assert h.count('<th class="pt-prev pt-wb">Week before</th>') == 1
+    t0 = going[0]
+    days0 = sorted({d for d, n, k in zip(a["date"], a["name"], a["kind"]) if n == t0 and d < first and k == "Practice"})
+    wb = re.findall(r'<td class="pt-prev pt-wb">([^<]*)</td>', h)
+    assert ", ".join(str(d.day) for d in days0) in wb
+    assert not re.search(r'<th class="pt-prev">\d+</th>', h)  # no per-day columns for it any more
     assert h.count('class="pt-tn pt-next"') == len(going) and "Jan 9–10" in h
     assert h.count('class="pp-page"') == 1
 

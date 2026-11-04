@@ -195,6 +195,9 @@ def solve(
         return bool(open_) and all(d in data.weekends for d in open_)
 
     break_weeks = {ws for ws in weeks if is_break_week(ws)}
+    # Hand-only weeks (an imported practice list): the scheduler adds nothing that week; the
+    # practices placed by hand and the programs are all there is. Weekdays keep their usual times.
+    hand_weeks = set(getattr(data, "hand_weeks", set()) or set())
 
     def week_target(ws, per_week=PRACTICES_PER_WEEK):
         """Practices a team should get that week. A week cut off by the
@@ -203,7 +206,7 @@ def solve(
         day just follows the usual pattern."""
         span = [day_in_week(ws, wd) for wd in WEEKDAYS]  # Mon-Fri of that Sun-Sat week
         inside = sum(start <= d <= end for d in span)
-        if ws in break_weeks:
+        if ws in break_weeks or ws in hand_weeks:
             return 0
         if not makeup_closures and any(d in data.closures for d in span):
             return 0
@@ -358,7 +361,8 @@ def solve(
                     y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
                     m.Add(y[t, d, s] == 1)
                 else:
-                    if off_day or not team.allowed(s) or not courts_on(d, s) or week_start(d) in break_weeks:
+                    if off_day or not team.allowed(s) or not courts_on(d, s) or week_start(d) in break_weeks \
+                            or week_start(d) in hand_weeks:
                         continue
                     if d.weekday() >= 5 and team.weekend_only and not any(w.matches(d, s) for w in team.weekend_only):
                         continue
@@ -1292,6 +1296,8 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
         if not (start <= d <= end):
             outside += 1
             continue
+        if week_start(d) in (getattr(data, "hand_weeks", None) or ()):
+            continue  # a hand-only week: only its hand-placed practices
         t, team = idx[name], teams[idx[name]]
         c = getattr(r, "court", None)
         c = None if c is None or pd.isna(c) else int(c)
