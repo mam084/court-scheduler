@@ -1842,3 +1842,17 @@ def test_prints_use_short_labels_online_does_not():
         assert "14-C" in h and "S14-B" in h and "14-Connor" not in h
     online = court_grid_html(a, week_dates(start, start, end, []))
     assert "14-Connor" in online and "S14-B" not in online
+
+
+def test_never_practice_the_day_after_a_travel_tournament():
+    """The day after a tournament is never used, even if it means a short week (Nov 2026)."""
+    teams = [{"team": "16-Ana", "age": 16, "head_coach": "Ana"}]
+    # Week of 11/15: only Mon 11/16 (day after Far West) and Tue 11/17 are open.
+    avail = [{"who": "16-Ana", "type": "No", "dates": "11/18-11/20"}]
+    inp = _with_tournaments(_inp(teams, avail), [{"name": "Far West", "type": "Travel", "start_date": "11/14/2026",
+                                                  "end_date": "11/15/2026", "teams": "16-Ana"}])
+    r = solve(inp, *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert date(2026, 11, 16) not in set(pr["date"])
+    op = [o for o in r.openings if o["team"] == "16-Ana" and o["week_of"] == date(2026, 11, 15)]
+    assert not op or all(x["date"] != date(2026, 11, 16) for x in op[0]["options"])

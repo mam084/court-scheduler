@@ -149,6 +149,9 @@ def solve(
     away = defaultdict(set)                 # team name -> dates at a tournament
     rest_days = defaultdict(dict)           # team name -> {date: (tournament, 'before'|'after')}
     lead_in_weeks = defaultdict(set)        # team name -> week starts leading into a tournament
+    # The day after a travel tournament is a no-date for its teams that's
+    # never broken (Nov 2026); the day before stays a strong preference.
+    after_days = defaultdict(set)           # team name -> days right after a tournament
     for tn in travel_tourn:
         for name in tn.teams:
             d = tn.start
@@ -157,6 +160,7 @@ def solve(
                 d += timedelta(days=1)
             rest_days[name].setdefault(tn.start - timedelta(days=1), (tn, "before"))
             rest_days[name].setdefault(tn.end + timedelta(days=1), (tn, "after"))
+            after_days[name].add(tn.end + timedelta(days=1))
             lead_in_weeks[name].add(week_start(tn.start - timedelta(days=1)))
 
     weeks: dict[date, list[date]] = defaultdict(list)
@@ -300,7 +304,7 @@ def solve(
         team = teams[t]
         for d in open_dates:
             # not started yet, or away at a travel tournament
-            off_day = bool(team.start and d < team.start) or d in away[team.name]
+            off_day = bool(team.start and d < team.start) or d in away[team.name] or d in after_days[team.name]
             for s in slots_on(d):
                 if (t, d, s) in pinned:
                     y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
@@ -1031,7 +1035,8 @@ def solve(
         team = teams[t]
         opts = []
         for d in weeks.get(ws, []):
-            if (t, d) in on_day_ or (team.start and d < team.start) or d in away[team.name]:
+            if (t, d) in on_day_ or (team.start and d < team.start) or d in away[team.name] \
+                    or d in after_days[team.name]:
                 continue
             for s in slots_on(d):
                 if not team.allowed(s):

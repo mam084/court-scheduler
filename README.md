@@ -30,7 +30,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - Only 14s and under practice at 3:45, and 14s and under never practice at 7:20 (unless the team is marked `late_ok`, and then only when needed)
 - Weekends: only open dates and blocks, only a team's allowed weekend options, and never one team alone in a block
 - Local tournaments take their courts (all by default) until 7 PM, plus the coaches working them (listed, and their locals program's). 7:20 practices and the 7–9 PM weekend block still happen
-- Teams at a travel tournament don't practice on tournament days
+- Teams at a travel tournament don't practice on tournament days, **or the day after** (Nov 2026: a no-date for them that's never broken)
 - At most one practice per team per day (weeks run Sunday–Saturday)
 - JumpStart programs (3:30–4:30, 4:30–5:30) block 3:45 practices on their courts and for their coaches
 - The weekly template obeys the same rules, so it can be read as a real week
@@ -38,7 +38,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 **The club's rule order** (weights in [`scheduler/config.py`](scheduler/config.py); each rule outweighs several breaks of the one below it)
 
 1. **Every team gets its 2 practices a week.** Older teams win if courts run out, and shortfalls are spread so teams keep at least 1. A team that asked for more (Teams `practices` column, or **Practices per week** in Edit practices) gets its 3rd+ wherever there's room without breaking rules 2–6.
-2. **No practice the day before or after a travel tournament** (a late one the night before is worse). The week leading in gets priority for 2 practices.
+2. **No practice the day before a travel tournament** (a late one the night before is worse). The day after is a hard rule, above. The week leading in gets priority for 2 practices.
 3. **The team's own no-dates.**
 4. *(The head coach's no-dates/times are now a hard rule, above.)*
 5. **An assistant's no-dates/times** (the head coach runs practice). Put the assistant's own name in the Availability `who` column; a team row whose note names an assistant gets a reminder.

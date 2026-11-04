@@ -236,8 +236,8 @@ WEIGHTS = {
     "missed_extra": 3000,
     # (Required weekends are a note for coaches, not a rule.)
     "weekend_required": 0,
-    # 2. No practice the day before / after a travel tournament; a late one
-    #    the night before costs a bit more. The week leading into a
+    # 2. No practice the day before a travel tournament (the day after is a
+    #    hard rule, never broken); a late one the night before costs a bit more. The week leading into a
     #    tournament also weighs missed practices 1.5x.
     "tournament_rest": 60000,
     "tournament_late_eve": 2000,
