@@ -244,6 +244,14 @@ def window(a: date, b: date, with_preview: bool = True) -> tuple[ScheduleResult 
                           broken=[]), gaps
 
 
+def week_before(a: date):
+    """Bookings in the week before `a` (the Sunday-Saturday week ahead of a's week, up to the day
+    before a), for prints that start with where teams are coming from. None if nothing's there."""
+    lo, hi = week_start(a) - timedelta(days=7), a - timedelta(days=1)
+    r, _ = window(lo, hi, with_preview=False)
+    return r.assignments if r is not None and len(r.assignments) else None
+
+
 # ------------------------------------------------------------ pickers --
 
 def _shift(days: int):

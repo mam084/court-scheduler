@@ -10,6 +10,8 @@ Each team practices twice a week (or as many times as it asks for) on one of cou
 
 The print views (paper court sheets, the printable calendars, every team's dates) use the club's short labels: boys teams get an S (`14 Black` → **S14-B**, `16 Green` → **S16-G**), girls teams the head coach's initial (`16-Edgar` → **16-E**). Clashes are set in `SHORT_LABEL_OVERRIDES` in [`scheduler/config.py`](scheduler/config.py) (`14-Cara` → **14-Ca**, so `14-Connor` stays **14-C**). The online calendar keeps full names.
 
+**Every team's dates · print** (the club's handwritten all-practices sheet) starts with **the week before** the first date, greyed, so coaches see where each team is coming from, and ends with **each team's next travel tournament** (circled) if it has one. Each team has a line under it.
+
 ## How it works
 
 This is a **constraint-optimization** problem, not a machine-learning one, so it needs no training data: the club spreadsheet is the input, and the tool works the day it exists. Until then, a built-in simulator generates a realistic club (teams, coaches, locals, no-dates) to test against.
@@ -39,19 +41,25 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 
 1. **Every team gets its 2 practices a week.** Older teams win if courts run out, and shortfalls are spread so teams keep at least 1. A team that asked for more (Teams `practices` column, or **Practices per week** in Edit practices) gets its 3rd+ wherever there's room without breaking rules 2–6.
 2. **No practice the day before a travel tournament** (a late one the night before is worse). The day after is a hard rule, above. The week leading in gets priority for 2 practices.
+   - **No late practices for a coach the night before their tournament** (Nov 2026): if any team a coach is on is at a travel tournament the next day, or they work a local one, none of their teams practices at 7:20 / 7 PM that night (just below breaking a team's own no-date).
 3. **The team's own no-dates.**
 4. *(The head coach's no-dates/times are now a hard rule, above.)*
 5. **An assistant's no-dates/times** (the head coach runs practice). Put the assistant's own name in the Availability `who` column; a team row whose note names an assistant gets a reminder.
 6. **A coach who works a locals program then** (head or assistant): the practice can still happen, flagged *Needs a sub: possible if Matthew gets a sub for B 14 L*, so a sub is asked for before any no-date is broken. An assistant on two teams at once costs the same.
    - **Pairing** (3 teams sharing 2 courts) is the absolute last option: only when there's no court space left and the alternative is a team missing one of its 2 practices. Breaking no-dates, practicing next to a tournament, weekends and subs all come first, and it's never used for a 3rd practice. Paired practices are flagged at the top of the page and in Review, and tagged *Paired · 3 on 2* on the court view.
 7. **Weekdays before weekends.** Two weekday practices, even doubled up, beat a weekend plus a weekday.
-   - **Fill every 5:30 court before using 7:20** (Nov 2026). Outranks every time preference below (a team that asked for 7:20 moves up while a 5:30 court is empty that day), but never pushes a team onto a weekend, into a sub or onto a no-date.
+   - **Fill every 5:30 court before using 7:20** (Nov 2026). Outranks every time preference below (a team that asked for 7:20 moves up while a 5:30 court is empty that day), but never pushes a team onto a weekend, into a sub or onto a no-date. A team at 5:30 on Court 2 beats using 7:20.
+   - **Avoid Friday at 7:20** (Nov 2026): more than every preference below put together, but still better than a weekend.
 8. **Preferred days** (wishlist days, days marked not preferred).
-9. **Preferred times** (wishlist times, times marked not preferred, 3:45 a bit more; weekend AM/PM).
-10. **No Saturday then Sunday** (always flagged).
-11. **One weekend practice per team per week.**
-12. **No back-to-back days** (days a team asked for, e.g. Tue/Wed, are fine).
-13. **Everything else:** age/timeslot fit and sharing 3:45 around, the 14s 7:20 exception, the same weekly schedule, keeping the published schedule, weekend teams sharing blocks (4 teams at 9–11 rather than 2 at 9–11 and 2 at 11–1 when there's room; on a busy weekend there isn't, and nobody is left alone in a block), coach double-ups, courts. When possible, **HS boys (15s–18s) at 5:30 and 7:20 share courts** so no net change is needed, and (less important) **a coach with back-to-back sessions stays on the same court**.
+9. **No back-to-back days** (Nov 2026: moved up; days a team asked for, e.g. Tue/Wed, are fine). The usual week avoids them too.
+10. **Preferred times** (wishlist times, times marked not preferred, 3:45 a bit more; weekend AM/PM).
+    - **Coach double-ups** (a coach's two teams back-to-back the same day, girls at 5:30 then boys at 7:20) are rewarded about as much as a time preference, in the usual week too (Nov 2026: the club wants more of them).
+    - **No break between a coach's locals program and their team** the same day (a program at 3:45, then the team at 5:30 rather than 7:20).
+11. **No Saturday then Sunday** (always flagged).
+12. **One weekend practice per team per week.**
+13. **Everything else:** age/timeslot fit and sharing 3:45 around, the 14s 7:20 exception, the same weekly schedule, keeping the published schedule, weekend teams sharing blocks (4 teams at 9–11 rather than 2 at 9–11 and 2 at 11–1 when there's room; on a busy weekend there isn't, and nobody is left alone in a block), and a tie-breaker: **boys and girls teams otherwise tied, the boys team takes the later timeslot**.
+
+**Courts** (Nov 2026) are picked once the day is set, in this order: (1) **net heights**: 12s, women's (girls 13s+ and 13s–14s boys) and men's (HS boys) each stay on the same court from one time to the next, so teams move courts rather than nets change; when a net has to change it goes up through the day (12s → women's → men's), never down; (2) **a coach with back-to-back sessions stays on the same court**; (3) **the pecking order** for court quality; (4) **similar ages on courts next to each other**. Pairing (3 teams on 2 courts) stays the absolute last option.
 
 Every broken no-date, needed sub, pairing and Sat→Sun is flagged at the top of the page and in the Review tab, and so is any coach booked to work a local tournament while coaching a team at a travel tournament. Required weekends on the Weekends sheet are a note for coaches, not a rule.
 
@@ -60,9 +68,9 @@ Every broken no-date, needed sub, pairing and Sat→Sun is flagged at the top of
 | Keep the published schedule | Rebuilds leave practices (and courts) where the last published version had them, unless something needs them to move |
 | Same weekly schedule | Makeups are flagged in the Review tab. Consistency never beats a coach's request: when a slot the team asked for is open in a given week and its usual slot isn't one it asked for (or is marked not preferred), the practice moves there that week. These show as "Moved to a requested time" in Review |
 | Ranked wishlists | 1st choice, then 2nd choice day/time combos. The weekly template follows them too, so a team starting late in the range still gets the usual week it asked for, and a team that barely plays this period doesn't crowd out one playing all month. Every team whose usual week misses its 1st choice is listed in the Review tab with what got in the way (a full court, the coach's other team, a local) |
-| Coach double-ups | A coach's two teams back-to-back on the same day (girls at 5:30, boys at 7:20) |
+| Coach double-ups | A coach's two teams back-to-back on the same day (girls at 5:30, boys at 7:20), in the usual week and every week |
 | Travel tournament rest | No practice the day before or after (especially no late practice the night before). This outranks no-dates: a no-date is broken before a team practices next to a tournament. The week leading in gets priority for 2 practices |
-| Court quality | Courts ranked 1 → 7 → 6 → 5 → 3 → 4 → 2. Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot the better courts go by the club's **pecking order** (older age groups first, then rank within the age: `16-1` before `16-2`; at the same rank the boys team is just above the girls). When Court 2 is needed, the lowest-ranked team gets it |
+| Court quality | Courts 1 and 7 are the best (about the same), Courts 3–6 are equal, Court 2 is last (Nov 2026). Teams spread across times instead of piling onto bad courts (Court 2 is a last resort), and within a timeslot (after net heights and coaches staying put) the better courts go by the club's **pecking order** (older age groups first, then rank within the age: `16-1` before `16-2`; at the same rank the boys team is just above the girls). When Court 2 is needed, the lowest-ranked team gets it |
 | 3:45 shared around | 3:45 is a last resort, and the youngest teams take it first (12s, then 13s, then 14s). When it's needed, it rotates: a team gets at most one 3:45 a week before another young team gets none. A team that asks for 3:45 on its wishlist gets it; a team marked "Not preferred" at 3:45 is kept off it when possible |
 | Not-preferred days, weekend AM/PM preferences | |
 | A day apart | Back-to-back days are avoided (rule 12), and not at all when the team asked for both days (e.g. Tue/Wed). Saturday then Sunday is avoided more (rule 10) and always flagged |

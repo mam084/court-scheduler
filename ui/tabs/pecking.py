@@ -29,8 +29,8 @@ def render():
                 "team) or just `3`. Boys and girls teams can share a rank; at the same rank the boys team goes just "
                 "above the girls (`14-1` boys, then `14-1` girls). Edit any rank in the table and press "
                 "**Save ranks**. "
-                "Higher teams get the better courts (1 → 7 → 6 → 5 → 3 → 4 → 2), and when Court 2 is needed, "
-                "the lowest team gets it.")
+                "Higher teams get the better courts (Courts 1 and 7 best, 3–6 equal, Court 2 last), after net heights "
+                "and coaches staying on one court; when Court 2 is needed, the lowest team gets it.")
     order = pk.order_table(inp.teams)
     if order.empty:
         st.caption("No teams yet.")

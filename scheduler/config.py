@@ -27,13 +27,13 @@ def court_short(c) -> str:
     except (TypeError, ValueError):
         return str(c)
 
-# Court quality, best first. Court 2 is clearly the worst.
-COURT_RANK = [1, 7, 6, 5, 3, 4, 2]
-# Cost of using a court, by its rank (best = 0). The jump at the end makes
-# the solver move a team to another time rather than put it on Court 2,
-# unless that time is a lot worse for the team.
-COURT_RANK_COST = [0, 1, 2, 3, 4, 6, 12]
-COURT_COST = {c: COURT_RANK_COST[i] for i, c in enumerate(COURT_RANK)}
+# Court quality (Nov 2026): Courts 1 and 7 are the best (about the same), Courts 3-6 are all equal,
+# Court 2 is the worst. COURT_RANK is that order, best first (3-6 just break ties); COURT_COST is
+# what using each court costs. Court 2 is a last resort within a timeslot, but a team at 5:30 on
+# Court 2 still beats using 7:20 ("fill_530_first").
+COURT_RANK = [1, 7, 3, 4, 5, 6, 2]
+COURT_COST = {1: 0, 7: 0, 3: 1, 4: 1, 5: 1, 6: 1, 2: 6}
+COURT_RANK_TEXT = "Courts 1 and 7 best, 3–6 equal, Court 2 last"
 
 
 def pecking_key(age: int, rank: int | None, boys: bool = False) -> tuple:
@@ -176,6 +176,25 @@ def back_to_back(a: str, b: str) -> bool:
 # boys at 5:30 ideally has HS boys at 7:20 too (no net change).
 HS_BOYS_MIN_AGE = 15
 
+# Net heights (Nov 2026): 12s (lowest), women's (girls 13+ and 13s-14s boys), men's (HS boys).
+# A court keeps the same height from one time to the next where possible; when it has to change,
+# it goes up through the day (12s -> women's -> men's), never down.
+NET_12S, NET_WOMEN, NET_MEN = 0, 1, 2
+NET_NAMES = {NET_12S: "12s", NET_WOMEN: "women's", NET_MEN: "men's"}
+
+
+def net_height(club, age, name: str = "") -> int:
+    """Which net a team plays on: NET_12S, NET_WOMEN or NET_MEN."""
+    try:
+        age = int(age)
+    except (TypeError, ValueError):
+        return NET_WOMEN
+    if age <= 12:
+        return NET_12S
+    if team_is_boys(club, name) and age >= HS_BOYS_MIN_AGE:
+        return NET_MEN
+    return NET_WOMEN
+
 
 def is_boys_club(club) -> bool:
     """A boys-side club name ('Seaside', 'Boys')."""
@@ -241,6 +260,10 @@ WEIGHTS = {
     #    tournament also weighs missed practices 1.5x.
     "tournament_rest": 60000,
     "tournament_late_eve": 2000,
+    # A coach with a tournament the next day (any team they coach is at a travel tournament,
+    # or they work a local one): no late practice (7:20 / 7 PM) for any of their teams the
+    # night before (Nov 2026). Just below breaking a team's own no-date.
+    "coach_late_eve": 25000,
     # 3-5. Breaking a no-date so a team still gets its 2 practices, worst
     #    first: the team's own, then the head coach's (worse when no
     #    assistant is free to run it), then an assistant's.
@@ -275,6 +298,9 @@ WEIGHTS = {
     #    didn't want, it still never pushes a team onto a weekend (or into a
     #    sub, or onto a no-date).
     "fill_530_first": 1000,
+    # 7c. Avoid Friday at 7:20 as much as possible (Nov 2026). More than every
+    #    preference put together, but a Friday 7:20 still beats a weekend.
+    "friday_late": 2000,
     # 8. Preferred days: the wishlist's days and days marked not preferred.
     "wish_day_miss": 600,
     "not_preferred_day": 550,
@@ -293,11 +319,21 @@ WEIGHTS = {
     "weekend_pref": 220,
     "wish_second": 60,
     # 10. Saturday then Sunday (on top of "consecutive_days"; always flagged).
-    "sat_sun": 100,
+    #     Nov 2026: raised with back-to-back days, so Sat->Sun stays the worst
+    #     back-to-back (more than a day the team didn't pick).
+    "sat_sun": 700,
     # 11. A second weekend practice for a team in the same week.
     "second_weekend": 50,
     # 12. Back-to-back days (weekdays a team asked for, e.g. Tue/Wed, are free).
-    "consecutive_days": 20,
+    #    Nov 2026: avoided harder, more than a time the team didn't pick (but
+    #    not more than a day it didn't pick).
+    "consecutive_days": 300,
+    # A coach with a gap between a locals program and their team's practice the
+    # same day (program 3:45, team 7:20): the team is moved next to the program.
+    "coach_gap": 200,
+    # reward: a coach's two teams in back-to-back slots the same day
+    # (e.g. girls at 5:30 then boys at 7:20). Nov 2026: the club wants more of these.
+    "double_up": 200,
     # 13. Everything else, roughly in this order:
     # age/timeslot fit (multiplier on the slot_cost table below: up to 14)
     "slot_fit": 2,
@@ -316,26 +352,30 @@ WEIGHTS = {
     "keep_previous": 15,
     # A new practice on the same day as a hand-placed extra (two in one day).
     "same_day_as_extra": 600,
-    # HS boys (15s-18s) at 5:30 and 7:20 on the same courts, so no net change
-    # is needed. Stage 1 (days/times): per net change that can't be avoided
-    # by courts alone. Stage 2 (courts): per court whose net has to change.
-    "net_change": 14,
-    "net_change_court": 80,
-    # Stage 2: the pecking order decides courts (better courts to higher teams). Scaled so that
-    # putting a lower team on a better court than a higher one in the same timeslot always costs
-    # more than every net change, coach move and home-court change it could save.
-    "pecking_court": 400,
-    # Stage 2: a coach with back-to-back sessions (two teams, or a program
-    # then a team) stays on the same court. Less important than nets.
-    "coach_stay": 25,
+    # Net heights (12s, women's, men's) stay the same on a court from one time
+    # to the next. Stage 1 (days/times): per net change that can't be avoided
+    # by courts alone. Stage 2 (courts): per court whose net has to change;
+    # lowering a net (men's -> women's -> 12s) costs twice raising it.
+    "net_change": 30,
+    # Stage 2 (Nov 2026): the day is scheduled first, then courts, in this order:
+    # 1. net heights (teams move courts rather than nets change),
+    # 2. a coach with back-to-back sessions (two teams, or a program then a team)
+    #    stays on the same court,
+    # 3. the pecking order (better courts to higher teams),
+    # 4. similar ages on courts next to each other.
+    # Each is worth more than everything below it can save.
+    "net_change_court": 8000,
+    "coach_stay": 3000,
+    "pecking_court": 20,
+    "age_near": 2,
     "keep_court": 4,
     # each weekend 2-hour block opened: the club would rather put 4 teams in
     # 9-11 than 2 at 9-11 and 2 at 11-1 when there's room (on a busy weekend
     # there isn't, and a team is never left alone in a block)
     "weekend_block": 18,
-    # reward: a coach's two teams in back-to-back slots the same day
-    # (e.g. girls at 5:30 then boys at 7:20)
-    "double_up": 6,
+    # Boys and girls teams otherwise tied (same age): the boys team gets the
+    # later timeslot. A tie-breaker, below a year of age.
+    "boys_later": 1,
     # courts: home court (stage 2), any court change
     "home_court": 5,
     "court_change": 2,

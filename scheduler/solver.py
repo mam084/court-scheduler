@@ -41,6 +41,10 @@ from .config import (
     COURT_RANK,
     COURTS,
     DAYS,
+    NET_12S,
+    NET_MEN,
+    NET_WOMEN,
+    SLOT_TIMES,
     PRACTICES_PER_WEEK,
     SLOT_KEYS,
     SLOTS,
@@ -50,8 +54,9 @@ from .config import (
     back_to_back,
     court_name,
     day_in_week,
-    is_hs_boys,
     is_late_exception,
+    net_height,
+    team_is_boys,
     pecking_weights,
     slot_cost,
     slots_overlap,
@@ -163,6 +168,18 @@ def solve(
             after_days[name].add(tn.end + timedelta(days=1))
             lead_in_weeks[name].add(week_start(tn.start - timedelta(days=1)))
 
+    # Coaches with a tournament the next day (Nov 2026): no late practices the night before, for
+    # any team they coach. A coach is "at" a travel tournament when one of their teams is.
+    coach_eve = defaultdict(set)            # date -> coaches with a tournament the next day
+    coach_eve_why = {}                      # (coach, date) -> tournament name
+    staff_of = {tm.name: set(tm.staff) for tm in teams}
+    for tn in data.tournaments:
+        who = set(tn.coaches) if tn.kind == "local" else {c for n in tn.teams for c in staff_of.get(n, ())}
+        eve = tn.start - timedelta(days=1)
+        for c in who:
+            coach_eve[eve].add(c)
+            coach_eve_why.setdefault((c, eve), tn.name)
+
     weeks: dict[date, list[date]] = defaultdict(list)
     for d in open_dates:
         weeks[week_start(d)].append(d)
@@ -204,6 +221,21 @@ def solve(
 
     def programs_of(c, d, s):
         return [lp.name for lp in locals_at(d, s) if c in lp.coaches]
+
+    def gap_programs(t, d, s):
+        """Programs a coach of team t works on d with a break between the program and this
+        practice (a program at 3:45, the team at 7:20). Back-to-back or overlapping isn't a gap."""
+        if s not in SLOT_TIMES:
+            return []
+        (s0, s1) = SLOT_TIMES[s]
+        out = []
+        for lp in data.locals:
+            if lp.slot not in SLOT_TIMES or not lp.runs_on(d) or not set(lp.coaches) & set(teams[t].staff):
+                continue
+            (p0, p1) = SLOT_TIMES[lp.slot]
+            if p1 < s0 or s1 < p0:
+                out.append(lp.name)
+        return out
 
     rules_for = defaultdict(list)
     for r in data.rules:
@@ -378,6 +410,14 @@ def solve(
                     cost += WEIGHTS["assistant_nodate"]
                 if is_late_exception(team.age, s) and not wants_late[t]:
                     cost += WEIGHTS["late_exception"]
+                if s == "7:20" and d.weekday() == 4:
+                    cost += WEIGHTS["friday_late"]
+                if s in ("7:20", "7PM") and set(team.staff) & coach_eve[d]:
+                    cost += WEIGHTS["coach_late_eve"]
+                if d.weekday() < 5 and s in WEEKDAY_KEYS:
+                    cost += _boys_later_cost(team, s)
+                if gap_programs(t, d, s):
+                    cost += WEIGHTS["coach_gap"]
                 if d in rest_days[team.name]:
                     tn, when = rest_days[team.name][d]
                     cost += WEIGHTS["tournament_rest"]
@@ -516,8 +556,26 @@ def solve(
         tc += _not_preferred_cost([r for who in [team.name] + team.staff for r in rules_for[who]
                                    if r.kind == "not_preferred" and not r.ranges and (not r.days or wd in r.days)
                                    and (not r.times or s in r.times)], s)
+        if s == "7:20" and wd == "Fri":
+            tc += WEIGHTS["friday_late"]
+        tc += _boys_later_cost(team, s)
         if tc:
             obj.append(tc * v)
+
+    # The usual week avoids back-to-back days too (Nov 2026), unless the team asked for both days.
+    for t in T:
+        wished_pairs_ = {(w.days[i], w.days[j]) for w in data.wishes.get(teams[t].name, []) if w.choice == 1
+                         for i in range(len(w.days)) for j in range(len(w.days))}
+        for i in range(len(WEEKDAYS) - 1):
+            wd1, wd2 = WEEKDAYS[i], WEEKDAYS[i + 1]
+            if (wd1, wd2) in wished_pairs_:
+                continue
+            a_ = [p[t, wd1, s] for s in WEEKDAY_KEYS if (t, wd1, s) in p]
+            b_ = [p[t, wd2, s] for s in WEEKDAY_KEYS if (t, wd2, s) in p]
+            if a_ and b_:
+                cb = m.NewBoolVar(f"pcons_{t}_{wd1}")
+                m.Add(cb >= sum(a_) + sum(b_) - 1)
+                obj.append(WEIGHTS["consecutive_days"] * cb)
 
     # The template itself must be a valid week (it's what people read):
     # recurring 'no' rules and recurring locals rule slots out, head coaches
@@ -750,6 +808,17 @@ def solve(
                         m.Add(bv <= y[b, d, s_b])
                         doubles.append(bv)
                         obj.append(-WEIGHTS["double_up"] * bv)
+    # The usual week gets the same reward, so double-ups are part of the regular week.
+    for t1, t2 in sorted(pairs):
+        for wd in WEEKDAYS:
+            for k in range(len(WEEKDAY_KEYS) - 1):
+                s_a, s_b = WEEKDAY_KEYS[k], WEEKDAY_KEYS[k + 1]
+                for a, b in ((t1, t2), (t2, t1)):
+                    if (a, wd, s_a) in p and (b, wd, s_b) in p:
+                        bv = m.NewBoolVar(f"pdbl_{a}_{b}_{wd}_{s_a}")
+                        m.Add(bv <= p[a, wd, s_a])
+                        m.Add(bv <= p[b, wd, s_b])
+                        obj.append(-WEIGHTS["double_up"] * bv)
 
     # Fill every 5:30 court before using 7:20 (Nov 2026): per weekday, each
     # 7:20 practice that could have fit in an empty 5:30 court costs
@@ -810,29 +879,36 @@ def solve(
         if b_ and cap:
             obj.append(WEIGHTS["fill_530_first"] * fill_530_cost(a_, b_, cap, f"p{wd}"))
 
-    # High school boys at 5:30 and 7:20 on the same courts (no net change).
-    # Courts are picked in stage 2; here, only the net changes no court
-    # arrangement could avoid are priced: e.g. 3 HS boys teams at 5:30 and
-    # one at 7:20 with every other court full of girls teams means 2 changes.
-    hs_boys = {t for t in T if is_hs_boys(teams[t].club, teams[t].age)}
+    # Net heights (12s, women's, men's) the same on a court from one time to the next. Courts are
+    # picked in stage 2; here, only the net changes no court arrangement could avoid are priced:
+    # e.g. 3 HS boys teams at 5:30 and one at 7:20 with every other court full of girls teams
+    # means 2 changes. Counted per height, from each side (a rough lower bound).
+    net_of = {t: net_height(teams[t].club, teams[t].age, teams[t].name) for t in T}
     net_vars = []
-    if hs_boys:
-        for d in open_dates:
-            if d.weekday() >= 5:
+    for d in open_dates:
+        sl = slots_on(d)
+        for k in range(len(sl) - 1):
+            sa, sb = sl[k], sl[k + 1]
+            if not back_to_back(sa, sb):
                 continue
-            ys_a = [(t, y[t, d, "5:30"]) for t in T if (t, d, "5:30") in y]
-            ys_b = [(t, y[t, d, "7:20"]) for t in T if (t, d, "7:20") in y]
-            if not any(t in hs_boys for t, _ in ys_a + ys_b) or not ys_a or not ys_b:
+            ys_a = [(t, y[t, d, sa]) for t in T if (t, d, sa) in y]
+            ys_b = [(t, y[t, d, sb]) for t in T if (t, d, sb) in y]
+            if not ys_a or not ys_b or len({net_of[t] for t, _ in ys_a + ys_b}) < 2:
                 continue
-            B_a = sum(v for t, v in ys_a if t in hs_boys)
-            B_b = sum(v for t, v in ys_b if t in hs_boys)
             N_a, N_b = sum(v for _, v in ys_a), sum(v for _, v in ys_b)
-            cap_a, cap_b = len(courts_on(d, "5:30")), len(courts_on(d, "7:20"))
-            nc = m.NewIntVar(0, len(COURTS), f"net_{d}")
-            m.Add(nc >= B_a - B_b - (cap_b - N_b))
-            m.Add(nc >= B_b - B_a - (cap_a - N_a))
-            net_vars.append(nc)
-            obj.append(WEIGHTS["net_change"] * nc)
+            cap_a, cap_b = len(courts_on(d, sa)), len(courts_on(d, sb))
+            for h in (NET_12S, NET_WOMEN, NET_MEN):
+                H_a = [v for t, v in ys_a if net_of[t] == h]
+                H_b = [v for t, v in ys_b if net_of[t] == h]
+                if not H_a and not H_b:
+                    continue
+                nc = m.NewIntVar(0, len(COURTS), f"net_{d}_{sa}_{h}")
+                # A court a program takes in the other slot isn't a net change for teams, so
+                # "free" counts every court open to teams on this side that no team uses on the other.
+                m.Add(nc >= sum(H_a) - sum(H_b) - (max(cap_a, cap_b) - N_b))
+                m.Add(nc >= sum(H_b) - sum(H_a) - (max(cap_a, cap_b) - N_a))
+                net_vars.append(nc)
+                obj.append(WEIGHTS["net_change"] * nc)
 
     # ------------------------------------------- stability (previous) --
     prev_keys, prev_court = set(), {}
@@ -904,8 +980,8 @@ def solve(
     home_court, court_of, doubled = _assign_courts(
         booked, T, courts_on, weights, seed,
         fixed_courts={k: c for k, c in pinned.items() if c is not None},
-        fixed_home=fixed_home, prev_court=prev_court, hs_boys=hs_boys,
-        coach_links=coach_links, local_links=local_links)
+        fixed_home=fixed_home, prev_court=prev_court, net_of=net_of,
+        coach_links=coach_links, local_links=local_links, ages={t: teams[t].age for t in T})
     paired = _pair_groups(booked, court_of, doubled, courts_on, teams)
     elapsed = time.time() - t0
 
@@ -1005,7 +1081,7 @@ def solve(
         "double_ups": int(sum(solver.Value(v) for v in doubles)),
         "assistant_conflicts": int(sum(solver.Value(v) for v in asst_conflicts.values())),
         "paired_slots": len({(d, s, lab) for (_, d, s), lab in paired.items()}),
-        "net_changes": _count_net_changes(booked, court_of, hs_boys),
+        "net_changes": _count_net_changes(booked, court_of, net_of),
         "objective": solver.ObjectiveValue(),
         "moved_from_previous": (len(prev_keys - set(booked)) if prev_keys else None),
     }
@@ -1220,17 +1296,28 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
     return restored, notes
 
 
-def _count_net_changes(booked, court_of, hs_boys) -> int:
-    """Courts that switch between HS boys and anyone else from 5:30 to 7:20."""
-    at = defaultdict(set)  # (d, c, slot) -> {is HS boys}
+def _count_net_changes(booked, court_of, net_of) -> int:
+    """Courts whose net height (12s, women's, men's) changes from one time to the next."""
+    at = defaultdict(set)  # (d, c, slot) -> {net heights}
     for (t, d, s) in booked:
-        if s in ("5:30", "7:20"):
-            at[d, court_of[t, d, s], s].add(t in hs_boys)
+        at[d, court_of[t, d, s], s].add(net_of[t])
     n = 0
     for (d, c, s), kinds in at.items():
-        if s == "5:30" and (d, c, "7:20") in at and kinds != at[d, c, "7:20"] and True in kinds | at[d, c, "7:20"]:
-            n += 1
+        for s2 in SLOT_KEYS:
+            if back_to_back(s, s2) and (d, c, s2) in at and kinds != at[d, c, s2]:
+                n += 1
     return n
+
+
+def _boys_later_cost(team, s: str) -> int:
+    """Tie-breaker (Nov 2026): a boys team and a girls team otherwise tied, the boys team gets the
+    later timeslot. Boys pay a little for each allowed weekday slot later than this one, girls for
+    each one earlier."""
+    allowed = [k for k in WEEKDAY_KEYS if team.allowed(k)]
+    if s not in allowed or len(allowed) < 2:
+        return 0
+    i = allowed.index(s)
+    return WEIGHTS["boys_later"] * ((len(allowed) - 1 - i) if team_is_boys(team.club, team.name) else i)
 
 
 def _wish_cost(wishes, wd: str, s: str) -> int:
@@ -1279,11 +1366,12 @@ def _broken_who(b: dict) -> str:
 
 
 def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fixed_courts=None, fixed_home=None,
-                   prev_court=None, hs_boys=(), coach_links=(), local_links=()):
-    """Stage 2: put each booked practice on an open court. Better courts go
-    to older and 1s teams (court quality x team weight), teams stay on a
-    home court where they can, HS boys at 5:30 and 7:20 share courts (no
-    net change), and a coach with back-to-back sessions stays put.
+                   prev_court=None, net_of=None, coach_links=(), local_links=(), ages=None):
+    """Stage 2: put each booked practice on an open court, once the day is set. In order (Nov 2026):
+    net heights stay the same on a court from one time to the next (teams move courts rather than
+    nets change; if a net must change it goes up: 12s -> women's -> men's), a coach with back-to-back
+    sessions stays put, better courts go to higher teams in the pecking order, and similar ages sit
+    on courts next to each other. Home courts break ties.
 
     A timeslot with more teams than courts (pairing, only when stage 1 had
     to) puts two teams on some courts; each of those is later grouped with
@@ -1309,7 +1397,7 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fix
             ch = m.NewBoolVar(f"ch_{t}_{d}_{s}_{c}")
             m.Add(ch >= x[t, d, s, c] - home[t, c])
             changes.append(WEIGHTS["home_court"] * ch)
-            if COURT_COST[c]:  # pecking order first: worth more than nets, coaches staying put, home courts
+            if COURT_COST[c]:  # pecking order: below nets and coaches staying put, above ages and home courts
                 changes.append(WEIGHTS["pecking_court"] * COURT_COST[c] * weights[t] * x[t, d, s, c])
         m.AddExactlyOne([x[t, d, s, c] for c in opts])
         pc = (prev_court or {}).get((t, d, s))
@@ -1333,20 +1421,53 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fix
         if extra > 0:
             m.Add(sum(dbl[d, s, c] for c in courts_on(d, s)) == extra)
 
-    # HS boys at 5:30 and 7:20 on the same court: a court with HS boys in one
-    # slot and anyone else in the other needs its net changed.
-    if hs_boys:
-        for d in sorted({d for (_, d, _) in booked if d.weekday() < 5}):
-            for c in COURTS:
-                a_b = [x[t, d, "5:30", c] for t in T if (t, d, "5:30", c) in x and t in hs_boys]
-                a_o = [x[t, d, "5:30", c] for t in T if (t, d, "5:30", c) in x and t not in hs_boys]
-                b_b = [x[t, d, "7:20", c] for t in T if (t, d, "7:20", c) in x and t in hs_boys]
-                b_o = [x[t, d, "7:20", c] for t in T if (t, d, "7:20", c) in x and t not in hs_boys]
-                for p_, q_ in ((a_b, b_o), (b_b, a_o)):
-                    if p_ and q_:
-                        mm = m.NewIntVar(0, 3, f"net_{d}_{c}_{len(changes)}")
-                        m.Add(mm >= sum(p_) + sum(q_) - 1)
-                        changes.append(WEIGHTS["net_change_court"] * mm)
+    # Net heights: a court with one height in a slot and another in the next slot needs its net
+    # changed. Raising it costs net_change_court, lowering it twice that.
+    if net_of:
+        slots_by_day = defaultdict(set)
+        for (_, d, s) in booked:
+            slots_by_day[d].add(s)
+        for d, sls in slots_by_day.items():
+            for sa in sls:
+                for sb in sls:
+                    if not back_to_back(sa, sb):
+                        continue
+                    for c in COURTS:
+                        occ_a = defaultdict(list)
+                        occ_b = defaultdict(list)
+                        for t in T:
+                            if (t, d, sa, c) in x:
+                                occ_a[net_of[t]].append(x[t, d, sa, c])
+                            if (t, d, sb, c) in x:
+                                occ_b[net_of[t]].append(x[t, d, sb, c])
+                        for h1, va in occ_a.items():
+                            for h2, vb in occ_b.items():
+                                if h1 == h2:
+                                    continue
+                                mm = m.NewIntVar(0, 3, f"net_{d}_{sa}_{c}_{h1}{h2}")
+                                m.Add(mm >= sum(va) + sum(vb) - 1)
+                                changes.append(WEIGHTS["net_change_court"] * (1 if h2 > h1 else 2) * mm)
+
+    # Similar ages on courts next to each other (lowest priority, after the pecking order).
+    if ages:
+        slot_teams = defaultdict(list)
+        for (t, d, s) in booked:
+            slot_teams[d, s].append(t)
+        for (d, s), ts in slot_teams.items():
+            for i, t1 in enumerate(ts):
+                for t2 in ts[i + 1:]:
+                    gap = min(abs(ages[t1] - ages[t2]), 4)
+                    if not gap:
+                        continue
+                    for c in COURTS:
+                        c2 = c + 1
+                        if c2 not in COURTS:
+                            continue
+                        for a, b in ((t1, t2), (t2, t1)):
+                            if (a, d, s, c) in x and (b, d, s, c2) in x:
+                                z = m.NewBoolVar(f"age_{d}_{s}_{a}_{b}_{c}")
+                                m.Add(z >= x[a, d, s, c] + x[b, d, s, c2] - 1)
+                                changes.append(WEIGHTS["age_near"] * gap * z)
 
     # A coach's back-to-back sessions on the same court.
     for (k1, k2) in coach_links:

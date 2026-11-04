@@ -446,6 +446,7 @@ def flags_print_html(flags: list[dict], resolved: dict, start: date, end: date,
 TEAM_CSS = """
 .pt { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
 .pt col.pt-coach { width: 92px; } .pt col.pt-team { width: 54px; } .pt col.pt-n { width: 20px; }
+.pt col.pt-next { width: 64px; }
 .pt th { font-weight: 700; color: #5b6475; padding: 1px 0; text-align: center; }
 .pt thead tr.pt-mon th { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; text-align: left;
                          border-bottom: 1px solid #c3c8d1; padding-left: 2px; color: #1f2a44; }
@@ -453,8 +454,13 @@ TEAM_CSS = """
 .pt thead tr.pt-day th { font-size: 10px; color: #1f2a44; border-bottom: 1.5px solid #1f2a44; padding-bottom: 2px; }
 .pt th.pt-sun { border-left: 1px solid #c3c8d1; }
 .pt td { padding: 0; height: 21px; text-align: center; vertical-align: middle; font-variant-numeric: tabular-nums;
-         border-bottom: 1px solid #e3e6ec; }
+         border-bottom: 1px solid #7d8696; }
 .pt td.pt-sun { border-left: 1px solid #e3e6ec; }
+.pt th.pt-prev, .pt td.pt-prev { color: #8a93a3; background: #f4f5f8; }
+.pt td.pt-prev.pt-tn span { border-color: #c98a8a; color: #b06060; }
+.pt th.pt-first, .pt td.pt-first { border-left: 2px solid #1f2a44; }
+.pt th.pt-next, .pt td.pt-next { border-left: 2px solid #1f2a44; }
+.pt td.pt-next span { font-size: 9.5px; }
 .pt td.pt-coach { text-align: left; font-size: 10px; line-height: 1.12; padding: 2px 4px 2px 0; }
 .pt td.pt-coach b { font-size: 11px; } .pt td.pt-coach span { color: #5b6475; }
 .pt td.pt-team { text-align: left; font-weight: 800; font-size: 11.5px; white-space: nowrap; }
@@ -471,9 +477,15 @@ TEAM_CSS = """
 
 def team_dates_print_html(result, closures: dict | None = None, order: list[str] | None = None,
                           title: str = "", sections: dict[str, str] | None = None,
-                          coaches: dict[str, list[str]] | None = None) -> str:
-    """Like the club's handwritten sheet: one line per team (coaches, then team) with the dates it
-    practices across in date order, tournament days circled. One portrait page.
+                          coaches: dict[str, list[str]] | None = None,
+                          before: pd.DataFrame | None = None) -> str:
+    """Like the club's handwritten sheet: one line per team (coaches, then team, by its short label)
+    with the dates it practices across in date order, tournament days circled, a line under each
+    team. One portrait page.
+
+    Nov 2026: the week before the first date comes first, greyed (`before`: the schedule's bookings
+    for that week, so coaches see where they're coming from), and the team's next travel tournament
+    after the last date, if it has one, comes last.
 
     Only dates when some team practices or travels get a column, so the dates line up down the page.
     `sections` (team -> 'Girls'/'Boys') puts the SDVBC and Seaside headings in; `coaches` (team ->
@@ -517,50 +529,115 @@ def team_dates_print_html(result, closures: dict | None = None, order: list[str]
     used = set().union(*practice_days.values(), *tourn_days.values()) if (practice_days or tourn_days) else set()
     days = sorted(d for d in used if start <= d <= end)
 
+    # The week before (Sunday-Saturday week ahead of the first date's week, up to the first date).
+    prev_lo, prev_hi = week_start(start) - timedelta(days=7), start - timedelta(days=1)
+    bp = before if before is not None and len(before) else None
+    if bp is not None:
+        bp = bp[(bp["kind"] == "Practice") & bp["date"].map(lambda d: prev_lo <= d <= prev_hi)]
+    prev_p = {}
+    for t, d in (zip(bp["name"], bp["date"]) if bp is not None else []):
+        prev_p.setdefault(t, set()).add(d)
+        if t not in teams:
+            teams.append(t)
+    prev_t = {}
+    for tn in travel:
+        for d in pd.date_range(max(tn.start, prev_lo), min(tn.end, prev_hi)).date:
+            for t in tn.teams:
+                prev_t.setdefault(t, set()).add(d)
+    if bp is not None and "club" in bp:
+        for t, c in zip(bp["name"], bp["club"]):
+            clubs.setdefault(t, c)
+    labels = label_map((t, clubs.get(t)) for t in teams)
+    if bp is not None or prev_t:
+        prev_used = set().union(*prev_p.values(), *prev_t.values()) if (prev_p or prev_t) else set()
+        prev_days = sorted(prev_used)
+    else:
+        prev_days = []
+
+    # Each team's next travel tournament after the last date.
+    nxt = {}
+    for tn in sorted(travel, key=lambda tn: tn.start):
+        if tn.start > end:
+            for t in tn.teams:
+                nxt.setdefault(t, tn)
+    show_next = any(t in nxt for t in teams)
+    prev_set = set(prev_days)
+    first_main = days[0] if days else None
+    days = prev_days + days
+
     # Header: month, weekday initial, day number. A line before each Sunday marks the weeks.
     sun = {d for i, d in enumerate(days) if i and week_start(d) != week_start(days[i - 1])}
+
+    def cls_of(d, extra=""):
+        c = [extra] if extra else []
+        if d == first_main and prev_days:
+            c.append("pt-first")
+        elif d in sun:
+            c.append("pt-sun")
+        if d in prev_set:
+            c.append("pt-prev")
+        return f' class="{" ".join(c)}"' if c else ""
+
     mon_cells, i = [], 0
     while i < len(days):
         j = i
-        while j < len(days) and (days[j].year, days[j].month) == (days[i].year, days[i].month):
+        while j < len(days) and (days[j] in prev_set) == (days[i] in prev_set) and (
+                days[i] in prev_set or (days[j].year, days[j].month) == (days[i].year, days[i].month)):
             j += 1
-        mon_cells.append(f'<th colspan="{j - i}"{" class=pt-sun" if days[i] in sun else ""}>{days[i]:%b}</th>')
+        lab = "Week before" if days[i] in prev_set and j - i >= 3 else ("Prev" if days[i] in prev_set
+                                                                        else f"{days[i]:%b}")
+        mon_cells.append(f'<th colspan="{j - i}"{cls_of(days[i])}>{lab}</th>')
         i = j
-    dow = "".join(f'<th{" class=pt-sun" if d in sun else ""}>{"SMTWTFS"[(d.weekday() + 1) % 7]}</th>' for d in days)
-    dnum = "".join(f'<th{" class=pt-sun" if d in sun else ""}>{d.day}</th>' for d in days)
-    cols = '<col class="pt-coach"><col class="pt-team">' + "<col>" * len(days) + '<col class="pt-n">'
-    head = (f'<thead><tr class="pt-mon"><th></th><th></th>{"".join(mon_cells)}<th></th></tr>'
-            f'<tr class="pt-dow"><th></th><th></th>{dow}<th></th></tr>'
-            f'<tr class="pt-day"><th></th><th></th>{dnum}<th title="Practices">#</th></tr></thead>')
+    dow = "".join(f'<th{cls_of(d)}>{"SMTWTFS"[(d.weekday() + 1) % 7]}</th>' for d in days)
+    dnum = "".join(f'<th{cls_of(d)}>{d.day}</th>' for d in days)
+    nx_col = '<col class="pt-next">' if show_next else ""
+    nx_th = ('<th class="pt-next"></th>', '<th class="pt-next">Next</th>', '<th class="pt-next">tourn.</th>') \
+        if show_next else ("", "", "")
+    cols = '<col class="pt-coach"><col class="pt-team">' + "<col>" * len(days) + nx_col + '<col class="pt-n">'
+    head = (f'<thead><tr class="pt-mon"><th></th><th></th>{"".join(mon_cells)}{nx_th[0]}<th></th></tr>'
+            f'<tr class="pt-dow"><th></th><th></th>{dow}{nx_th[1]}<th></th></tr>'
+            f'<tr class="pt-day"><th></th><th></th>{dnum}{nx_th[2]}<th title="Practices">#</th></tr></thead>')
 
     body, last_sec = [], None
     sections = sections or {}
     for t in teams:
         sec = sections.get(t)
         if sec and sec != last_sec:
-            body.append(f'<tr class="pt-sec"><td colspan="{len(days) + 3}">'
+            body.append(f'<tr class="pt-sec"><td colspan="{len(days) + 3 + show_next}">'
                         f'{html.escape(SECTION_NAMES.get(sec, sec))}</td></tr>')
             last_sec = sec
         names = who.get(t, [])
         coach = (f"<b>{html.escape(names[0])}</b>" if names else "") + \
             "".join(f"<br><span>{html.escape(n)}</span>" for n in names[1:])
         cells, k = [], 0
-        my_p, my_t = practice_days.get(t, set()), tourn_days.get(t, set())
+        my_p = practice_days.get(t, set()) | prev_p.get(t, set())
+        my_t = tourn_days.get(t, set()) | prev_t.get(t, set())
         while k < len(days):
             d = days[k]
-            cls = " pt-sun" if d in sun else ""
-            if d in my_t:  # one circle around the run of tournament days
+            if d in my_t:  # one circle around the run of tournament days (not across into the week before)
                 run = [d]
                 while k + len(run) < len(days) and days[k + len(run)] in my_t \
-                        and days[k + len(run)] - run[-1] == timedelta(days=1):
+                        and days[k + len(run)] - run[-1] == timedelta(days=1) \
+                        and (days[k + len(run)] in prev_set) == (d in prev_set):
                     run.append(days[k + len(run)])
-                cells.append(f'<td class="pt-tn{cls}" colspan="{len(run)}"><span>{_span_text(run)}</span></td>')
+                cells.append(f'<td{cls_of(d, "pt-tn")} colspan="{len(run)}"><span>{_span_text(run)}</span></td>')
                 k += len(run)
                 continue
-            cells.append(f'<td class="pt-p{cls}">{d.day if d in my_p else ""}</td>')
+            cells.append(f'<td{cls_of(d, "pt-p")}>{d.day if d in my_p else ""}</td>')
             k += 1
-        body.append(f'<tr><td class="pt-coach">{coach}</td><td class="pt-team" title="{html.escape(str(t))}">{html.escape(labels.get(t, str(t)))}</td>'
-                    f'{"".join(cells)}<td class="pt-n">{len(my_p) or ""}</td></tr>')
+        if show_next:
+            tn = nxt.get(t)
+            if tn:
+                when = (f"{tn.start:%b %-d}" if tn.end == tn.start else
+                        f"{tn.start:%b %-d}–{tn.end:%-d}" if tn.end.month == tn.start.month else
+                        f"{tn.start:%-m/%-d}–{tn.end:%-m/%-d}")
+                cells.append(f'<td class="pt-tn pt-next" title="{html.escape(tn.name)}"><span>{when}</span></td>')
+            else:
+                cells.append('<td class="pt-next"></td>')
+        n_main = len(practice_days.get(t, set()))
+        body.append(f'<tr><td class="pt-coach">{coach}</td><td class="pt-team" title="{html.escape(str(t))}">'
+                    f'{html.escape(labels.get(t, str(t)))}</td>'
+                    f'{"".join(cells)}<td class="pt-n">{n_main or ""}</td></tr>')
 
     span = f"{start:%b %-d} – {end:%b %-d, %Y}" if (start.year, start.month) != (end.year, end.month) \
         else f"{start:%B %Y}" if start.day == 1 and end.day == calendar.monthrange(end.year, end.month)[1] \
@@ -569,6 +646,8 @@ def team_dates_print_html(result, closures: dict | None = None, order: list[str]
             f'<span class="pp-sub">{span}</span></div>'
             f'<table class="pt"><colgroup>{cols}</colgroup>{head}<tbody>{"".join(body)}</tbody></table>'
             '<div class="pt-key">Numbers are practice dates · <b style="color:#B21E1E">circled</b> = tournament · '
-            '# = practices · coaches: head coach first</div></section>')
+            + ('grey = the week before · ' if prev_days else '')
+            + ('Next tourn. = the team\'s next tournament · ' if show_next else '')
+            + '# = practices in these dates · coaches: head coach first</div></section>')
     return _page(title or "Team practice dates", f"<style>{TEAM_CSS}</style>{page}", landscape=False,
                  tip="Fits on one portrait page.")

@@ -934,10 +934,10 @@ def test_rule_order():
     """The club's order, most important first: each rule outweighs at least
     two breaks of the next one down."""
     from scheduler.config import WEIGHTS as W
-    order = [W["missed_practice"], W["tournament_rest"], W["break_team_nodate"],
-             W["assistant_nodate"], W["locals_sub"], W["weekend"], W["fill_530_first"],
-             W["wish_day_miss"], W["wish_time_miss"], W["sat_sun"] + W["consecutive_days"],
-             W["second_weekend"], W["consecutive_days"]]
+    order = [W["missed_practice"], W["tournament_rest"], W["break_team_nodate"], W["coach_late_eve"],
+             W["assistant_nodate"], W["locals_sub"], W["weekend"], W["friday_late"], W["fill_530_first"],
+             W["sat_sun"], W["wish_day_miss"], W["consecutive_days"], W["wish_time_miss"],
+             W["second_weekend"]]
     for hi, lo in zip(order, order[1:]):
         assert hi > lo, (hi, lo)
     # A sub is asked for before any no-date is broken; a weekend before a sub.
@@ -945,10 +945,17 @@ def test_rule_order():
     # Days before times, for both the wishlist and not-preferred.
     assert W["wish_day_miss"] > W["wish_time_miss"]
     assert W["not_preferred_day"] > W["not_preferred"] + W["not_preferred_345"]
-    # Every "everything else" weight is below back-to-back days.
+    # Every "everything else" weight is below the weekend rules.
     for k in ("second_345", "late_exception", "off_pattern", "split_timeslot", "keep_previous", "keep_court",
-              "weekend_block", "double_up", "home_court", "move_to_wish"):
-        assert W[k] < W["consecutive_days"], k
+              "weekend_block", "home_court", "move_to_wish", "boys_later"):
+        assert W[k] < W["second_weekend"], k
+    # Friday 7:20 beats every preference put together, but not a weekend.
+    assert W["weekend"] > W["friday_late"] > W["wish_day_miss"] + W["not_preferred_day"] + W["wish_time_miss"]
+    # Courts: nets, then coaches staying put, then the pecking order, then ages.
+    from scheduler.config import COURT_COST
+    worst_pecking = W["pecking_court"] * max(COURT_COST.values()) * 18   # top vs bottom team on Court 2
+    assert W["net_change_court"] > W["coach_stay"] > worst_pecking
+    assert W["pecking_court"] > 2 * 4 * W["age_near"]
     assert W["weekend_required"] == 0  # a note for coaches, not a rule
 
 
@@ -1109,14 +1116,14 @@ def test_tyler_and_tyler_lyons_are_different_coaches():
 
 def test_lowest_ranked_team_gets_court_2():
     # Seven teams want Tue/Thu 5:30 and nothing else: all 7 courts are used.
-    # The lowest in the pecking order gets Court 2, the top team Court 1.
+    # The lowest in the pecking order gets Court 2, the top two teams Courts 1 and 7 (equal, Nov 2026).
     teams = [{"team": f"16-T{i}", "age": 16, "rank": f"16-{i + 1}"} for i in range(7)]
     avail = [{"who": t["team"], "type": "No", "days": "Mon, Wed, Fri"} for t in teams] + \
             [{"who": t["team"], "type": "No", "times": "7:20"} for t in teams]
     r = solve(_inp(teams, avail), *NOV, time_limit_s=15)
     pr = r.assignments
     assert set(pr[pr["court"] == 2]["name"]) == {"16-T6"}
-    assert set(pr[pr["court"] == 1]["name"]) == {"16-T0"}
+    assert set(pr[pr["court"].isin([1, 7])]["name"]) == {"16-T0", "16-T1"}
 
 
 def test_calendar_exports(tmp_path):
@@ -1302,12 +1309,7 @@ def test_hs_boys_keep_their_courts_from_530_to_720():
         if kinds["5:30"] and kinds["7:20"] and kinds["5:30"] != kinds["7:20"]:
             changes += 1
     assert changes == r.metrics["net_changes"]
-    # The pecking order outranks nets: no team is on a better court than a higher team at the same time.
-    from scheduler.config import COURT_COST, pecking_weights
-    pw = pecking_weights(clean(_inp(teams), *NOV).teams)
-    for _, g in pr.groupby(["date", "slot"]):
-        rows = list(zip(g["name"].map(pw), g["court"].map(COURT_COST)))
-        assert not any(w1 > w2 and q1 > q2 for w1, q1 in rows for w2, q2 in rows), g
+    assert changes == 0                                   # nets outrank the pecking order (Nov 2026)
 
 
 def test_coach_stays_on_court_for_back_to_back_teams():
@@ -1856,3 +1858,80 @@ def test_never_practice_the_day_after_a_travel_tournament():
     assert date(2026, 11, 16) not in set(pr["date"])
     op = [o for o in r.openings if o["team"] == "16-Ana" and o["week_of"] == date(2026, 11, 15)]
     assert not op or all(x["date"] != date(2026, 11, 16) for x in op[0]["options"])
+
+
+# ---------------------------------------------------------------- Nov 3, 2026 club changes --
+
+def test_courts_1_and_7_equal_3_to_6_equal_2_last():
+    from scheduler.config import COURT_COST
+    assert COURT_COST[1] == COURT_COST[7] < COURT_COST[3] == COURT_COST[4] == COURT_COST[5] == COURT_COST[6] \
+        < COURT_COST[2]
+
+
+def test_net_heights_and_order():
+    from scheduler.config import NET_12S, NET_MEN, NET_WOMEN, net_height
+    assert net_height("SDVBC", 12, "12-Kai") == NET_12S and net_height("Seaside", 12, "12 Black") == NET_12S
+    assert net_height("SDVBC", 16, "16-Edgar") == NET_WOMEN and net_height("Seaside", 14, "14 Black") == NET_WOMEN
+    assert net_height("Seaside", 15, "15 Black") == NET_MEN
+    assert NET_12S < NET_WOMEN < NET_MEN                   # a net goes up through the day
+
+
+def test_friday_720_avoided():
+    teams = [{"team": f"{a}-G{i}", "club": "Girls", "age": a, "head_coach": f"C{a}{i}"}
+             for a in (16, 17, 18) for i in range(3)]
+    wish = [{"team": t["team"], "choice": 1, "days": "Fri", "times": "7:20"} for t in teams]
+    r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert not len(pr[(pr["day"] == "Fri") & (pr["slot"] == "7:20")])   # even when they ask for it
+
+
+def test_no_late_practice_night_before_a_coachs_tournament():
+    # Ana coaches 16-Ana (at a travel tournament Sat 11/14) and 18-Ana (not going): 18-Ana
+    # doesn't practice late on Fri 11/13, even though it asked for Fridays at 7:20.
+    teams = [{"team": "16-Ana", "club": "Girls", "age": 16, "head_coach": "Ana"},
+             {"team": "18-Ana", "club": "Girls", "age": 18, "head_coach": "Ana"}]
+    wish = [{"team": "18-Ana", "choice": 1, "days": "Thu, Fri", "times": "7:20"}]
+    inp = _inp(teams, wishlist=wish)
+    inp.tournaments = pd.DataFrame([{"name": "Turkey Bash", "type": "Travel", "start_date": "11/14/2026",
+                                     "end_date": "11/15/2026", "teams": "16-Ana"}])
+    r = solve(inp, *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    eve = pr[(pr["date"] == date(2026, 11, 13)) & (pr["name"] == "18-Ana")]
+    assert not len(eve[eve["slot"] == "7:20"])
+
+
+def test_boys_take_the_later_slot_when_tied():
+    teams = [{"team": "16-Gina", "club": "Girls", "age": 16, "head_coach": "Gina"},
+             {"team": "16 Black", "club": "Boys", "age": 16, "head_coach": "Bo"}]
+    locals_ = [{"program": "Big Clinic", "days": "Mon, Tue, Wed, Thu, Fri", "time": "5:30", "courts": "1-6"},
+               {"program": "Big Clinic", "days": "Mon, Tue, Wed, Thu, Fri", "time": "7:20", "courts": "1-6"}]
+    wish = [{"team": t["team"], "choice": 1, "days": "Mon, Wed"} for t in teams]
+    r = solve(_inp(teams, wishlist=wish, locals_=locals_), *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    # one court a slot and the same days: one goes early and one late
+    assert set(pr[pr["name"] == "16 Black"]["slot"]) == {"7:20"}
+    assert set(pr[pr["name"] == "16-Gina"]["slot"]) == {"5:30"}
+
+
+def test_team_dates_print_week_before_and_next_tournament():
+    from copy import copy
+
+    from scheduler.config import team_is_boys
+    from scheduler.data import Tournament
+    from scheduler.prints import team_dates_print_html
+    s, e = date(2026, 11, 29), date(2026, 12, 19)
+    inp = simulate(6, 4, 4, seed=7, start=s, end=e)
+    r = solve(inp, s, e, time_limit_s=10)
+    data = clean(inp, s, e)
+    a = r.assignments
+    first = date(2026, 12, 6)
+    win = copy(r)
+    win.start, win.assignments = first, a[a["date"] >= first]
+    going = [t.name for t in data.teams][:2]
+    win.tournaments = list(r.tournaments) + [Tournament("Jan Classic", "travel", date(2027, 1, 9),
+                                                        date(2027, 1, 10), going, [], [])]
+    order = [t.name for t in sorted(data.teams, key=lambda t: team_is_boys(t.club, t.name))]
+    h = team_dates_print_html(win, data.closures, order, "Dec", None, None, before=a[a["date"] < first])
+    assert "Week before" in h and "pt-prev" in h
+    assert h.count('class="pt-tn pt-next"') == len(going) and "Jan 9–10" in h
+    assert h.count('class="pp-page"') == 1

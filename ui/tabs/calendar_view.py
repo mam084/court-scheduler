@@ -89,13 +89,15 @@ def render():
         # Worked out now: the file itself is only built when the button is clicked, after this run.
         order, sections, title_ = team_order(), team_sections(), st.session_state.get("project_name") or ""
         coaches = team_coaches()
+        _before = dates.week_before(start)
         e1, e2 = st.columns(2)
         e1.download_button("Every team's dates · print", lambda: team_dates_print_html(
-                               _win(), closures, order, title_, sections, coaches).encode(),
+                               _win(), closures, order, title_, sections, coaches, _before).encode(),
                            f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html", key="team_print_cal",
                            width="stretch",
                            help="Like the handwritten sheet: each team's coaches, then the dates it practices "
-                                "across in date order, tournament days circled. One portrait page.")
+                                "across in date order, tournament days circled. Starts with the week before "
+                                "(greyed) and ends with each team's next tournament. One portrait page.")
         e2.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
                                _win(), closures, order, title_, sections),
                            f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", key="team_dates_cal", width="stretch",
