@@ -865,10 +865,9 @@ def solve(
         b_ = {t: y[t, d, "7:20"] for t in T if (t, d, "7:20") in y}
         cap = len(courts_on(d, "5:30"))
         if b_ and cap:
-            usual = {}
-            if d.weekday() < 5 and d not in data.weekends:
-                usual = {t: p[t, DAYS[d.weekday()], "7:20"] for t in b_ if (t, DAYS[d.weekday()], "7:20") in p}
-            obj.append(WEIGHTS["fill_530_first"] * fill_530_cost(a_, b_, cap, d, usual))
+            # No exemption for a team's usual 7:20 (Nov 2026): a quiet night with 5:30 courts
+            # open moves it up that week.
+            obj.append(WEIGHTS["fill_530_first"] * fill_530_cost(a_, b_, cap, d))
     # The usual week follows the same rule, so practices don't show up as
     # moved off the usual week every week.
     for wd in WEEKDAYS:

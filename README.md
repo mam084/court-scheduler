@@ -48,16 +48,16 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 6. **A coach who works a locals program then** (head or assistant): the practice can still happen, flagged *Needs a sub: possible if Matthew gets a sub for B 14 L*, so a sub is asked for before any no-date is broken. An assistant on two teams at once costs the same.
    - **Pairing** (3 teams sharing 2 courts) is the absolute last option: only when there's no court space left and the alternative is a team missing one of its 2 practices. Breaking no-dates, practicing next to a tournament, weekends and subs all come first, and it's never used for a 3rd practice. Paired practices are flagged at the top of the page and in Review, and tagged *Paired · 3 on 2* on the court view.
 7. **Weekdays before weekends.** Two weekday practices, even doubled up, beat a weekend plus a weekday.
-   - **Fill every 5:30 court before using 7:20** (Nov 2026). Outranks every time preference below (a team that asked for 7:20 moves up while a 5:30 court is empty that day), but never pushes a team onto a weekend, into a sub or onto a no-date. A team at 5:30 on Court 2 beats using 7:20.
+   - **No back-to-back days** unless unavoidable or the coach asked for exactly those two days ("Tue, Wed"; a list like Mon, Tue, Wed, Thu is options, not a request). Nov 2026: above every day/time preference, Friday 7:20 and the 5:30 rule; a weekday back-to-back still beats a weekend. The usual week avoids them too.
    - **Avoid Friday at 7:20** (Nov 2026): more than every preference below put together, but still better than a weekend.
+   - **Fill every 5:30 court before using 7:20** (Nov 2026), even moving a team off its usual 7:20 on a quiet night. Outranks every day/time preference below; never pushes a team onto a weekend, into a sub, onto a no-date or onto back-to-back days. A coach's second session of a back-to-back night (their other team at 5:30) doesn't count.
 8. **Preferred days** (wishlist days, days marked not preferred).
-9. **No back-to-back days** (Nov 2026: moved up; days a team asked for, e.g. Tue/Wed, are fine: only a wish naming exactly those two days counts, since a list like Mon, Tue, Wed, Thu is options, not a request). The usual week avoids them too.
-10. **Preferred times** (wishlist times, times marked not preferred, 3:45 a bit more; weekend AM/PM).
+9. **Preferred times** (wishlist times, times marked not preferred, 3:45 a bit more; weekend AM/PM).
     - **Coach double-ups** (a coach's two teams back-to-back the same day, girls at 5:30 then boys at 7:20) are rewarded about as much as a time preference, in the usual week too (Nov 2026: the club wants more of them).
     - **No break between a coach's locals program and their team** the same day (a program at 3:45, then the team at 5:30 rather than 7:20).
-11. **No Saturday then Sunday** (always flagged).
-12. **One weekend practice per team per week.**
-13. **Everything else:** age/timeslot fit and sharing 3:45 around, the 14s 7:20 exception, the same weekly schedule, keeping the published schedule, weekend teams sharing blocks (4 teams at 9–11 rather than 2 at 9–11 and 2 at 11–1 when there's room; on a busy weekend there isn't, and nobody is left alone in a block), and a tie-breaker: **boys and girls teams otherwise tied, the boys team takes the later timeslot**.
+10. **No Saturday then Sunday** (always flagged). Worse than any other back-to-back, but one Sat→Sun beats a back-to-back every week.
+11. **One weekend practice per team per week.**
+12. **Everything else:** age/timeslot fit and sharing 3:45 around, the 14s 7:20 exception, the same weekly schedule, keeping the published schedule, weekend teams sharing blocks (4 teams at 9–11 rather than 2 at 9–11 and 2 at 11–1 when there's room; on a busy weekend there isn't, and nobody is left alone in a block), and a tie-breaker: **boys and girls teams otherwise tied, the boys team takes the later timeslot**.
 
 **Courts** (Nov 2026) are picked once the day is set, in this order: (1) **net heights**: 12s, women's (girls 13s+ and 13s–14s boys) and men's (HS boys) each stay on the same court from one time to the next, so teams move courts rather than nets change; when a net has to change it goes up through the day (12s → women's → men's), never down; (2) **a coach with back-to-back sessions stays on the same court**; (3) **the pecking order** for court quality; (4) **similar ages on courts next to each other**. Pairing (3 teams on 2 courts) stays the absolute last option.
 

@@ -292,16 +292,22 @@ WEIGHTS = {
     #    every preference below put together (a weekday the team didn't ask
     #    for, at a time it didn't ask for, marked not preferred is ~1,800), so
     #    a weekend never wins over an open weekday just on preferences, even
-    #    with "fill_530_first" on top (~2,800 at most).
-    "weekend": 3000,
+    #    with a back-to-back day or "fill_530_first" on top (Nov 2026: raised
+    #    with them; still below a locals sub).
+    "weekend": 3900,
+    # 7a. Back-to-back days (Nov 2026): only when unavoidable or when a coach
+    #    asked for exactly those two days ("Tue, Wed"). More than every day and
+    #    time preference put together and than Friday 7:20 or a 7:20 with 5:30
+    #    open, but a weekday back-to-back still beats a weekend.
+    "consecutive_days": 2100,
     # 7b. Fill every 5:30 court before using 7:20 (Nov 2026). Per 7:20
     #    practice that could have been in an empty 5:30 court that day.
     #    More than every time preference put together (wishlist time + "rather
     #    not" + age fit, ~600), so a team that asked for 7:20 still moves up to
-    #    an empty 5:30 that day. Low enough that, added to a weekday the team
-    #    didn't want, it still never pushes a team onto a weekend (or into a
-    #    sub, or onto a no-date).
-    "fill_530_first": 1000,
+    #    an empty 5:30 that day (Nov 2026: even off its usual 7:20). Low enough
+    #    that it never pushes a team onto a weekend, into a sub, onto a no-date
+    #    or onto back-to-back days.
+    "fill_530_first": 1500,
     # 7c. Avoid Friday at 7:20 as much as possible (Nov 2026). More than every
     #    preference put together, but a Friday 7:20 still beats a weekend.
     "friday_late": 2000,
@@ -325,13 +331,10 @@ WEIGHTS = {
     # 10. Saturday then Sunday (on top of "consecutive_days"; always flagged).
     #     Nov 2026: raised with back-to-back days, so Sat->Sun stays the worst
     #     back-to-back (more than a day the team didn't pick).
-    "sat_sun": 700,
+    "sat_sun": 1400,   # Nov 2026: raised again with back-to-back days
     # 11. A second weekend practice for a team in the same week.
     "second_weekend": 50,
-    # 12. Back-to-back days (weekdays a team asked for, e.g. Tue/Wed, are free).
-    #    Nov 2026: avoided harder, more than a time the team didn't pick (but
-    #    not more than a day it didn't pick).
-    "consecutive_days": 300,
+    # (12. Back-to-back days moved up to 7a, Nov 2026.)
     # A coach with a gap between a locals program and their team's practice the
     # same day (program 3:45, team 7:20): the team is moved next to the program.
     "coach_gap": 200,

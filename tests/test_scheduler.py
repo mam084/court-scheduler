@@ -769,18 +769,19 @@ def test_breaking_a_no_date_beats_practicing_next_to_a_tournament():
     assert [(b["date"], b["head_out"], b["team_out"]) for b in r.broken] == [(date(2026, 11, 12), [], True)]
 
 
-def test_saturday_then_sunday_avoided():
-    """Weekdays only fit 1 practice a week (Fri), so teams need a weekend
-    practice every week. Sundays are open too, but taking one right after a
-    Saturday practice is avoided: every week uses its Saturday instead."""
+def test_back_to_backs_kept_to_the_unavoidable_on_fri_sat_sun():
+    """Only Fri, Sat and Sun are open. Fri/Sat every week would be a back-to-back every week;
+    one Sat->Sun breaks the chain and later weeks go Sun/Fri. Back-to-backs only when
+    unavoidable (Nov 2026): the fewest in total wins, and Sat->Sun is still flagged."""
     teams = [{"team": f"16-W{i}", "age": 16} for i in range(4)]
     avail = [{"who": t["team"], "type": "No", "days": "Mon, Tue, Wed, Thu"} for t in teams]
     weekends = [{"date": d, "open": "9AM-9PM"} for d in ("11/7", "11/8", "11/14", "11/15", "11/21", "11/22", "11/28")]
     r = solve(_inp(teams, avail, weekends=weekends), *NOV, time_limit_s=15)
     pr = r.assignments[r.assignments["kind"] == "Practice"]
     for name, g in pr.groupby("name"):
-        days = set(g["date"])
-        assert not any(d.weekday() == 5 and d + pd.Timedelta(days=1) in days for d in days), name
+        days = sorted(set(g["date"]))
+        b2b = sum((b - a).days == 1 for a, b in zip(days, days[1:]))
+        assert b2b <= 2, (name, days)
     assert r.shortfalls.empty
 
 
@@ -936,9 +937,13 @@ def test_rule_order():
     two breaks of the next one down."""
     from scheduler.config import WEIGHTS as W
     order = [W["missed_practice"], W["tournament_rest"], W["break_team_nodate"], W["coach_late_eve"],
-             W["assistant_nodate"], W["locals_sub"], W["weekend"], W["friday_late"], W["fill_530_first"],
-             W["sat_sun"], W["wish_day_miss"], W["consecutive_days"], W["wish_time_miss"],
+             W["assistant_nodate"], W["locals_sub"], W["weekend"], W["consecutive_days"], W["friday_late"],
+             W["fill_530_first"], W["sat_sun"], W["wish_day_miss"], W["wish_time_miss"],
              W["second_weekend"]]
+    # Back-to-back days beat every day/time preference put together, a weekend still beats them
+    # plus a 7:20 with 5:30 open.
+    assert W["consecutive_days"] > W["wish_day_miss"] + W["not_preferred_day"] + W["wish_time_miss"] + W["not_preferred"]
+    assert W["weekend"] > W["consecutive_days"] + W["fill_530_first"]
     for hi, lo in zip(order, order[1:]):
         assert hi > lo, (hi, lo)
     # A sub is asked for before any no-date is broken; a weekend before a sub.
@@ -1170,7 +1175,9 @@ def test_one_off_no_date_doesnt_move_the_usual_week():
         full = set(full[full == 2].index)
         if len(full) < 3:
             continue  # a late starter whose only weeks are disrupted (a no-date, Thanksgiving) proves nothing
-        hits = played[(played["day"] == p.day) & (played["slot"] == p.slot) & played["wk"].isin(full)]
+        # A usual 7:20 moved up to an open 5:30 that night still follows the usual week (Nov 2026).
+        ok_slots = {p.slot} | ({"5:30"} if p.slot == "7:20" else set())
+        hits = played[(played["day"] == p.day) & played["slot"].isin(ok_slots) & played["wk"].isin(full)]
         assert len(hits) * 2 >= len(full), (p.team, p.day, p.slot, len(hits), len(full))
 
 
