@@ -120,6 +120,20 @@ def last_sessions(locals_) -> set[tuple[str, date]]:
     return set(last.items())
 
 
+def only_tournaments(tourns) -> set[int]:
+    """id() of each local tournament that is its program's one and only tournament (Nov 2026: the
+    paper sheet marks it with a circled 1 and a circled ONLY). Tournaments without a program go by
+    name; a multi-day tournament counts once."""
+    by_prog: dict[str, list] = {}
+    for tn in tourns or []:
+        if tn.kind == "local":
+            by_prog.setdefault((tn.program or tn.name).strip().lower(), []).append(tn)
+    return {id(g[0]) for g in by_prog.values() if len(g) == 1}
+
+
+ONLY_MARK = '<span class="last">1</span><span class="last">ONLY</span>'
+
+
 def _what(r, local_coaches: bool, last: set | frozenset = frozenset()) -> str:
     """One booking as it's written on the sheet; a program's last session gets LAST circled."""
     name = html.escape(label_of(r))
@@ -153,7 +167,8 @@ def _start(slot: str) -> int:
 
 
 def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_coaches: bool,
-         block_days: set | frozenset = frozenset(), last: set | frozenset = frozenset()) -> str:
+         block_days: set | frozenset = frozenset(), last: set | frozenset = frozenset(),
+         only: set | frozenset = frozenset()) -> str:
     """Every timeslot of the day on court c, booked or blank. Weekends and
     block days (a school break's weekdays) list the 2-hour blocks."""
     weekend = d.weekday() >= 5 or d in block_days
@@ -182,7 +197,8 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
             # about as tall as the lines it replaces, so the times after it stay where they'd be
             h = len(gone) * (25 if weekend else 38) - 5
             head = f"Local tournament{'s' if len(tn_here) > 1 else ''} · until 7 PM"
-            names = "".join(f"<b>{html.escape(tn.name)}</b>" for tn in tn_here)
+            names = "".join(f"<b>{html.escape(tn.name)}{ONLY_MARK if id(tn) in only else ''}</b>"
+                            for tn in tn_here)
             items.append((tn_min, f'<div class="tnb" style="min-height:{h}px"><small>{head}</small>{names}</div>'))
         slots = [x for x in slots if x not in gone]
     for s in slots:
@@ -203,7 +219,8 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
     return f'<div class="wi">{early}</div><div class="slots">{rest}</div>'
 
 
-def _head(d: date, start: date, end: date, closures: dict, tourns: list, wd: str) -> str:
+def _head(d: date, start: date, end: date, closures: dict, tourns: list, wd: str,
+          only: set | frozenset = frozenset()) -> str:
     """The day's name and date, with closures and tournaments under it. Local tournaments that day
     share one line; each travel tournament gets its own."""
     notes = []
@@ -211,9 +228,9 @@ def _head(d: date, start: date, end: date, closures: dict, tourns: list, wd: str
         if d in closures:
             notes.append(html.escape(closures[d] or "Closed"))
         here = [tn for tn in tourns if tn.covers(d)]
-        local = [tn.name for tn in here if tn.kind == "local"]
+        local = [html.escape(tn.name) + (ONLY_MARK if id(tn) in only else "") for tn in here if tn.kind == "local"]
         if local:
-            notes.append(html.escape(" / ".join(local)))
+            notes.append(" / ".join(local))
         notes += [html.escape(f"{tn.name} (travel)") for tn in here if tn.kind != "local"]
     note = "".join(f'<span class="note">{n}</span>' for n in notes)
     return f'<th class="dh">{wd} <span class="num">{d.day}</span>{note}</th>'
@@ -253,6 +270,7 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
     block_days: weekdays run in 2-hour blocks (a school break). locals_: the locals programs, so each
     one's last session gets LAST circled."""
     last = last_sessions(locals_)
+    only = only_tournaments(tournaments)
     block_days = set(block_days or ())
     from .views import FIT_SCRIPT, PRINT_BUTTON
     closures = closures or {}
@@ -274,7 +292,7 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
         for i, (courts, label) in enumerate(HALVES):
             rows = ['<table class="pp"><thead><tr><th class="ct"></th>'
                     # tournaments go on the first page only (the second has room for the courts)
-                    + "".join(_head(d, start, end, closures, tourns if i == 0 else [], wd)
+                    + "".join(_head(d, start, end, closures, tourns if i == 0 else [], wd, only)
                               for d, wd in zip(days, WEEK_ORDER))
                     + "</tr></thead><tbody>"]
             for c in courts:
@@ -289,7 +307,7 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
                     else:
                         kind = "wkb" if d.weekday() >= 5 or d in block_days else "day"
                         cells.append(f'<td class="box {kind}">'
-                                     f'{_box(d, c, book, tourns, pv, local_coaches, block_days, last)}</td>')
+                                     f'{_box(d, c, book, tourns, pv, local_coaches, block_days, last, only)}</td>')
                 rows.append(f'<tr{cls}><td class="ct">{cname}</td>{"".join(cells)}</tr>')
             if SHOW_COUNTS and i == len(HALVES) - 1:
                 rows.append(_footer(book, days, start, end, need_by_week.get(ws), block_days))

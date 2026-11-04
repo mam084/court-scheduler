@@ -1858,8 +1858,29 @@ def test_paper_tournaments_on_first_page_and_locals_share_a_line():
          Tournament("Far Away Cup", "travel", e, e, ["15 Black"], [], [])]
     h = paper_weeks_html(pd.DataFrame(columns=["date", "court", "slot", "kind", "name"]), s, e, {}, t)
     first, second = h.split('class="cs-week"')[1:3]
-    assert '<span class="note">Boys Local / Girls Local</span>' in first and "Far Away Cup (travel)" in first
+    only = '<span class="last">1</span><span class="last">ONLY</span>'   # each is its program's only one
+    assert f'<span class="note">Boys Local{only} / Girls Local{only}</span>' in first
+    assert "Far Away Cup (travel)" in first
     assert 'class="note"' not in second and "Girls Local" in second      # still on the court it uses
+
+
+def test_paper_marks_a_programs_only_local_tournament():
+    """Nov 2026: a local tournament that's its program's one and only gets a circled 1 and a circled
+    ONLY on the paper sheet (by program; a 2-day tournament still counts once). Travel ones never do."""
+    from scheduler.data import Tournament
+    from scheduler.paper import ONLY_MARK, only_tournaments, paper_weeks_html
+    s, e = date(2026, 12, 6), date(2026, 12, 12)
+    g14 = Tournament("G 14 L", "local", e, e, [], [1, 2], [], program="G 14 L")
+    b14a = Tournament("Boys 14s", "local", date(2026, 11, 7), date(2026, 11, 7), [], [1], [], program="B 14 L")
+    b14b = Tournament("Boys 14s", "local", date(2026, 12, 7), date(2026, 12, 7), [], [3], [], program="B 14 L")
+    two_day = Tournament("G HS", "local", date(2026, 12, 11), e, [], [5], [], program="G HS L")
+    away = Tournament("Far Away Cup", "travel", e, e, ["15 Black"], [], [])
+    t = [g14, b14a, b14b, two_day, away]
+    assert only_tournaments(t) == {id(g14), id(two_day)}
+    h = paper_weeks_html(pd.DataFrame(columns=["date", "court", "slot", "kind", "name"]), s, e, {}, t)
+    assert f"<b>G 14 L{ONLY_MARK}</b>" in h and f"<b>G HS{ONLY_MARK}</b>" in h
+    assert "<b>Boys 14s</b>" in h and f"Boys 14s{ONLY_MARK}" not in h
+    assert f"Far Away Cup{ONLY_MARK}" not in h
 
 
 def test_fill_530_before_720():
@@ -2176,11 +2197,12 @@ def test_paper_print_local_tournament_blocks_and_last_session():
     h = paper_weeks_html(r.assignments, s, e, data.closures, r.tournaments, "T", [], r.practice_counts, False,
                          r.weekend_dates, data.locals)
     # Nov 2026: the tournament blocks out its times on each of its courts (1-7), not big on Court 1.
-    assert h.count('<div class="tnb"') == 7 and h.count("<b>Boys Local Tourney</b>") == 7
+    from scheduler.paper import ONLY_MARK   # it's the only one, so it carries a circled 1 and ONLY
+    assert h.count('<div class="tnb"') == 7 and h.count(f"<b>Boys Local Tourney{ONLY_MARK}</b>") == 7
     assert "tnbig" not in h
     n_last = len(r.assignments[(r.assignments["name"] == lp.name) & (r.assignments["date"] == date(2026, 12, 3))]
                  .drop_duplicates(["court", "slot"]))
-    assert h.count('class="last"') == n_last > 0
+    assert h.count('class="last">LAST') == n_last > 0
     assert "border-top: 1.5px solid #555; padding: 0 5px" not in h   # no line above the first practice time
 
 
