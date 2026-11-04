@@ -1,6 +1,8 @@
 from datetime import date
 from types import SimpleNamespace as T
 
+import pandas as pd
+
 from scheduler.handwritten import read_rows, slot_for, to_overrides
 
 TEAMS = [T(name=n, club=c) for n, c in [
@@ -46,3 +48,20 @@ def test_short_label_for_one_team():
     rows, problems = to_overrides(read_rows(csv, "x.csv"), TEAMS)
     assert [r["team"] for r in rows] == ["16-D&D"]
     assert len(problems) == 1
+
+
+def test_third_practice_in_a_week_goes_in_as_extra():
+    teams = [T(name="16-Edgar", club="SDVBC", per_week=2), T(name="14 Black", club="Seaside", per_week=2)]
+    csv = (b"date,court,start,team\n"
+           b"2026-12-04,1,17:30,16-E\n2026-11-30,1,17:30,16-E\n2026-12-02,1,17:30,16-E\n"
+           b"2026-12-07,1,17:30,16-E\n"  # next week: back to a regular practice
+           b"2026-12-01,2,19:20,S14-B\n2026-12-03,2,19:20,S14-B\n")
+    existing = pd.DataFrame([{"team": "14 Black", "action": "Add", "date": "11/30/2026", "days": "",
+                              "time": "7:20", "court": "", "note": ""}])
+    rows, problems = to_overrides(read_rows(csv, "x.csv"), teams, existing)
+    act = {(r["team"], r["date"]): r["action"] for r in rows}
+    assert act[("16-Edgar", "12/04/2026")] == "Extra"  # the latest of the three that week
+    assert act[("16-Edgar", "11/30/2026")] == act[("16-Edgar", "12/02/2026")] == "Add"
+    assert act[("16-Edgar", "12/07/2026")] == "Add"
+    assert act[("14 Black", "12/01/2026")] == "Add" and act[("14 Black", "12/03/2026")] == "Extra"
+    assert problems == []

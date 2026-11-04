@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import io
 import re
+from collections import defaultdict
 from datetime import date
 
 import pandas as pd
 
-from .config import COURTS, WEEKDAY_KEYS, WEEKEND_KEYS
+from .config import COURTS, PRACTICES_PER_WEEK, SLOT_KEYS, WEEKDAY_KEYS, WEEKEND_KEYS, week_start
 from .labels import label_map
 
 # 24h start -> slot key.
@@ -63,10 +64,12 @@ def read_rows(data: bytes, filename: str = "") -> pd.DataFrame:
     return df.fillna("")
 
 
-def to_overrides(df: pd.DataFrame, teams) -> tuple[list[dict], list[str]]:
-    """(hand-edit rows, problems). `teams` are the club's teams (objects with .name and .club).
-    Rows that can't be read, or whose team isn't known, are left out and listed as problems.
-    The same team twice on one date and time is only added once."""
+def to_overrides(df: pd.DataFrame, teams, existing: pd.DataFrame | None = None) -> tuple[list[dict], list[str]]:
+    """(hand-edit rows, problems). `teams` are the club's teams (objects with .name, .club and .per_week);
+    `existing` the hand edits already there. Rows that can't be read, or whose team isn't known, are
+    left out and listed as problems; so are repeats and practices already added by hand.
+    A team's practices past its weekly number (counting ones already added by hand) go in as Extra,
+    so the list is kept as written even when a team has 3 that week."""
     lm = label_map((t.name, t.club) for t in teams)
     lookup: dict[str, str] = {}
     for full, lab in lm.items():
@@ -97,6 +100,19 @@ def to_overrides(df: pd.DataFrame, teams) -> tuple[list[dict], list[str]]:
     if time_col is None:
         return [], ["The file needs a start (or time) column."]
 
+    already, placed = set(), defaultdict(int)  # hand Adds there now; (team, week) -> regular ones
+    for _, r in (existing.fillna("").iterrows() if isinstance(existing, pd.DataFrame) else []):
+        act = str(r.get("action", "")).strip().lower()
+        if not act.startswith(("add", "pin", "move", "extra")):
+            continue
+        try:
+            d = pd.to_datetime(str(r["date"]).strip()).date()
+        except (ValueError, TypeError):
+            continue
+        already.add((str(r["team"]).strip(), d, str(r.get("time", "")).strip()))
+        if not act.startswith("extra"):
+            placed[str(r["team"]).strip(), week_start(d)] += 1
+
     rows, problems, seen = [], [], set()
     for i, r in df.iterrows():
         line = f"Row {i + 2}"
@@ -124,8 +140,21 @@ def to_overrides(df: pd.DataFrame, teams) -> tuple[list[dict], list[str]]:
         if key in seen:
             problems.append(f"{line}: {r['team']} is already on {d:%a %b %-d} at {slot}, so it's added once")
             continue
+        if key in already:
+            problems.append(f"{line}: {r['team']} on {d:%a %b %-d} at {slot} was already added by hand, so skipped")
+            continue
         seen.add(key)
         note = str(r.get("note", "")).strip()
         rows.append({"team": team, "action": "Add", "date": f"{d:%m/%d/%Y}", "days": "", "time": slot,
-                     "court": court, "note": note or "from the handwritten sheet"})
+                     "court": court, "note": note or "from the handwritten sheet", "_d": d})
+    per_week = {t.name: getattr(t, "per_week", PRACTICES_PER_WEEK) for t in teams}
+    order = {k: i for i, k in enumerate(SLOT_KEYS)}
+    for r in sorted(rows, key=lambda x: (x["_d"], order.get(x["time"], 99))):
+        wk = (r["team"], week_start(r["_d"]))
+        if placed[wk] >= per_week.get(r["team"], PRACTICES_PER_WEEK):
+            r["action"] = "Extra"  # past the team's weekly number: kept on top of it
+        else:
+            placed[wk] += 1
+    for r in rows:
+        del r["_d"]
     return rows, problems

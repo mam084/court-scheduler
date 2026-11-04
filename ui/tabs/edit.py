@@ -117,21 +117,21 @@ def _import_sheet(cleaned):
         if up is None:
             return
         try:
-            rows, problems = to_overrides(read_rows(up.getvalue(), up.name), cleaned.teams)
+            rows, problems = to_overrides(read_rows(up.getvalue(), up.name), cleaned.teams, S.inp.overrides)
         except Exception as e:  # noqa: BLE001 - a file that won't open at all
             st.error(f"Couldn't read that file: {e}")
             return
-        have = S.inp.overrides.fillna("")
-        dup = set(zip(have["team"], have["date"].astype(str), have["time"].astype(str))) if len(have) else set()
-        fresh = [r for r in rows if (r["team"], r["date"], r["time"]) not in dup]
-        if len(fresh) < len(rows):
-            problems.append(f"{plural(len(rows) - len(fresh), 'practice')} already added by hand, so skipped")
+        fresh = rows
         if problems:
             st.warning("**Not added:**\n" + "\n".join(f"- {p}" for p in problems))
         if not fresh:
             st.caption("Nothing new to add.")
             return
-        st.dataframe(pd.DataFrame(fresh)[["date", "time", "court", "team"]].rename(columns=str.title),
+        n_extra = sum(r["action"] == "Extra" for r in fresh)
+        if n_extra:
+            st.caption(f"{plural(n_extra, 'practice')} past a team's usual number that week "
+                       f"{'goes' if n_extra == 1 else 'go'} in as **extra** practices, on top of the usual ones.")
+        st.dataframe(pd.DataFrame(fresh)[["date", "time", "court", "team", "action"]].rename(columns=str.title),
                      hide_index=True, width="stretch", height=min(360, 38 + 35 * len(fresh)))
         if st.button(f"Add these {plural(len(fresh), 'practice')}", type="primary", width="stretch",
                      key="ed_import_go"):
