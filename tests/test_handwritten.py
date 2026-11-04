@@ -39,3 +39,10 @@ def test_rows_become_add_edits_with_sheet_labels():
                    ("14 Black", "11/29/2026", "11AM", "2"), ("16-D&D", "11/29/2026", "9AM", "7")}
     assert all(r["action"] == "Add" for r in rows)
     assert len(problems) == 3  # the repeat, the unknown team, the bad court
+
+
+def test_short_label_for_one_team():
+    csv = b"date,court,start,team\n2026-12-02,1,17:30,16-D\n2026-12-02,3,17:30,14-X\n"
+    rows, problems = to_overrides(read_rows(csv, "x.csv"), TEAMS)
+    assert [r["team"] for r in rows] == ["16-D&D"]
+    assert len(problems) == 1

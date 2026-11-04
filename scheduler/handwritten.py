@@ -83,7 +83,11 @@ def to_overrides(df: pd.DataFrame, teams) -> tuple[list[dict], list[str]]:
         if _norm(w) in lookup:
             return lookup[_norm(w)]
         hits = lower.get(_norm(w), [])
-        return hits[0] if len(hits) == 1 else None
+        if len(hits) == 1:
+            return hits[0]
+        # A shorter way of writing one team's label ("16-D" for 16-D&D), when it can only mean that one.
+        start = [full for full, lab in lm.items() if _norm(lab).startswith(_norm(w)) and "-" in w]
+        return start[0] if len(start) == 1 else None
 
     need = {"date", "team"}
     missing = need - set(df.columns)
