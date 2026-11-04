@@ -209,7 +209,7 @@ def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str
         cls.append("cs-offpref")
     if not _hit(r, highlight):
         cls.append("cs-dim")
-    name = html.escape(str(r["name"]))
+    name = html.escape(str(r.get("label") or r["name"]))  # prints add short labels; online has none
     coaches = " · ".join(c.strip() for c in str(r.get("coach") or "").split(";") if c.strip())
     style = f"background:{bg};color:{fg};border-left-color:{stripe}"
     paired = _text(r.get("paired"))
@@ -776,7 +776,9 @@ def weeks_print_html(assignments: pd.DataFrame, start: date, end: date, closures
     saved as PDF), each week takes two landscape pages: courts 1-4, then
     courts 5-7 and the practice court. open_for(day_dates) -> open slots
     adds the "Open" boxes, with room to write a name in on paper."""
+    from .labels import with_labels
     a = assignments if show_moved else assignments.assign(on_pattern=True)
+    a = with_labels(a)  # short team labels (S14-B, 16-E) on the printed sheets
     stripes = club_stripes(a["club"]) if "club" in a else {}
     ages = a.loc[a["kind"] == "Practice", "age"] if len(a) else []
     parts = []

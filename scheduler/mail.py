@@ -70,13 +70,52 @@ def coach_rows(practices: pd.DataFrame, teams: list[str]) -> pd.DataFrame:
     return p.rename(columns={"name": "team"})[["team", "date", "slot", "court"]].reset_index(drop=True)
 
 
+def _missing_parts(team: str, missing: list[dict]) -> tuple[list[str], str]:
+    """A team's short weeks: (text lines, html) saying it's missing practices, with open times
+    the coach could add one (and anything in the way, like their own no-date)."""
+    mine = [o for o in missing if o["team"] == team]
+    if not mine:
+        return [], ""
+    lines, items = ["  MISSING PRACTICES"], []
+    for o in sorted(mine, key=lambda o: o["week_of"]):
+        n = o["short"]
+        head = f"Week of {o['week_of']:%b %-d}: {n} practice{'' if n == 1 else 's'} short ({o['target'] - n} of {o['target']})"
+        opts = o.get("options") or []
+        lines.append(f"  {head}")
+        lis = []
+        for x in opts:
+            when = f"{x['date']:%a %b %-d} {x['slot_label']}"
+            note = f" ({'; '.join(x['notes'])})" if x.get("notes") else ""
+            lines.append(f"    open: {when}{note}")
+            lis.append(f"<li>{_h.escape(when)}"
+                       + (f" <span style='color:#8a5a00'>({_h.escape('; '.join(x['notes']))})</span>" if note else "")
+                       + "</li>")
+        if not opts:
+            lines.append("    no open court that week; reply if you'd like help finding a time")
+        items.append(f"<p style='margin:6px 0 2px'><b>{_h.escape(head)}</b></p>"
+                     + (f"<p style='margin:0;color:#555'>Open times you could add one:</p><ul style='margin:2px 0 6px'>"
+                        f"{''.join(lis)}</ul>" if lis else
+                        "<p style='margin:0;color:#555'>No open court that week; reply if you'd like help "
+                        "finding a time.</p>"))
+    lines.append("  To add one, request it in the Court Scheduler.")
+    html_ = (f"<div style='margin:8px 0 4px;padding:8px 12px;background:#fff6e5;border-left:4px solid #e0a100;"
+             f"border-radius:4px'><div style='font-weight:600;color:#8a5a00'>Missing practices</div>{''.join(items)}"
+             f"<p style='margin:6px 0 0;font-size:13px;color:#555'>To add one, request it in the Court Scheduler."
+             f"</p></div>")
+    return lines, html_
+
+
 def practices_email(coach: str, teams: list[str], practices: pd.DataFrame, period: str, version: str,
-                    link: str = "", tournaments: list | None = None) -> tuple[str, str, str]:
+                    link: str = "", tournaments: list | None = None,
+                    missing: list[dict] | None = None) -> tuple[str, str, str]:
     """To one coach: every practice of their teams in a published schedule,
     grouped by team, by date. Travel tournaments for those teams are listed
-    under each team too."""
+    under each team too, and so is any week a team is missing practices
+    (with open times the coach could add one)."""
     rows = coach_rows(practices, teams)
-    subject = f"Your practices: {period}"
+    missing = missing or []
+    short_teams = [t for t in teams if any(o["team"] == t for o in missing)]
+    subject = f"Your practices: {period}" + (" · missing practices" if short_teams else "")
     lines_t, parts_h = [], []
     for team in teams:
         g = rows[rows["team"] == team]
@@ -94,12 +133,17 @@ def practices_email(coach: str, teams: list[str], practices: pd.DataFrame, perio
             lines_t.append(f"  {span}  Tournament: {t.name}")
             items.append(f"<tr><td style='padding:3px 14px 3px 0'><b>{span}</b></td>"
                          f"<td colspan=2 style='padding:3px 0'><b>Tournament:</b> {_h.escape(t.name)}</td></tr>")
+        m_lines, m_html = _missing_parts(team, missing)
+        lines_t += m_lines
         lines_t.append("")
         parts_h.append(f"<h3 style='font-size:16px;margin:16px 0 4px'>{_h.escape(team)} "
                        f"<span style='font-weight:400;color:#666;font-size:13px'>· {len(g)} practices</span></h3>"
                        + (f"<table style='border-collapse:collapse;font-size:14px'>{''.join(items)}</table>"
-                          if items else "<p style='color:#666'>No practices in these dates.</p>"))
+                          if items else "<p style='color:#666'>No practices in these dates.</p>") + m_html)
     intro = f"Hi {coach}, here are your teams' practices for {period} ({version})."
+    if short_teams:
+        intro += (f" {', '.join(short_teams)} {'is' if len(short_teams) == 1 else 'are'} missing practices in "
+                  "some weeks; open times you could add one are listed below.")
     text = intro + "\n\n" + "\n".join(lines_t) + f"\n{'Open the schedule: ' + link if link else ''}\n\n{FOOT}"
     return subject, text, _wrap(f"Practices · {period}", f"<p>{_h.escape(intro)}</p>" + "".join(parts_h), link)
 

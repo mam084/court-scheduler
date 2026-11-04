@@ -16,6 +16,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
+from .labels import label_of, with_labels
 from .config import (
     COURTS,
     PRACTICE_COURT,
@@ -92,7 +93,7 @@ def _txt(v) -> str:
 
 def _what(r, local_coaches: bool) -> str:
     """One booking as it's written on the sheet."""
-    name = html.escape(str(r["name"]))
+    name = html.escape(label_of(r))
     bits = []
     if r["kind"] == "Local" and local_coaches:
         who = " · ".join(c.strip() for c in _txt(r.get("coach")).split(";") if c.strip())
@@ -217,6 +218,7 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
     a = assignments if assignments is not None else pd.DataFrame(columns=["date", "court", "slot", "kind", "name"])
     if len(a):  # one row per local per court is how locals are stored already; practices are one row each
         a = a.drop_duplicates(subset=["date", "slot", "court", "name"])
+    a = with_labels(a)  # short team labels (S14-B, 16-E), as on the club's handwritten sheets
     need_by_week = {}
     if practice_counts is not None and len(practice_counts):
         need_by_week = practice_counts.groupby("week_of")["target"].sum().to_dict()

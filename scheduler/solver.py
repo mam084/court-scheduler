@@ -77,6 +77,9 @@ class ScheduleResult:
     practice_counts: pd.DataFrame = field(default_factory=pd.DataFrame)
     # Practices that had to land on a no-date so the team still got 2 that week.
     broken: list = field(default_factory=list)
+    # Teams short of practices in a week, with open times they could add one:
+    # [{team, week_of, short, target, options: [{date, slot, slot_label, notes}]}]
+    openings: list = field(default_factory=list)
 
     @property
     def shortfalls(self) -> pd.DataFrame:
@@ -312,11 +315,16 @@ def solve(
                         continue  # removed by hand: never put back
                     if any(h in coach_tourn[d, s] for h in team.heads):
                         continue
-                    y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
-                    # No-dates are kept unless it's the only way to get the
-                    # team its 2 practices; then they're broken (and flagged).
+                    # A head coach's no-date is never broken (Nov 2026): an
+                    # assistant covering doesn't count, so that slot stays
+                    # empty and the team is flagged as missing a practice.
                     head_out = [h for h in team.heads
                                 if any(r.kind == "no" and r.matches(d, s) for r in rules_for[h])]
+                    if head_out:
+                        continue
+                    y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
+                    # The team's own no-dates are kept unless it's the only way
+                    # to get the team its 2 practices; then they're broken (and flagged).
                     if team_nos or head_out:
                         free_asst = [a for a in team.assistants if a not in team.heads
                                      and a not in coach_local[d, s]
@@ -739,6 +747,65 @@ def solve(
                         doubles.append(bv)
                         obj.append(-WEIGHTS["double_up"] * bv)
 
+    # Fill every 5:30 court before using 7:20 (Nov 2026): per weekday, each
+    # 7:20 practice that could have fit in an empty 5:30 court costs
+    # "fill_530_first" (min of 5:30 courts left empty and 7:20 practices).
+    # Courts taken by programs or a local tournament don't count as empty.
+    # A coach's second session of a double-up (their other team at 5:30,
+    # this one at 7:20) doesn't count: it can't move up without splitting
+    # the coach's night.
+    partners = defaultdict(set)
+    for t1, t2 in pairs:
+        partners[t1].add(t2)
+        partners[t2].add(t1)
+
+    def fill_530_cost(at_530, at_720, cap, tag, usual=None):
+        """at_530/at_720: {team: var}. Returns the 'wasted 5:30 court' count variable.
+        usual: {team: its usual-week 7:20 var} for real dates: a team on its usual 7:20
+        doesn't count (the usual week already filled 5:30 first), so one week's empty
+        court (a team away at a tournament) doesn't pull a team off its usual week."""
+        usual = usual or {}
+        late_terms = []
+        for t, v in at_720.items():
+            mates = [at_530[a] for a in partners[t] if a in at_530]
+            if t in usual:
+                mates.append(usual[t])
+            if mates:
+                cov = m.NewBoolVar(f"cov720_{tag}_{t}")
+                m.Add(cov <= v)
+                m.Add(cov <= sum(mates))
+                late_terms.append(v - cov)
+            else:
+                late_terms.append(v)
+        empty = m.NewIntVar(0, cap, f"e530_{tag}")
+        m.AddMaxEquality(empty, [cap - sum(at_530.values()), 0])
+        late = m.NewIntVar(0, len(T), f"n720_{tag}")
+        m.Add(late == sum(late_terms))
+        waste = m.NewIntVar(0, cap, f"w530_{tag}")
+        m.AddMinEquality(waste, [empty, late])
+        return waste
+
+    for d in open_dates:
+        if "5:30" not in slots_on(d) or "7:20" not in slots_on(d):
+            continue
+        a_ = {t: y[t, d, "5:30"] for t in T if (t, d, "5:30") in y}
+        b_ = {t: y[t, d, "7:20"] for t in T if (t, d, "7:20") in y}
+        cap = len(courts_on(d, "5:30"))
+        if b_ and cap:
+            usual = {}
+            if d.weekday() < 5 and d not in data.weekends:
+                usual = {t: p[t, DAYS[d.weekday()], "7:20"] for t in b_ if (t, DAYS[d.weekday()], "7:20") in p}
+            obj.append(WEIGHTS["fill_530_first"] * fill_530_cost(a_, b_, cap, d, usual))
+    # The usual week follows the same rule, so practices don't show up as
+    # moved off the usual week every week.
+    for wd in WEEKDAYS:
+        cap = len([c for c in COURTS if not any(
+            lp.on_site and recurring_local(lp, wd, "5:30") and c in lp.courts for lp in data.locals)])
+        a_ = {t: p[t, wd, "5:30"] for t in T if (t, wd, "5:30") in p}
+        b_ = {t: p[t, wd, "7:20"] for t in T if (t, wd, "7:20") in p}
+        if b_ and cap:
+            obj.append(WEIGHTS["fill_530_first"] * fill_530_cost(a_, b_, cap, f"p{wd}"))
+
     # High school boys at 5:30 and 7:20 on the same courts (no net change).
     # Courts are picked in stage 2; here, only the net changes no court
     # arrangement could avoid are priced: e.g. 3 HS boys teams at 5:30 and
@@ -952,6 +1019,56 @@ def solve(
          "short": max(0, targets.get((tm.name, ws), 0) - int(got.get((tm.name, ws), 0)))}
         for tm in teams for ws in sorted(weeks)
     ])
+    # Open times a short team could still add a practice itself: a court is
+    # free and nothing about the team rules it out, except maybe a coach's
+    # no-date or locals program (noted, so the coach can decide).
+    on_day_ = {(t, d) for (t, d, _s) in booked}
+    openings = []
+    for r in practice_counts.itertuples():
+        if r.short <= 0:
+            continue
+        t, ws = idx[r.team], r.week_of
+        team = teams[t]
+        opts = []
+        for d in weeks.get(ws, []):
+            if (t, d) in on_day_ or (team.start and d < team.start) or d in away[team.name]:
+                continue
+            for s in slots_on(d):
+                if not team.allowed(s):
+                    continue
+                free = len(courts_on(d, s)) - len(booked_at.get((d, s), []))
+                if free <= 0:
+                    continue
+                if d in data.weekends and not booked_at.get((d, s)):
+                    continue  # nobody else in that block: never one team alone on a weekend
+                if d.weekday() >= 5 and team.weekend_only and not any(w.matches(d, s) for w in team.weekend_only):
+                    continue
+                if any(h in coach_tourn[d, s] for h in team.heads):
+                    continue
+                if any(t2 != t and set(team.heads) & set(teams[t2].heads) for t2 in booked_at.get((d, s), [])):
+                    continue  # head coach is already coaching another team then
+                team_no = [x for x in rules_for[team.name] if x.kind == "no" and x.matches(d, s)]
+                if any(x.manual for x in team_no):
+                    continue
+                notes = []
+                for h in team.heads:
+                    if any(x.kind == "no" and x.matches(d, s) for x in rules_for[h]):
+                        notes.append(f"{h} marked unavailable")
+                if team_no:
+                    notes.append("team marked unavailable")
+                for c, progs in [(c, programs_of(c, d, s)) for c in team.staff if c in coach_prog[d, s]]:
+                    notes.append(f"{c} works {' / '.join(progs)}")
+                if d in rest_days[team.name]:
+                    tn, when = rest_days[team.name][d]
+                    notes.append(f"day {when} {tn.name}")
+                opts.append({"date": d, "slot": s, "slot_label": SLOTS[s], "notes": notes,
+                             "_k": (d.weekday() >= 5, d in rest_days[team.name], len(notes), d,
+                                    SLOT_KEYS.index(s))})
+        opts.sort(key=lambda o: o["_k"])
+        for o in opts:
+            o.pop("_k")
+        openings.append({"team": team.name, "week_of": ws, "short": int(r.short), "target": int(r.target),
+                         "options": opts[:4]})
     broken_rows = [dict(info, slot_label=SLOTS[info["slot"]], who=_broken_who(info))
                    for k, info in sorted(broken.items(), key=lambda kv: (kv[1]["date"], kv[1]["team"]))
                    if k in set(booked)]
@@ -999,7 +1116,7 @@ def solve(
             ignore_index=True)
     warnings = list(data.warnings) + [n["text"] for n in restore_notes if not n["kept"]]
     return ScheduleResult(status_name, assignments, pattern, issues, metrics, warnings, start, end,
-                          shown_weekends, data.tournaments, practice_counts, broken_rows)
+                          shown_weekends, data.tournaments, practice_counts, broken_rows, openings)
 
 
 def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on, coach_busy, rules_for, away,

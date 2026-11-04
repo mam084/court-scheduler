@@ -106,6 +106,18 @@ def test_practices_email_sorted_by_team_then_date():
     subj, text, html = mail.practices_email("Matthew", ["14 Black", "16 Black"], pr, "Nov 2026", "v1")
     assert text.index("14 Black") < text.index("Mon Nov 2") < text.index("Wed Nov 4") < text.index("16 Black")
     assert "15 Green" not in text and "Court 3" in html
+    assert "missing" not in subj.lower()
+
+
+def test_practices_email_lists_missing_practices_with_open_times():
+    pr = pd.DataFrame([{"name": "14 Black", "date": date(2026, 11, 10), "slot": "7:20", "court": 1}])
+    missing = [{"team": "14 Black", "week_of": date(2026, 11, 8), "short": 1, "target": 2, "options": [
+        {"date": date(2026, 11, 12), "slot": "5:30", "slot_label": "5:30–7:20", "notes": ["Matthew marked unavailable"]},
+        {"date": date(2026, 11, 13), "slot": "7:20", "slot_label": "7:20–9:10", "notes": []}]}]
+    subj, text, html = mail.practices_email("Matthew", ["14 Black"], pr, "Nov 2026", "v1", missing=missing)
+    assert "missing practices" in subj.lower()
+    assert "Week of Nov 8: 1 practice short (1 of 2)" in text
+    assert "Thu Nov 12 5:30–7:20 (Matthew marked unavailable)" in text and "Fri Nov 13" in html
 
 
 def test_request_emails():

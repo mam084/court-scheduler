@@ -44,6 +44,13 @@ def pecking_key(age: int, rank: int | None, boys: bool = False) -> tuple:
     return (-age, 1.5 if rank is None else rank, 0 if boys else 1)
 
 
+# Short labels on the printed sheets (scheduler/labels.py): teams whose
+# usual label would clash with another team's. Full name -> label.
+SHORT_LABEL_OVERRIDES = {
+    "14-Cara": "14-Ca",   # 14-Connor is 14-C
+}
+
+
 def team_is_boys(club, name: str = "") -> bool:
     """A boys-side team: by its club (Seaside / Boys), else its name ('14 Black', '16 Green')."""
     import re
@@ -257,8 +264,17 @@ WEIGHTS = {
     #    can't take it (two weekday practices, even doubled up, win). More than
     #    every preference below put together (a weekday the team didn't ask
     #    for, at a time it didn't ask for, marked not preferred is ~1,800), so
-    #    a weekend never wins over an open weekday just on preferences.
-    "weekend": 2500,
+    #    a weekend never wins over an open weekday just on preferences, even
+    #    with "fill_530_first" on top (~2,800 at most).
+    "weekend": 3000,
+    # 7b. Fill every 5:30 court before using 7:20 (Nov 2026). Per 7:20
+    #    practice that could have been in an empty 5:30 court that day.
+    #    More than every time preference put together (wishlist time + "rather
+    #    not" + age fit, ~600), so a team that asked for 7:20 still moves up to
+    #    an empty 5:30 that day. Low enough that, added to a weekday the team
+    #    didn't want, it still never pushes a team onto a weekend (or into a
+    #    sub, or onto a no-date).
+    "fill_530_first": 1000,
     # 8. Preferred days: the wishlist's days and days marked not preferred.
     "wish_day_miss": 600,
     "not_preferred_day": 550,

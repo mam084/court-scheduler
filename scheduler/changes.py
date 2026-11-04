@@ -42,6 +42,10 @@ def snapshot(result, label: str, note: str = "") -> dict:
         "end": result.end.isoformat() if result.end else None,
         "practices": [{k: _iso(v) for k, v in r.items()} for r in pr.to_dict(orient="records")],
         "pattern": [{k: _iso(v) for k, v in r.items()} for r in pt.to_dict(orient="records")],
+        # Teams short of practices, with open times they could add one (for the coaches' emails)
+        "missing": [dict(o, week_of=_iso(o["week_of"]),
+                         options=[dict(x, date=_iso(x["date"])) for x in o["options"]])
+                    for o in getattr(result, "openings", None) or []],
     }
 
 
@@ -59,6 +63,16 @@ def practices_of(version: dict) -> pd.DataFrame:
     else:
         df["kind"] = []
     return df
+
+
+def missing_of(version: dict) -> list[dict]:
+    """A published version's short weeks (team, week_of, short, target, options) with real dates."""
+    from datetime import date as _date
+    out = []
+    for o in version.get("missing", []) or []:
+        out.append(dict(o, week_of=_date.fromisoformat(str(o["week_of"])[:10]),
+                        options=[dict(x, date=_date.fromisoformat(str(x["date"])[:10])) for x in o.get("options", [])]))
+    return out
 
 
 def pattern_of(version: dict) -> pd.DataFrame:

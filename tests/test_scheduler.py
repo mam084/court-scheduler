@@ -571,20 +571,22 @@ def test_views_always_show_weekends():
     assert ">Sun<" in cal and ">Sat<" in cal
 
 
-def test_no_dates_broken_only_as_last_resort_head_coach_first():
-    """When no-dates leave fewer than 2 days, the head coach's no-date is
-    broken first on a day an assistant is free; hand removals never are."""
+def test_head_coach_no_dates_never_broken_team_flagged_with_openings():
+    """A head coach's no-date is never broken, even with an assistant free (Nov 2026): the team
+    comes up short, and the open times it could add one (with the no-date noted) are listed."""
     teams = [{"team": "15-Kit", "age": 15, "head_coach": "Kit", "assistants": "Ash"}]
     avail = [{"who": "Kit", "type": "No", "dates": "11/9-11/12"},    # head out Mon-Thu
              {"who": "Ash", "type": "No", "dates": "11/9-11/10"},    # assistant out Mon-Tue
              {"who": "15-Kit", "type": "No", "dates": "11/13"}]      # team out Fri
     r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
     wk = r.assignments[r.assignments["date"].between(date(2026, 11, 9), date(2026, 11, 13))]
-    assert len(wk) == 2 and r.shortfalls.empty
-    # Wed/Thu: only Kit's no-date is broken, and Ash is free to run it.
-    assert set(wk["day"]) <= {"Wed", "Thu"}
-    assert all(b["head_out"] == ["Kit"] and b["free_asst"] == ["Ash"] and not b["team_out"] for b in r.broken)
-    assert len(r.broken) == 2
+    assert set(wk["day"]) <= {"Fri"}  # only the team's own no-date can still give way
+    assert all(not b["head_out"] for b in r.broken)
+    short = r.shortfalls
+    assert ((short["team"] == "15-Kit") & (short["week_of"] == date(2026, 11, 8))).any()
+    op = [o for o in r.openings if o["team"] == "15-Kit" and o["week_of"] == date(2026, 11, 8)]
+    assert op and op[0]["options"]
+    assert all("Kit marked unavailable" in x["notes"] for x in op[0]["options"])
 
 
 def test_second_weekend_practice_avoided():
@@ -750,7 +752,7 @@ def test_calendar_shows_local_tournament_on_closed_weekend():
 
 def test_breaking_a_no_date_beats_practicing_next_to_a_tournament():
     """Only Tue and Fri (the day before a Sat-Sun tournament) are free that
-    week. A no-date on Wed is broken instead of practicing Friday."""
+    week. A no-date is broken instead of practicing Friday."""
     teams = [{"team": "16-Ana", "age": 16, "head_coach": "Ana"}]
     avail = [{"who": "16-Ana", "type": "No", "dates": "11/9"},
              {"who": "16-Ana", "type": "No", "dates": "11/12"},
@@ -763,7 +765,8 @@ def test_breaking_a_no_date_beats_practicing_next_to_a_tournament():
     assert len(wk) == 2 and r.shortfalls.empty
     assert date(2026, 11, 13) not in set(wk["date"])            # not the day before
     assert date(2026, 11, 16) not in set(pr["date"])            # nor the day after
-    assert [(b["date"], b["head_out"]) for b in r.broken] == [(date(2026, 11, 11), ["Ana"])]
+    # Ana's own no-date (Wed) is never broken now; the team's Thu no-date gives way instead.
+    assert [(b["date"], b["head_out"], b["team_out"]) for b in r.broken] == [(date(2026, 11, 12), [], True)]
 
 
 def test_saturday_then_sunday_avoided():
@@ -833,10 +836,10 @@ def test_late_starting_team_template_follows_wishlist():
     # Starts on the last Saturday: only one weekday in range, but its usual
     # week should still be the Tue/Thu it asked for.
     teams = [{"team": "17-Lin", "age": 17, "start_date": "11/28/2026"}, {"team": "16-Bo", "age": 16}]
-    wish = [{"team": "17-Lin", "choice": 1, "days": "Tue, Thu", "times": "7:20"}]
+    wish = [{"team": "17-Lin", "choice": 1, "days": "Tue, Thu", "times": "5:30"}]
     r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=10)
     lin = r.pattern[r.pattern["team"] == "17-Lin"]
-    assert set(zip(lin["day"], lin["slot"])) == {("Tue", "7:20"), ("Thu", "7:20")}
+    assert set(zip(lin["day"], lin["slot"])) == {("Tue", "5:30"), ("Thu", "5:30")}
 
 
 def test_back_to_back_weekdays_when_asked_for():
@@ -931,14 +934,12 @@ def test_rule_order():
     """The club's order, most important first: each rule outweighs at least
     two breaks of the next one down."""
     from scheduler.config import WEIGHTS as W
-    order = [W["missed_practice"], W["tournament_rest"], W["break_team_nodate"], W["break_head_and_asst"],
-             W["break_head_nodate"], W["assistant_nodate"], W["locals_sub"], W["weekend"],
+    order = [W["missed_practice"], W["tournament_rest"], W["break_team_nodate"],
+             W["assistant_nodate"], W["locals_sub"], W["weekend"], W["fill_530_first"],
              W["wish_day_miss"], W["wish_time_miss"], W["sat_sun"] + W["consecutive_days"],
              W["second_weekend"], W["consecutive_days"]]
     for hi, lo in zip(order, order[1:]):
         assert hi > lo, (hi, lo)
-    # Head coach vs assistant: two assistant no-dates still cost less.
-    assert W["break_head_nodate"] > 1.8 * W["assistant_nodate"]
     # A sub is asked for before any no-date is broken; a weekend before a sub.
     assert W["assistant_nodate"] > W["locals_sub"] > W["weekend"]
     # Days before times, for both the wishlist and not-preferred.
@@ -1159,6 +1160,8 @@ def test_one_off_no_date_doesnt_move_the_usual_week():
         played = weekly[weekly["name"] == p.team]
         full = played.groupby("wk").size()
         full = set(full[full == 2].index)
+        if len(full) < 3:
+            continue  # a late starter whose only weeks are disrupted (a no-date, Thanksgiving) proves nothing
         hits = played[(played["day"] == p.day) & (played["slot"] == p.slot) & played["wk"].isin(full)]
         assert len(hits) * 2 >= len(full), (p.team, p.day, p.slot, len(hits), len(full))
 
@@ -1463,7 +1466,7 @@ def test_paper_print_has_every_slot_as_a_line():
     assert h.count('<section class="cs-week">') == 2 * weeks
     assert "7:20-9:10" in h and "9-11" in h and "Boys Local" in h
     assert "needed" not in h and 'class="foot"' not in h   # practice counts are off for now
-    assert "16-Bea" in h
+    assert "16-B" in h and "16-Bea" not in h   # short labels on the printed sheets
 
 
 def test_weekend_teams_fill_one_block_before_opening_another():
@@ -1786,7 +1789,8 @@ def test_color_calendar_one_week_a_page():
     pr = r.assignments[r.assignments["kind"] == "Practice"]
     assert h.count('class="pw-c') >= len(pr) and "Christmas" in h
     t = pr.iloc[0]
-    assert t["name"] in h and str(t["coach"]).split(";")[0].strip() in h
+    from scheduler.labels import short_label
+    assert short_label(t["name"], t["club"]) in h and str(t["coach"]).split(";")[0].strip() in h
 
 
 def test_paper_tournaments_on_first_page_and_locals_share_a_line():
@@ -1800,3 +1804,41 @@ def test_paper_tournaments_on_first_page_and_locals_share_a_line():
     first, second = h.split('class="cs-week"')[1:3]
     assert '<span class="note">Boys Local / Girls Local</span>' in first and "Far Away Cup (travel)" in first
     assert 'class="note"' not in second and "Girls Local" in second      # still on the court it uses
+
+
+def test_fill_530_before_720():
+    """Four 16s teams, all asking for 7:20: with 5:30 courts empty, they practice at 5:30 (Nov 2026)."""
+    teams = [{"team": f"16-F{i}", "age": 16, "head_coach": f"F{i}"} for i in range(4)]
+    wish = [{"team": t["team"], "choice": 1, "days": "Tue, Thu", "times": "7:20"} for t in teams]
+    r = solve(_inp(teams, wishlist=wish), date(2026, 11, 8), date(2026, 11, 14), time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    for d, g in pr.groupby("date"):
+        n530, n720 = (g["slot"] == "5:30").sum(), (g["slot"] == "7:20").sum()
+        assert n720 == 0 or n530 >= 7, (d, n530, n720)
+
+
+def test_short_labels_for_print():
+    from scheduler.labels import label_map
+    got = label_map([("14-Connor", "SDVBC"), ("14-Cara", "SDVBC"), ("16-Edgar", "SDVBC"),
+                     ("14 Black", "Seaside"), ("16 Green", "Seaside"), ("16-D&D", "SDVBC"),
+                     ("15-Tyler", "SDVBC"), ("15-Tom", "SDVBC")])
+    assert got["14-Connor"] == "14-C" and got["14-Cara"] == "14-Ca" and got["16-Edgar"] == "16-E"
+    assert got["14 Black"] == "S14-B" and got["16 Green"] == "S16-G" and got["16-D&D"] == "16-D&D"
+    assert got["15-Tyler"] != got["15-Tom"]
+
+
+def test_prints_use_short_labels_online_does_not():
+    from scheduler.paper import paper_weeks_html
+    from scheduler.prints import calendar_print_html
+    from scheduler.views import court_grid_html, week_dates
+    a = pd.DataFrame([{"date": date(2026, 11, 10), "day": "Tue", "slot": "5:30", "slot_label": "5:30–7:20",
+                       "court": 1, "kind": "Practice", "name": "14-Connor", "club": "SDVBC", "age": 14,
+                       "coach": "Connor", "head": "Connor", "on_pattern": True},
+                      {"date": date(2026, 11, 10), "day": "Tue", "slot": "7:20", "slot_label": "7:20–9:10",
+                       "court": 1, "kind": "Practice", "name": "14 Black", "club": "Seaside", "age": 14,
+                       "coach": "Matthew", "head": "Matthew", "on_pattern": True}])
+    start, end = date(2026, 11, 8), date(2026, 11, 14)
+    for h in (paper_weeks_html(a, start, end), calendar_print_html(a, start, end)):
+        assert "14-C" in h and "S14-B" in h and "14-Connor" not in h
+    online = court_grid_html(a, week_dates(start, start, end, []))
+    assert "14-Connor" in online and "S14-B" not in online

@@ -6,6 +6,10 @@ Each team practices twice a week (or as many times as it asks for) on one of cou
 
 ![Court view](docs/court_view.png)
 
+## Printed sheets
+
+The print views (paper court sheets, the printable calendars, every team's dates) use the club's short labels: boys teams get an S (`14 Black` → **S14-B**, `16 Green` → **S16-G**), girls teams the head coach's initial (`16-Edgar` → **16-E**). Clashes are set in `SHORT_LABEL_OVERRIDES` in [`scheduler/config.py`](scheduler/config.py) (`14-Cara` → **14-Ca**, so `14-Connor` stays **14-C**). The online calendar keeps full names.
+
 ## How it works
 
 This is a **constraint-optimization** problem, not a machine-learning one, so it needs no training data: the club spreadsheet is the input, and the tool works the day it exists. Until then, a built-in simulator generates a realistic club (teams, coaches, locals, no-dates) to test against.
@@ -20,6 +24,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - On-site locals block their courts; off-site programs block only their coaches
 - One team per court per timeslot, except pairing (3 teams on 2 courts), which is a last resort (below)
 - A head coach is never on two teams at once, or on a team during a local tournament they work
+- **A head coach's no-dates/times are never broken** (Nov 2026), even when an assistant could run practice. That slot stays empty, the team is flagged as missing a practice, and the coach's email lists open times they could add one
 - Nothing on closure days, before a team's season start, or where a practice was removed by hand
 - At most the team's weekly number of practices (2 unless it asked for more), plus any extra practices added by hand
 - Only 14s and under practice at 3:45, and 14s and under never practice at 7:20 (unless the team is marked `late_ok`, and then only when needed)
@@ -35,11 +40,12 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 1. **Every team gets its 2 practices a week.** Older teams win if courts run out, and shortfalls are spread so teams keep at least 1. A team that asked for more (Teams `practices` column, or **Practices per week** in Edit practices) gets its 3rd+ wherever there's room without breaking rules 2–6.
 2. **No practice the day before or after a travel tournament** (a late one the night before is worse). The week leading in gets priority for 2 practices.
 3. **The team's own no-dates.**
-4. **The head coach's no-dates/times** (worse when no assistant is free to run practice).
+4. *(The head coach's no-dates/times are now a hard rule, above.)*
 5. **An assistant's no-dates/times** (the head coach runs practice). Put the assistant's own name in the Availability `who` column; a team row whose note names an assistant gets a reminder.
 6. **A coach who works a locals program then** (head or assistant): the practice can still happen, flagged *Needs a sub: possible if Matthew gets a sub for B 14 L*, so a sub is asked for before any no-date is broken. An assistant on two teams at once costs the same.
    - **Pairing** (3 teams sharing 2 courts) is the absolute last option: only when there's no court space left and the alternative is a team missing one of its 2 practices. Breaking no-dates, practicing next to a tournament, weekends and subs all come first, and it's never used for a 3rd practice. Paired practices are flagged at the top of the page and in Review, and tagged *Paired · 3 on 2* on the court view.
 7. **Weekdays before weekends.** Two weekday practices, even doubled up, beat a weekend plus a weekday.
+   - **Fill every 5:30 court before using 7:20** (Nov 2026). Outranks every time preference below (a team that asked for 7:20 moves up while a 5:30 court is empty that day), but never pushes a team onto a weekend, into a sub or onto a no-date.
 8. **Preferred days** (wishlist days, days marked not preferred).
 9. **Preferred times** (wishlist times, times marked not preferred, 3:45 a bit more; weekend AM/PM).
 10. **No Saturday then Sunday** (always flagged).

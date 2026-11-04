@@ -7,7 +7,7 @@ import streamlit as st
 
 from scheduler import access, gcal, mail
 from scheduler import google as gsvc
-from scheduler.changes import add_version, diff, practices_of, published_at, snapshot
+from scheduler.changes import add_version, diff, missing_of, practices_of, published_at, snapshot
 from scheduler.data import COLUMNS
 from scheduler.storage import MAIN_ID
 from scheduler.views import range_label
@@ -33,8 +33,9 @@ def coach_list(ver: dict | None = None) -> list[str]:
             if c not in out:
                 out.append(c)
     if ver is not None and cleaned is not None:
-        pr_ = practices_of(ver)
-        out = [c for c in out if len(mail.coach_rows(pr_, mail.teams_of(c, cleaned.teams)))]
+        pr_, short_ = practices_of(ver), {o["team"] for o in missing_of(ver)}
+        out = [c for c in out if len(mail.coach_rows(pr_, mail.teams_of(c, cleaned.teams)))
+               or short_ & set(mail.teams_of(c, cleaned.teams))]
     return out
 
 
@@ -51,18 +52,18 @@ def email_practices(ver: dict, coaches: list[str], only_me: bool, progress=None)
     store, APP_LINK, VIEWER, start, end, cleaned = S.store, S.APP_LINK, S.VIEWER, S.start, S.end, S.cleaned
     emails = access.coach_emails(store.users(), cleaned.roster if cleaned else {})
     me_ = VIEWER.person.email if VIEWER.person else ""
-    pr_ = practices_of(ver)
+    pr_, missing_ = practices_of(ver), missing_of(ver)
     sent, problems = 0, []
     for i, c in enumerate(coaches):
         teams_ = mail.teams_of(c, cleaned.teams)
-        if not len(mail.coach_rows(pr_, teams_)):
+        if not len(mail.coach_rows(pr_, teams_)) and not any(o["team"] in teams_ for o in missing_):
             continue  # no travel practices in this version (e.g. only works locals programs): no email
         to = me_ if only_me else emails.get(c, "")
         if not to:
             problems.append(f"{c}: no email (add them in Access)")
             continue
         subj, text, html_ = mail.practices_email(c, teams_, pr_, range_label(start, end), ver["label"], APP_LINK,
-                                                 _in_dates(cleaned.tournaments))
+                                                 _in_dates(cleaned.tournaments), missing_)
         if only_me:
             subj = f"[Test: {c}'s email] {subj}"
         err = send_mail([to], (subj, text, html_))
@@ -207,7 +208,7 @@ def _emails():
             subj_, _t, html_p = mail.practices_email(pc_, mail.teams_of(pc_, cleaned.teams),
                                                      practices_of(published[e_vi]), range_label(start, end),
                                                      published[e_vi]["label"], APP_LINK,
-                                                     _in_dates(cleaned.tournaments))
+                                                     _in_dates(cleaned.tournaments), missing_of(published[e_vi]))
             st.caption(f"To: {emails_.get(pc_, '(no email)')} · Subject: {subj_}")
             st.html(html_p)
     sure_ = e_me or st.checkbox(f"Yes, email {plural(len([c for c in e_who if c in emails_]), 'coach', 'coaches')}",

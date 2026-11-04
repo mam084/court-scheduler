@@ -15,6 +15,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from .config import SLOT_KEYS, WEEK_ORDER, court_short, team_is_boys, week_start
+from .labels import label_map, label_of, short_label, with_labels
 from .views import PRINT_BUTTON, _text, courts_label
 
 GIRLS, BOYS, LOCAL = "#2563EB", "#2E7D32", "#E0B45A"  # programs on neither side: butterscotch
@@ -149,13 +150,14 @@ def _cal_line(r) -> str:
         cls = ""
     extra = " +" if r.get("extra") == True else ""  # noqa: E712
     return (f'<div class="pc-ln{cls}"><span class="pc-ct">{html.escape(ct)}</span>'
-            f'<span class="pc-nm" style="border-color:{color}">{html.escape(str(r["name"]))}{extra}</span></div>')
+            f'<span class="pc-nm" style="border-color:{color}">{html.escape(label_of(r))}{extra}</span></div>')
 
 
 def _by_date(assignments: pd.DataFrame, include_locals: bool, highlight) -> dict:
     """{date: bookings in time order (practices by court, then programs)}; one row per program
     and time, with its courts in `courts_text`."""
     from .views import _hit
+    assignments = with_labels(assignments)  # short team labels (S14-B, 16-E) on the printed sheets
     df = assignments if include_locals else assignments[assignments["kind"] == "Practice"]
     if len(df) and include_locals and (df["kind"] == "Local").any():
         loc = df["kind"] == "Local"
@@ -293,14 +295,14 @@ def _pretty_chip(r) -> str:
     sub = " · ".join([x for x in [sub] + tags if x])
     moved = r["kind"] != "Local" and r.get("on_pattern") is False
     return (f'<div class="pw-c{" pw-x" if moved else ""}" style="background:{bg};color:{fg};border-color:{stripe}">'
-            f'<span class="pw-ct">{html.escape(ct)}</span><span class="pw-nm"><b>{html.escape(str(r["name"]))}</b>'
+            f'<span class="pw-ct">{html.escape(ct)}</span><span class="pw-nm"><b>{html.escape(label_of(r))}</b>'
             + (f"<span>{html.escape(sub)}</span>" if sub else "") + "</span></div>")
 
 
 def _pretty_tourn(tn) -> str:
     from .views import CLUB_STRIPES, LOCAL_COLORS, OTHER_STRIPE, SIDE_COLORS
     if tn.kind == "travel":
-        teams = f"<span>{html.escape(', '.join(tn.teams))}</span>" if tn.teams else ""
+        teams = f"<span>{html.escape(', '.join(short_label(t) for t in tn.teams))}</span>" if tn.teams else ""
         return f'<div class="pw-tn pw-travel">✈ {html.escape(tn.label())}{teams}</div>'
     side = getattr(tn, "side", "") or ""
     bg, fg = SIDE_COLORS.get(side, LOCAL_COLORS)
@@ -497,6 +499,12 @@ def team_dates_print_html(result, closures: dict | None = None, order: list[str]
                 h = _text(h)
                 who[t] = ([h] if h else []) + [x for x in names if x != h]
     who.update(coaches or {})
+    clubs = {}
+    for src, col in ((result.pattern, "team"), (pr, "name")):
+        if len(src) and "club" in src:
+            for t, c in zip(src[col], src["club"]):
+                clubs.setdefault(t, c)
+    labels = label_map((t, clubs.get(t)) for t in teams)
 
     practice_days = {}
     for t, d in zip(pr["name"], pr["date"]) if len(pr) else []:
@@ -551,7 +559,7 @@ def team_dates_print_html(result, closures: dict | None = None, order: list[str]
                 continue
             cells.append(f'<td class="pt-p{cls}">{d.day if d in my_p else ""}</td>')
             k += 1
-        body.append(f'<tr><td class="pt-coach">{coach}</td><td class="pt-team">{html.escape(str(t))}</td>'
+        body.append(f'<tr><td class="pt-coach">{coach}</td><td class="pt-team" title="{html.escape(str(t))}">{html.escape(labels.get(t, str(t)))}</td>'
                     f'{"".join(cells)}<td class="pt-n">{len(my_p) or ""}</td></tr>')
 
     span = f"{start:%b %-d} – {end:%b %-d, %Y}" if (start.year, start.month) != (end.year, end.month) \
