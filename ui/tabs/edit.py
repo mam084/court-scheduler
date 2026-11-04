@@ -105,6 +105,39 @@ def _not_scheduled(d):
         st.caption(f"{d:%b %-d} isn't scheduled yet: this goes in when it is.")
 
 
+def _import_sheet(cleaned):
+    """Add many practices at once from a CSV/Excel list copied off the handwritten court sheets."""
+    from scheduler.handwritten import read_rows, to_overrides
+    with st.expander("Import practices from a list (CSV or Excel)"):
+        st.caption("One practice a row with columns **date, court, start, team** (an optional **note** too). "
+                   "Teams can be written the sheet's way (S14-B, 16-E) or by full name. Each one is added as a "
+                   "hand edit, so it stays exactly where the list puts it.")
+        up = st.file_uploader("Practice list", type=["csv", "xlsx"], key="ed_import_file",
+                              label_visibility="collapsed")
+        if up is None:
+            return
+        try:
+            rows, problems = to_overrides(read_rows(up.getvalue(), up.name), cleaned.teams)
+        except Exception as e:  # noqa: BLE001 - a file that won't open at all
+            st.error(f"Couldn't read that file: {e}")
+            return
+        have = S.inp.overrides.fillna("")
+        dup = set(zip(have["team"], have["date"].astype(str), have["time"].astype(str))) if len(have) else set()
+        fresh = [r for r in rows if (r["team"], r["date"], r["time"]) not in dup]
+        if len(fresh) < len(rows):
+            problems.append(f"{plural(len(rows) - len(fresh), 'practice')} already added by hand, so skipped")
+        if problems:
+            st.warning("**Not added:**\n" + "\n".join(f"- {p}" for p in problems))
+        if not fresh:
+            st.caption("Nothing new to add.")
+            return
+        st.dataframe(pd.DataFrame(fresh)[["date", "time", "court", "team"]].rename(columns=str.title),
+                     hide_index=True, width="stretch", height=min(360, 38 + 35 * len(fresh)))
+        if st.button(f"Add these {plural(len(fresh), 'practice')}", type="primary", width="stretch",
+                     key="ed_import_go"):
+            apply_overrides(fresh, f"Added {plural(len(fresh), 'practice')} from {up.name}.")
+
+
 def render():
     """Edit practices section."""
     VIEWER, CAN, inp, result, cleaned = S.VIEWER, S.CAN, S.inp, S.result, S.cleaned
@@ -399,6 +432,7 @@ def render():
                                     f"{e_team} now practices {' & '.join(ud)} at {us}.", backup=original)
 
         if CAN:
+            _import_sheet(cleaned)
             st.subheader("Manual changes")
         ov = inp.overrides.fillna("")
         if not CAN:
