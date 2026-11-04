@@ -2025,3 +2025,24 @@ def test_back_to_back_only_free_for_two_day_wishes():
     from scheduler.solver import _asked_pairs
     assert ("Tue", "Wed") in _asked_pairs([Wish("14 Black", 1, ["Tue", "Wed"], {"5:30"})])
     assert ("Tue", "Wed") not in _asked_pairs([Wish("16-A", 1, ["Mon", "Tue", "Wed", "Thu"], {"5:30"})])
+
+
+def test_coach_at_a_travel_tournament_cant_coach_another_team_that_day():
+    """Tyler heads 18 Black (at a Fri-Sun tournament) and 15-Tyler: no 15-Tyler practice on the
+    Friday (Nov 2026); an assistant away with another team is flagged, the head coach runs it."""
+    teams = [{"team": "18 Black", "club": "Seaside", "age": 18, "head_coach": "Tyler"},
+             {"team": "15-Tyler", "age": 15, "head_coach": "Tyler", "assistants": "Teun"},
+             {"team": "15 Black", "club": "Seaside", "age": 15, "head_coach": "Miles", "assistants": "Teun"}]
+    # 15-Tyler can only practice Fri that week (team no-dates Mon-Thu), so it'd love the Friday.
+    avail = [{"who": "15-Tyler", "type": "No", "dates": "12/7-12/10"}]
+    wish = [{"team": "15-Tyler", "choice": 1, "days": "Fri", "times": "5:30"},
+            {"team": "15 Black", "choice": 1, "days": "Fri", "times": "5:30"}]
+    inp = _with_tournaments(_inp(teams, avail, wishlist=wish), [
+        {"name": "SoCal Cup", "type": "Travel", "start_date": "12/11/2026", "end_date": "12/13/2026",
+         "teams": "18 Black"}])
+    r = solve(inp, date(2026, 12, 6), date(2026, 12, 12), time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert date(2026, 12, 11) not in set(pr[pr["name"] == "15-Tyler"]["date"])
+    op = [o for o in r.openings if o["team"] == "15-Tyler"]
+    assert all(x["date"] != date(2026, 12, 11) or any("Tyler" in n for n in x["notes"])
+               for o in op for x in o["options"])

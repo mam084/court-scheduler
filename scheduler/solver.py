@@ -64,7 +64,7 @@ from .config import (
 )
 from .coach_load import team_back_to_back
 from .config import week_start as _week_start
-from .data import CleanInput, ScheduleInput, clean, span_text, tournament_conflicts
+from .data import CleanInput, Rule, ScheduleInput, clean, span_text, tournament_conflicts
 
 
 @dataclass
@@ -242,6 +242,15 @@ def solve(
     rules_for = defaultdict(list)
     for r in data.rules:
         rules_for[r.who].append(r)
+    # A coach at a travel tournament with one team can't coach another team those days (Nov
+    # 2026): each tournament day counts as that coach's own no-date. For a head coach that's
+    # never broken; for an assistant the head coach runs practice (flagged).
+    for tn in travel_tourn:
+        for tm in data.teams:
+            if tm.name in tn.teams:
+                for c in tm.staff:
+                    rules_for[c].append(Rule(c, "no", [], [(tn.start, tn.end)], None,
+                                             f"coaching {tm.name} at {tn.name}"))
 
     m = cp_model.CpModel()
     obj = []
@@ -271,6 +280,11 @@ def solve(
             problems.append(f"{label}: Court {pn.court} is taken by a program or tournament")
         elif (t, d, s) in pinned:
             problems.append(f"{label}: that team already has a practice placed then")
+        elif any(tn.covers(d) and any(h in tm.staff for tm in teams if tm.name in tn.teams)
+                 for tn in travel_tourn for h in teams[t].heads if pn.team not in tn.teams):
+            tn_ = next(tn for tn in travel_tourn if tn.covers(d) and pn.team not in tn.teams
+                       and any(h in tm.staff for tm in teams if tm.name in tn.teams for h in teams[t].heads))
+            problems.append(f"{label}: the head coach is at {tn_.name} with another team")
         else:
             pinned[(t, d, s)] = pn.court
     by_slot = defaultdict(list)
