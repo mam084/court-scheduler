@@ -37,18 +37,20 @@ from itertools import permutations
 import pandas as pd
 from ortools.sat.python import cp_model
 
+from . import config as _cfg
+from .coach_load import team_back_to_back
 from .config import (
     COURT_COST,
-    PECKING_COURT_COST,
     COURT_RANK,
     COURTS,
     DAYS,
     NET_12S,
     NET_MEN,
     NET_WOMEN,
-    SLOT_TIMES,
+    PECKING_COURT_COST,
     PRACTICES_PER_WEEK,
     SLOT_KEYS,
+    SLOT_TIMES,
     SLOTS,
     WEEKDAY_KEYS,
     WEEKDAYS,
@@ -58,13 +60,11 @@ from .config import (
     day_in_week,
     is_late_exception,
     net_height,
-    team_is_boys,
     pecking_weights,
     slot_cost,
     slots_overlap,
+    team_is_boys,
 )
-from . import config as _cfg
-from .coach_load import team_back_to_back
 from .config import week_start as _week_start
 from .data import CleanInput, Rule, ScheduleInput, clean, span_text, tournament_conflicts
 

@@ -251,7 +251,8 @@ WEIGHTS = {
     # The club's rule order, most important first (Oct 2026). Each step costs
     # roughly 2-4x the one below it, so one break of a higher rule outweighs
     # several of the next one down (e.g. two assistant no-dates still cost
-    # less than one head coach's). Never one team alone at any time (Nov 2026: any day, not just weekends), head coaches never double-booked,
+    # less than one head coach's). Never one team alone at any time (Nov 2026: any day, not
+    # just weekends), head coaches never double-booked,
     # age/timeslot rules, one team per court and 2 practices a week max are
     # hard rules, above all of these.
     #
