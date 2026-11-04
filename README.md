@@ -26,7 +26,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - On-site locals block their courts; off-site programs block only their coaches
 - One team per court per timeslot, except pairing (3 teams on 2 courts), which is a last resort (below)
 - A head coach is never on two teams at once, or on a team during a local tournament they work
-- **A coach at a travel tournament with one team can't coach another team those days** (Nov 2026): each tournament day counts as that coach's no-date (never broken for a head coach; an assistant's is flagged and the head coach runs practice). A hand-placed practice that breaks this is refused
+- **A coach at a travel tournament with one team can't coach another team those days** (Nov 2026): each tournament day counts as that coach's no-date (never broken for a head coach; an assistant's is flagged and the head coach runs practice). Nov 2026: an assistant missing practice for a tournament is worse than a late practice the night before it, so the team moves to that night (Thu 7:20 ahead of a Friday tournament) as a last resort, after every other open time and a weekend. A hand-placed practice that breaks this is refused
 - **A head coach's no-dates/times are never broken** (Nov 2026), even when an assistant could run practice. That slot stays empty, the team is flagged as missing a practice, and the coach's email lists open times they could add one
 - Nothing on closure days, before a team's season start, or where a practice was removed by hand
 - At most the team's weekly number of practices (2 unless it asked for more), plus any extra practices added by hand

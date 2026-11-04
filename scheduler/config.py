@@ -275,6 +275,13 @@ WEIGHTS = {
     "break_head_and_asst": 20000,
     "break_head_nodate": 15000,
     "assistant_nodate": 8000,
+    # An assistant away at a travel tournament with another team (Nov 2026): worse than a late
+    # practice the night before their tournament ("coach_late_eve"), so the team moves to the
+    # night before (Thu 7:20 ahead of a Friday tournament) rather than practice without them.
+    # Still a last resort: above everything but missed practices, a team's own no-date, pairing
+    # and resting next to the team's own tournament, and enough above "coach_late_eve" to cover the
+    # small costs a late practice can carry with it (a back-to-back day, an empty 5:30).
+    "assistant_at_tournament": 29000,
     # 6. A coach (head or assistant) who works a locals program then: possible
     #    if they get a sub for the program, and flagged so. Below every
     #    no-date break, so a sub is asked for before a no-date is broken.

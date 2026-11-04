@@ -2083,3 +2083,30 @@ def test_no_coach_gap_between_program_and_team():
     for row in pr.itertuples():
         if row.day in ("Mon", "Wed"):
             assert row.slot != "7:20", row
+
+
+def _leo_case(thu_530_open: bool):
+    """15-Olivia (assistant Leo) can practice Mon, Thu or Fri; Leo heads 15 Black, at a travel
+    tournament Fri Nov 20."""
+    teams = [{"team": "15 Black", "age": 15, "head_coach": "Leo", "club": "Boys"},
+             {"team": "15-Olivia", "age": 15, "head_coach": "Olivia", "assistants": "Leo", "club": "Girls"}]
+    avail = [{"who": "15-Olivia", "type": "no", "days": "Tue, Wed"}]
+    if not thu_530_open:
+        avail.append({"who": "15-Olivia", "type": "no", "days": "Thu", "times": "5:30"})
+    inp = _with_tournaments(_inp(teams, availability=avail), [
+        {"name": "Turkey Classic", "type": "Travel", "start_date": "11/20/2026", "end_date": "11/20/2026",
+         "teams": "15 Black"}])
+    r = solve(inp, *NOV, time_limit_s=15)
+    _check_hard_rules(inp, r)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    wk = pr[(pr["name"] == "15-Olivia") & pr["date"].between(date(2026, 11, 16), date(2026, 11, 20))]
+    return sorted(zip(wk["date"], wk["slot"]))
+
+
+def test_assistant_at_tournament_late_practice_beats_missing():
+    # Thu 5:30 is out: Thu 7:20 the night before Leo's tournament, not Fri without Leo.
+    assert (date(2026, 11, 19), "7:20") in _leo_case(thu_530_open=False)
+    assert not any(d == date(2026, 11, 20) for d, _ in _leo_case(thu_530_open=False))
+    # The late practice is a last resort: with Thu 5:30 open it goes there.
+    got = _leo_case(thu_530_open=True)
+    assert (date(2026, 11, 19), "5:30") in got and not any(d == date(2026, 11, 20) for d, _ in got)

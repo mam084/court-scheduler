@@ -248,12 +248,17 @@ def solve(
     # A coach at a travel tournament with one team can't coach another team those days (Nov
     # 2026): each tournament day counts as that coach's own no-date. For a head coach that's
     # never broken; for an assistant the head coach runs practice (flagged).
+    at_tourney = set()  # (coach, date): away at a travel tournament with one of their teams
     for tn in travel_tourn:
         for tm in data.teams:
             if tm.name in tn.teams:
                 for c in tm.staff:
                     rules_for[c].append(Rule(c, "no", [], [(tn.start, tn.end)], None,
                                              f"coaching {tm.name} at {tn.name}"))
+                    d_ = tn.start
+                    while d_ <= tn.end:
+                        at_tourney.add((c, d_))
+                        d_ += timedelta(days=1)
 
     m = cp_model.CpModel()
     obj = []
@@ -425,8 +430,11 @@ def solve(
                 if need:
                     subs[t, d, s] = need
                     cost += WEIGHTS["locals_sub"] * len(need)
-                if any(r.kind == "no" and r.matches(d, s) for a in team.assistants if a not in team.heads
-                       for r in rules_for[a]):
+                asst_out = [a for a in team.assistants if a not in team.heads
+                            and any(r.kind == "no" and r.matches(d, s) for r in rules_for[a])]
+                if any((a, d) in at_tourney for a in asst_out):
+                    cost += WEIGHTS["assistant_at_tournament"]  # rather the night before (Nov 2026)
+                elif asst_out:
                     cost += WEIGHTS["assistant_nodate"]
                 if is_late_exception(team.age, s) and not wants_late[t]:
                     cost += WEIGHTS["late_exception"]
