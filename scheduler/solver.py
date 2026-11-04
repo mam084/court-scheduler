@@ -38,6 +38,7 @@ from ortools.sat.python import cp_model
 
 from .config import (
     COURT_COST,
+    PECKING_COURT_COST,
     COURT_RANK,
     COURTS,
     DAYS,
@@ -565,8 +566,7 @@ def solve(
 
     # The usual week avoids back-to-back days too (Nov 2026), unless the team asked for both days.
     for t in T:
-        wished_pairs_ = {(w.days[i], w.days[j]) for w in data.wishes.get(teams[t].name, []) if w.choice == 1
-                         for i in range(len(w.days)) for j in range(len(w.days))}
+        wished_pairs_ = _asked_pairs(data.wishes.get(teams[t].name, []))
         for i in range(len(WEEKDAYS) - 1):
             wd1, wd2 = WEEKDAYS[i], WEEKDAYS[i + 1]
             if (wd1, wd2) in wished_pairs_:
@@ -763,8 +763,7 @@ def solve(
 
         # Back-to-back weekdays the team asked for (a 1st-choice wish naming
         # both days, e.g. "Tue, Wed") cost nothing and aren't flagged.
-        wished_pairs = {(w.days[i], w.days[j]) for w in data.wishes.get(team.name, []) if w.choice == 1
-                        for i in range(len(w.days)) for j in range(len(w.days))}
+        wished_pairs = _asked_pairs(data.wishes.get(team.name, []))
         for d in open_dates:
             nxt = d + timedelta(days=1)
             if nxt in open_dates:  # back-to-back days, including Sat -> Sun
@@ -1321,6 +1320,13 @@ def _boys_later_cost(team, s: str) -> int:
     return WEIGHTS["boys_later"] * ((len(allowed) - 1 - i) if team_is_boys(team.club, team.name) else i)
 
 
+def _asked_pairs(wishes) -> set[tuple[str, str]]:
+    """Back-to-back weekdays a team actually asked for: a 1st-choice wish naming exactly two days
+    ("Tue, Wed"). A wish listing more days ("Mon, Tue, Wed, Thu") gives options, not a request to
+    practice on consecutive days, so those pairs still count as back-to-back (Nov 2026)."""
+    return {(a, b) for w in wishes if w.choice == 1 and len(w.days) == 2 for a in w.days for b in w.days}
+
+
 def _wish_cost(wishes, wd: str, s: str) -> int:
     """Cost of a practice on weekday wd at slot s against a team's wishlist:
     a 1st-choice match is free, a 2nd-choice one costs a little; otherwise
@@ -1379,14 +1385,40 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fix
     a neighboring court as "3 teams on 2 courts".
     Returns (home_court, court_of, doubled) where doubled is the set of
     (d, s, c) holding two teams."""
+    # Days don't affect each other's courts except through home courts (a small tie-breaker), so
+    # each day is its own small model and solves to the best answer quickly. Pass 1 sets courts
+    # with no home court; each team's home court is then the court it got most; pass 2 redoes
+    # the days with those home courts.
+    by_day = defaultdict(list)
+    for k in booked:
+        by_day[k[1]].append(k)
+    homes = dict(fixed_home or {})
+    court_of, doubled = {}, set()
+    for rnd in (0, 1):
+        court_of, doubled = {}, set()
+        for d in sorted(by_day):
+            co, db = _assign_courts_day(by_day[d], T, courts_on, weights, seed, time_limit_s,
+                                        fixed_courts, homes if rnd else (fixed_home or {}), prev_court,
+                                        net_of, [cl for cl in coach_links if cl[0][1] == d],
+                                        [ll for ll in local_links if ll[0][1] == d], ages)
+            court_of.update(co)
+            doubled |= db
+        if rnd == 0:
+            seen = defaultdict(Counter)
+            for (t, d, s), c in court_of.items():
+                seen[t][c] += 1
+            for t in T:
+                if t not in homes and seen[t]:
+                    homes[t] = max(seen[t], key=lambda c: (seen[t][c], -COURT_RANK.index(c)))
+    home_court = {t: homes.get(t, COURT_RANK[0]) for t in T}
+    return home_court, court_of, doubled
+
+
+def _assign_courts_day(booked, T, courts_on, weights, seed, time_limit_s, fixed_courts, homes, prev_court,
+                       net_of, coach_links, local_links, ages):
+    """One day of stage 2 (see _assign_courts). Returns (court_of, doubled)."""
     m = cp_model.CpModel()
-    x, home = {}, {}
-    for t in T:
-        for c in COURTS:
-            home[t, c] = m.NewBoolVar(f"h_{t}_{c}")
-        m.AddExactlyOne([home[t, c] for c in COURTS])
-        if fixed_home and t in fixed_home:
-            m.Add(home[t, fixed_home[t]] == 1)
+    x = {}
     by_slot = defaultdict(list)
     n_at = Counter((d, s) for (_, d, s) in booked)
     changes = []
@@ -1395,11 +1427,10 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fix
         for c in opts:
             x[t, d, s, c] = m.NewBoolVar(f"x_{t}_{d}_{s}_{c}")
             by_slot[d, s, c].append(x[t, d, s, c])
-            ch = m.NewBoolVar(f"ch_{t}_{d}_{s}_{c}")
-            m.Add(ch >= x[t, d, s, c] - home[t, c])
-            changes.append(WEIGHTS["home_court"] * ch)
-            if COURT_COST[c]:  # pecking order: below nets and coaches staying put, above ages and home courts
-                changes.append(WEIGHTS["pecking_court"] * COURT_COST[c] * weights[t] * x[t, d, s, c])
+            if t in homes and homes[t] != c:
+                changes.append(WEIGHTS["home_court"] * x[t, d, s, c])
+            if PECKING_COURT_COST[c]:  # pecking order: below nets and coaches staying put, above ages and home courts
+                changes.append(WEIGHTS["pecking_court"] * PECKING_COURT_COST[c] * weights[t] * x[t, d, s, c])
         m.AddExactlyOne([x[t, d, s, c] for c in opts])
         pc = (prev_court or {}).get((t, d, s))
         if pc is not None and (t, d, s, pc) in x:
@@ -1493,10 +1524,9 @@ def _assign_courts(booked, T, courts_on, weights, seed=0, time_limit_s=10.0, fix
     status = solver.Solve(m)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise RuntimeError("Court assignment failed, which shouldn't happen if stage 1 respected capacity.")
-    home_court = {t: next(c for c in COURTS if solver.Value(home[t, c])) for t in T}
     court_of = {(t, d, s): c for (t, d, s, c), v in x.items() if solver.Value(v)}
     doubled = {k for k, v in dbl.items() if solver.Value(v)}
-    return home_court, court_of, doubled
+    return court_of, doubled
 
 
 def _pair_groups(booked, court_of, doubled, courts_on, teams) -> dict:

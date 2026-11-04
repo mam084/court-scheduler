@@ -34,6 +34,10 @@ def court_short(c) -> str:
 COURT_RANK = [1, 7, 3, 4, 5, 6, 2]
 COURT_COST = {1: 0, 7: 0, 3: 1, 4: 1, 5: 1, 6: 1, 2: 6}
 COURT_RANK_TEXT = "Courts 1 and 7 best, 3–6 equal, Court 2 last"
+# Picking courts within a timeslot (stage 2), after net heights and coaches staying put: the
+# same order, but Court 1 just ahead of Court 7, so when two teams (or two men's-net pairs at
+# 5:30 and 7:20) both get a best court, the older / higher team gets Court 1 (Nov 2026).
+PECKING_COURT_COST = {1: 0, 7: 1, 3: 2, 4: 2, 5: 2, 6: 2, 2: 12}
 
 
 def pecking_key(age: int, rank: int | None, boys: bool = False) -> tuple:
@@ -366,8 +370,8 @@ WEIGHTS = {
     # Each is worth more than everything below it can save.
     "net_change_court": 8000,
     "coach_stay": 3000,
-    "pecking_court": 20,
-    "age_near": 2,
+    "pecking_court": 10,   # x PECKING_COURT_COST (twice COURT_COST, so Court 1 beats Court 7)
+    "age_near": 1,   # below the smallest pecking step (Court 1 over Court 7)
     "keep_court": 4,
     # each weekend 2-hour block opened: the club would rather put 4 teams in
     # 9-11 than 2 at 9-11 and 2 at 11-1 when there's room (on a busy weekend

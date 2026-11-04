@@ -953,8 +953,8 @@ def test_rule_order():
     # Friday 7:20 beats every preference put together, but not a weekend.
     assert W["weekend"] > W["friday_late"] > W["wish_day_miss"] + W["not_preferred_day"] + W["wish_time_miss"]
     # Courts: nets, then coaches staying put, then the pecking order, then ages.
-    from scheduler.config import COURT_COST
-    worst_pecking = W["pecking_court"] * max(COURT_COST.values()) * 18   # top vs bottom team on Court 2
+    from scheduler.config import PECKING_COURT_COST
+    worst_pecking = W["pecking_court"] * max(PECKING_COURT_COST.values()) * 18   # top vs bottom team on Court 2
     assert W["net_change_court"] > W["coach_stay"] > worst_pecking
     assert W["pecking_court"] > 2 * 4 * W["age_near"]
     assert W["weekend_required"] == 0  # a note for coaches, not a rule
@@ -1987,3 +1987,34 @@ def test_back_to_back_days_in_review():
     r = solve(_inp(teams, avail), *NOV, time_limit_s=10)
     b2b = r.issues[r.issues["issue"].str.startswith("Back-to-back days")]
     assert len(b2b) >= 4 and (b2b["severity"] == "Medium").all()
+
+
+def test_court_1_over_court_7_for_the_higher_mens_pair():
+    """Two men's-net pairs (5:30 -> 7:20) on the best courts: the older pair gets Court 1 (Nov 2026)."""
+    teams = [{"team": "18 Black", "club": "Seaside", "age": 18, "head_coach": "A"},
+             {"team": "17 Black", "club": "Seaside", "age": 17, "head_coach": "B"},
+             {"team": "16 Black", "club": "Seaside", "age": 16, "head_coach": "C"},
+             {"team": "15 Black", "club": "Seaside", "age": 15, "head_coach": "D"}]
+    wish = [{"team": "18 Black", "choice": 1, "days": "Tue, Thu", "times": "7:20"},
+            {"team": "17 Black", "choice": 1, "days": "Tue, Thu", "times": "5:30"},
+            {"team": "16 Black", "choice": 1, "days": "Tue, Thu", "times": "7:20"},
+            {"team": "15 Black", "choice": 1, "days": "Tue, Thu", "times": "5:30"}]
+    # Only Courts 1 and 7 open at 5:30 and 7:20 (a program holds the rest), so 5:30 is full.
+    locals_ = [{"program": "Prog", "days": "Tue, Thu", "time": s, "courts": "2-6", "coaches": "Z", "on_site": "Yes"}
+               for s in ("5:30", "7:20")]
+    r = solve(_inp(teams, wishlist=wish, locals_=locals_), date(2026, 11, 8), date(2026, 11, 14), time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    checked = 0
+    for d, g in pr.groupby("date"):
+        ct = dict(zip(g["name"], g["court"]))
+        if {"18 Black", "17 Black"} <= set(ct) and ct["18 Black"] == ct["17 Black"]:
+            assert ct["18 Black"] == 1, ct
+            checked += 1
+    assert checked
+
+
+def test_back_to_back_only_free_for_two_day_wishes():
+    from scheduler.data import Wish
+    from scheduler.solver import _asked_pairs
+    assert ("Tue", "Wed") in _asked_pairs([Wish("14 Black", 1, ["Tue", "Wed"], {"5:30"})])
+    assert ("Tue", "Wed") not in _asked_pairs([Wish("16-A", 1, ["Mon", "Tue", "Wed", "Thu"], {"5:30"})])
