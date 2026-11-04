@@ -57,7 +57,8 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .pp td.box { padding: 0 0 2px; text-align: left; vertical-align: bottom; }
 .wi { min-height: 66px; display: flex; flex-direction: column; justify-content: flex-start; padding: 3px 5px 2px; }
 .wi .sl { background: #fff; border-bottom: none; padding: 0 2px; margin: 0 -2px 2px; }
-.slots { background: #fff; border-top: 1.5px solid #555; padding: 0 5px; }
+/* Nov 2026: no line between the write-in space and the first practice time; it just runs on. */
+.slots { background: #fff; padding: 0 5px; }
 .sl { border-bottom: 1px dotted #9aa0aa; }
 .slots .sl:last-child { border-bottom: none; }
 .ln { display: flex; gap: 4px; line-height: 15px; min-height: 18px; padding-top: 2px; box-sizing: border-box; }
@@ -67,6 +68,13 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .pp td.box.wkb { padding: 4px 5px 2px; }
 .ln .w small { font-weight: 400; color: #555; }
 .pv .ln .w { font-weight: 500; font-style: italic; }
+/* A local tournament, big on Court 1 (or its first court). */
+.tnbig { text-align: center; font-weight: 800; font-size: 17px; line-height: 1.15; letter-spacing: .3px;
+         padding: 6px 2px 4px; overflow-wrap: break-word; }
+.tnbig small { display: block; font-weight: 500; font-size: 10.5px; letter-spacing: 0; color: #555; margin-top: 2px; }
+/* A locals program's last session, circled like on the board. */
+.last { display: inline-block; border: 1.4px solid #1f2329; border-radius: 999px; padding: 0 4px; margin-left: 3px;
+        font-size: 9.5px; font-weight: 700; line-height: 12px; letter-spacing: .4px; vertical-align: 1px; }
 .tn .ln .w { letter-spacing: .2px; }
 td.off { background: repeating-linear-gradient(45deg,#f4f4f4,#f4f4f4 6px,#e8e8e8 6px,#e8e8e8 12px); color: #666;
          text-align: center; vertical-align: middle; font-style: italic; font-size: 11px; }
@@ -91,9 +99,27 @@ def _txt(v) -> str:
     return "" if v.lower() in ("nan", "none") else v
 
 
-def _what(r, local_coaches: bool) -> str:
-    """One booking as it's written on the sheet."""
+def last_sessions(locals_) -> set[tuple[str, date]]:
+    """(program, date) of each locals program's last session: the last day it runs (by its dates,
+    skipping cancelled sessions), across all its days and times."""
+    last: dict[str, date] = {}
+    for lp in locals_ or []:
+        if not lp.ranges:
+            continue  # no end date: no last session
+        d = max(b for _, b in lp.ranges)
+        lo = min(a for a, _ in lp.ranges)
+        while d >= lo and not lp.runs_on(d):
+            d -= timedelta(days=1)
+        if d >= lo and (lp.name not in last or d > last[lp.name]):
+            last[lp.name] = d
+    return set(last.items())
+
+
+def _what(r, local_coaches: bool, last: set | frozenset = frozenset()) -> str:
+    """One booking as it's written on the sheet; a program's last session gets LAST circled."""
     name = html.escape(label_of(r))
+    if r["kind"] == "Local" and (str(r["name"]), r["date"]) in last:
+        name += '<span class="last">LAST</span>'
     bits = []
     if r["kind"] == "Local" and local_coaches:
         who = " · ".join(c.strip() for c in _txt(r.get("coach")).split(";") if c.strip())
@@ -122,14 +148,14 @@ def _start(slot: str) -> int:
 
 
 def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_coaches: bool,
-         block_days: set | frozenset = frozenset()) -> str:
+         block_days: set | frozenset = frozenset(), last: set | frozenset = frozenset()) -> str:
     """Every timeslot of the day on court c, booked or blank. Weekends and
     block days (a school break's weekdays) list the 2-hour blocks."""
     weekend = d.weekday() >= 5 or d in block_days
     here = book[(book["date"] == d) & (book["court"] == c)] if len(book) else book
     by_slot: dict[str, list] = {}
     for _, r in (here.iterrows() if len(here) else []):
-        by_slot.setdefault(r["slot"], []).append(_what(r, local_coaches))
+        by_slot.setdefault(r["slot"], []).append(_what(r, local_coaches, last))
     labels = dict(LABEL)
     if weekend:
         slots = list(WEEKEND_KEYS)
@@ -144,7 +170,14 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
     items = []  # (minutes, html)
     tn_here = [tn for tn in tourns if tn.kind == "local" and c in tn.courts and tn.covers(d)]
     if tn_here:  # a local tournament takes the court until 7 PM
-        items.append((0, _slot("until 7 PM", html.escape(" / ".join(tn.name for tn in tn_here)), "tn")))
+        # Its name goes big on Court 1 (or the first court it uses, without Court 1); a small line elsewhere.
+        big = [tn for tn in tn_here if c == (1 if 1 in tn.courts else min(tn.courts))]
+        if big:
+            items.append((0, '<div class="tnbig">' + "<br>".join(html.escape(tn.name) for tn in big)
+                          + "<small>until 7 PM</small></div>"))
+        rest_tn = [tn for tn in tn_here if tn not in big]
+        if rest_tn:
+            items.append((0, _slot("until 7 PM", html.escape(" / ".join(tn.name for tn in rest_tn)), "tn")))
         slots = [s for s in slots if not blocked_by_local_tournament(s) or s in by_slot]
     for s in slots:
         items.append((_start(s), _slot(labels.get(s, s), " / ".join(by_slot.get(s, [])),
@@ -208,9 +241,11 @@ def _footer(book: pd.DataFrame, days: list[date], start: date, end: date, need: 
 def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,
                      tournaments: list | None = None, title: str = "Court schedule", privates: list | None = None,
                      practice_counts: pd.DataFrame | None = None, local_coaches: bool = False,
-                     block_days=None) -> str:
+                     block_days=None, locals_=None) -> str:
     """Every week in the paper layout, ready to print (two landscape pages a week).
-    block_days: weekdays run in 2-hour blocks (a school break)."""
+    block_days: weekdays run in 2-hour blocks (a school break). locals_: the locals programs, so each
+    one's last session gets LAST circled."""
+    last = last_sessions(locals_)
     block_days = set(block_days or ())
     from .views import FIT_SCRIPT, PRINT_BUTTON
     closures = closures or {}
@@ -247,7 +282,7 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
                     else:
                         kind = "wkb" if d.weekday() >= 5 or d in block_days else "day"
                         cells.append(f'<td class="box {kind}">'
-                                     f'{_box(d, c, book, tourns, pv, local_coaches, block_days)}</td>')
+                                     f'{_box(d, c, book, tourns, pv, local_coaches, block_days, last)}</td>')
                 rows.append(f'<tr{cls}><td class="ct">{cname}</td>{"".join(cells)}</tr>')
             if SHOW_COUNTS and i == len(HALVES) - 1:
                 rows.append(_footer(book, days, start, end, need_by_week.get(ws), block_days))

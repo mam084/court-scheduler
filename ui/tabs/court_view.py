@@ -139,12 +139,13 @@ def render():
 
         def _win():
             return _w
+        progs = list(S.cleaned.locals) if S.cleaned is not None else []
 
         d0, d1, d2 = st.columns(3)
         d0.download_button("Printable weeks · paper style", type="primary", width="stretch",
                            data=lambda: (lambda r: paper_weeks_html(
                                r.assignments, start, end, closures, r.tournaments, title_, privs, r.practice_counts,
-                               show_lc, block_days=r.weekend_dates).encode())(_win()),
+                               show_lc, block_days=r.weekend_dates, locals_=progs).encode())(_win()),
                            file_name=f"court_sheets_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html",
                            help="Like the sheets on the board: every timeslot on every court is a line, filled in "
                                 "where something's booked and blank where it's open, so privates and changes can "

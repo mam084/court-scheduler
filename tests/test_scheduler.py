@@ -2110,3 +2110,24 @@ def test_assistant_at_tournament_late_practice_beats_missing():
     # The late practice is a last resort: with Thu 5:30 open it goes there.
     got = _leo_case(thu_530_open=True)
     assert (date(2026, 11, 19), "5:30") in got and not any(d == date(2026, 11, 20) for d, _ in got)
+
+
+def test_paper_print_big_local_tournament_and_last_session():
+    from scheduler.paper import last_sessions, paper_weeks_html
+    s, e = date(2026, 11, 29), date(2026, 12, 5)
+    inp = simulate(4, 2, 2, seed=57, start=s, end=e)
+    inp.tournaments = pd.DataFrame([{"name": "Boys Local Tourney", "type": "Local", "start_date": "12/05/2026",
+                                     "end_date": "12/05/2026", "courts": "1-7"}])
+    lp = clean(inp, s, e).locals[0]
+    inp.locals.loc[inp.locals["program"] == lp.name, "dates"] = "11/01/2026-12/03/2026"
+    r = solve(inp, s, e, time_limit_s=10)
+    data = clean(inp, s, e)
+    last = {d for n, d in last_sessions(data.locals) if n == lp.name}
+    assert last == {date(2026, 12, 3)}
+    h = paper_weeks_html(r.assignments, s, e, data.closures, r.tournaments, "T", [], r.practice_counts, False,
+                         r.weekend_dates, data.locals)
+    assert h.count('<div class="tnbig">') == 1 and "Boys Local Tourney" in h   # big on Court 1 only
+    n_last = len(r.assignments[(r.assignments["name"] == lp.name) & (r.assignments["date"] == date(2026, 12, 3))]
+                 .drop_duplicates(["court", "slot"]))
+    assert h.count('class="last"') == n_last > 0
+    assert "border-top: 1.5px solid #555; padding: 0 5px" not in h   # no line above the first practice time
