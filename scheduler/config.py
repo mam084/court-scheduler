@@ -279,8 +279,8 @@ WEIGHTS = {
     #    if they get a sub for the program, and flagged so. Below every
     #    no-date break, so a sub is asked for before a no-date is broken.
     #    An assistant on two teams at once costs the same.
-    "locals_sub": 4000,
-    "assistant_conflict": 4000,
+    "locals_sub": 12000,
+    "assistant_conflict": 8000,
     # Pairing: 3 teams sharing 2 courts, per extra team. The absolute last
     #    option: only when there's no court space left and the alternative is
     #    a team missing one of its 2 practices. Breaking no-dates, practicing
@@ -294,12 +294,23 @@ WEIGHTS = {
     #    a weekend never wins over an open weekday just on preferences, even
     #    with a back-to-back day or "fill_530_first" on top (Nov 2026: raised
     #    with them; still below a locals sub).
-    "weekend": 3900,
+    # Nov 2026: raised above Thursday/Friday and coach gaps (a team practices Thu/Fri before it
+    # takes a weekend practice), so assistants now rank below weekends.
+    "weekend": 10500,
     # 7a. Back-to-back days (Nov 2026): only when unavoidable or when a coach
     #    asked for exactly those two days ("Tue, Wed"). More than every day and
     #    time preference put together and than Friday 7:20 or a 7:20 with 5:30
     #    open, but a weekday back-to-back still beats a weekend.
     "consecutive_days": 2100,
+    # 7a'. Thursday then Friday, and Friday then Saturday (Nov 2026), on top of
+    #    "consecutive_days": avoided even if an
+    #    assistant has to miss (a broken assistant no-date or an assistant on two teams).
+    #    Other weekday back-to-backs (Mon/Tue, Tue/Wed, Wed/Thu) stay below assistants.
+    "thu_fri": 8000,
+    # A coach waiting through an empty timeslot between two sessions the same day (a 3:45
+    # team or program, nothing at 5:30, a 7:20 team or program), Nov 2026: avoided even if
+    # an assistant has to miss.
+    "coach_gap": 10000,
     # 7b. Fill every 5:30 court before using 7:20 (Nov 2026). Per 7:20
     #    practice that could have been in an empty 5:30 court that day.
     #    More than every time preference put together (wishlist time + "rather
@@ -335,9 +346,7 @@ WEIGHTS = {
     # 11. A second weekend practice for a team in the same week.
     "second_weekend": 50,
     # (12. Back-to-back days moved up to 7a, Nov 2026.)
-    # A coach with a gap between a locals program and their team's practice the
-    # same day (program 3:45, team 7:20): the team is moved next to the program.
-    "coach_gap": 200,
+    # (Coach gaps moved up next to "thu_fri", Nov 2026.)
     # reward: a coach's two teams in back-to-back slots the same day
     # (e.g. girls at 5:30 then boys at 7:20). Nov 2026: the club wants more of these.
     "double_up": 200,

@@ -922,32 +922,34 @@ def test_sat_sun_beats_breaking_a_head_coach_no_date():
     assert set(flags["team"]) == {"16-Ann", "16-Bea"} and (flags["severity"] == "High").all()
 
 
-def test_sat_sun_beats_breaking_an_assistant_no_date():
-    """Assistants' no-dates rank above Saturday->Sunday (club order, Oct 2026)."""
+def test_assistant_no_date_gives_way_before_a_weekend_back_to_back():
+    """Nov 2026: assistants rank below weekends (and coach gaps / Thu-Fri). Rather than Sat->Sun,
+    the assistant misses a weekday practice (flagged; the head coach runs it)."""
     inp, r = _ladder_club("assistant")
     for team in ("16-Ann", "16-Bea"):
-        assert _days(r, team) == {"Sat 11/7", "Sun 11/8", "Fri 11/13"}, _days(r, team)
-    assert not r.issues["issue"].str.startswith("Assistant no-date broken").any()
-    flags = r.issues[r.issues["issue"].str.startswith("Saturday then Sunday")]
-    assert set(flags["team"]) == {"16-Ann", "16-Bea"}
+        days = _days(r, team)
+        assert not {"Sat 11/7", "Sun 11/8"} <= days, days
+    assert r.issues["issue"].str.startswith("Assistant no-date broken").any()
+    assert not r.issues["issue"].str.startswith("Saturday then Sunday").any()
 
 
 def test_rule_order():
     """The club's order, most important first: each rule outweighs at least
     two breaks of the next one down."""
     from scheduler.config import WEIGHTS as W
+    # Nov 2026: subs > weekend > coach gaps and Thu/Fri > assistants > other back-to-backs.
     order = [W["missed_practice"], W["tournament_rest"], W["break_team_nodate"], W["coach_late_eve"],
-             W["assistant_nodate"], W["locals_sub"], W["weekend"], W["consecutive_days"], W["friday_late"],
+             W["locals_sub"], W["weekend"], W["consecutive_days"] + W["thu_fri"], W["assistant_nodate"],
+             W["consecutive_days"], W["friday_late"],
              W["fill_530_first"], W["sat_sun"], W["wish_day_miss"], W["wish_time_miss"],
              W["second_weekend"]]
+    assert W["weekend"] > W["coach_gap"] > W["assistant_nodate"] >= W["assistant_conflict"]
     # Back-to-back days beat every day/time preference put together, a weekend still beats them
     # plus a 7:20 with 5:30 open.
     assert W["consecutive_days"] > W["wish_day_miss"] + W["not_preferred_day"] + W["wish_time_miss"] + W["not_preferred"]
-    assert W["weekend"] > W["consecutive_days"] + W["fill_530_first"]
+    assert W["weekend"] > W["consecutive_days"] + W["thu_fri"]
     for hi, lo in zip(order, order[1:]):
         assert hi > lo, (hi, lo)
-    # A sub is asked for before any no-date is broken; a weekend before a sub.
-    assert W["assistant_nodate"] > W["locals_sub"] > W["weekend"]
     # Days before times, for both the wishlist and not-preferred.
     assert W["wish_day_miss"] > W["wish_time_miss"]
     assert W["not_preferred_day"] > W["not_preferred"] + W["not_preferred_345"]
@@ -2046,3 +2048,30 @@ def test_coach_at_a_travel_tournament_cant_coach_another_team_that_day():
     op = [o for o in r.openings if o["team"] == "15-Tyler"]
     assert all(x["date"] != date(2026, 12, 11) or any("Tyler" in n for n in x["notes"])
                for o in op for x in o["options"])
+
+
+def test_no_thursday_friday_even_over_a_preferred_day():
+    """Nov 2026: Thu->Fri is avoided harder than other back-to-backs (Wed/Thu is tolerable)."""
+    teams = [{"team": "16-Tia", "age": 16, "head_coach": "Tia"}]
+    avail = [{"who": "16-Tia", "type": "No", "days": "Mon, Tue"}]
+    wish = [{"team": "16-Tia", "choice": 1, "days": "Wed, Thu, Fri", "times": "5:30"}]
+    r = solve(_inp(teams, avail, wishlist=wish), date(2026, 11, 8), date(2026, 11, 21), time_limit_s=10)
+    for ws, g in r.assignments[r.assignments["kind"] == "Practice"].groupby(
+            r.assignments["date"].map(week_start)):
+        assert set(g["day"]) != {"Thu", "Fri"}, g
+
+
+def test_no_coach_gap_between_program_and_team():
+    """Nov 2026: a coach working a 3:45 program isn't left waiting for a 7:20 practice, even
+    when 5:30 is a time they'd rather not."""
+    teams = [{"team": "16-Kim", "age": 16, "head_coach": "Kim"}]
+    avail = [{"who": "Kim", "type": "Not preferred", "times": "5:30"}]
+    wish = [{"team": "16-Kim", "choice": 1, "days": "Mon, Wed", "times": "7:20"}]
+    locals_ = [{"program": "Clinic", "days": "Mon, Wed", "time": "3:45", "courts": "6", "coaches": "Kim",
+                "on_site": "Yes"}]
+    r = solve(_inp(teams, avail, wishlist=wish, locals_=locals_), date(2026, 11, 8), date(2026, 11, 14),
+              time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    for row in pr.itertuples():
+        if row.day in ("Mon", "Wed"):
+            assert row.slot != "7:20", row

@@ -432,8 +432,6 @@ def solve(
                     cost += WEIGHTS["coach_late_eve"]
                 if d.weekday() < 5 and s in WEEKDAY_KEYS:
                     cost += _boys_later_cost(team, s)
-                if gap_programs(t, d, s):
-                    cost += WEIGHTS["coach_gap"]
                 if d in rest_days[team.name]:
                     tn, when = rest_days[team.name][d]
                     cost += WEIGHTS["tournament_rest"]
@@ -590,7 +588,7 @@ def solve(
             if a_ and b_:
                 cb = m.NewBoolVar(f"pcons_{t}_{wd1}")
                 m.Add(cb >= sum(a_) + sum(b_) - 1)
-                obj.append(WEIGHTS["consecutive_days"] * cb)
+                obj.append((WEIGHTS["consecutive_days"] + (WEIGHTS["thu_fri"] if wd1 == "Thu" else 0)) * cb)
 
     # The template itself must be a valid week (it's what people read):
     # recurring 'no' rules and recurring locals rule slots out, head coaches
@@ -789,7 +787,8 @@ def solve(
                 cons = m.NewBoolVar(f"cons_{t}_{d}")
                 m.Add(cons >= a + b - 1)
                 consec_vars[t, d] = cons
-                obj.append((WEIGHTS["consecutive_days"] + (WEIGHTS["sat_sun"] if d.weekday() == 5 else 0)) * cons)
+                obj.append((WEIGHTS["consecutive_days"] + (WEIGHTS["sat_sun"] if d.weekday() == 5 else 0)
+                            + (WEIGHTS["thu_fri"] if d.weekday() in (3, 4) else 0)) * cons)  # Thu->Fri, Fri->Sat
 
         used = []
         for s in WEEKDAY_KEYS:
@@ -801,6 +800,43 @@ def solve(
                 m.Add(u >= v)
             used.append(u)
         obj.append(WEIGHTS["split_timeslot"] * sum(used))
+
+    # Coach gaps (Nov 2026): a coach with something early (a 3:45 team or a 3:30/3:45/4:30
+    # program) and something at 7:20, with nothing at 5:30 in between, waits around for two
+    # hours. Teams and programs count alike; a session at 5:30 fills the gap.
+    gap_vars = {}
+    staff_teams = defaultdict(set)
+    for t in T:
+        for c in teams[t].staff:
+            staff_teams[c].add(t)
+    EARLY, MID, LATE = ("3:30", "3:45", "4:30"), ("5:30",), ("7:20",)
+    for c, ts in staff_teams.items():
+        for d in open_dates:
+            if d.weekday() >= 5 or d in data.weekends:
+                continue
+            prog = {lp.slot for lp in data.locals if lp.runs_on(d) and c in lp.coaches}
+            parts = []
+            for band in (EARLY, MID, LATE):
+                const = any(sl in prog for sl in band)
+                vs = [y[t, d, sl] for t in ts for sl in band if (t, d, sl) in y]
+                parts.append((const, vs))
+            (ce, ve), (cm, vm), (cl, vl) = parts
+            if cm or not (ce or ve) or not (cl or vl):
+                continue
+            if not ve and not vl:
+                continue  # programs only: nothing the schedule can change
+            busy = []
+            for const, vs in ((ce, ve), (cl, vl)):
+                if const:
+                    busy.append(1)
+                else:
+                    b_ = m.NewBoolVar(f"busy_{len(gap_vars)}_{len(busy)}")
+                    m.AddMaxEquality(b_, vs)
+                    busy.append(b_)
+            g = m.NewBoolVar(f"gap_{c}_{d}")
+            m.Add(g >= busy[0] + busy[1] - 1 - sum(vm))
+            gap_vars[c, d] = g
+            obj.append(WEIGHTS["coach_gap"] * g)
 
     # Double-ups: a coach's teams back-to-back on the same day.
     pairs = set()
