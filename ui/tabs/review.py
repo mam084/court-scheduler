@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from scheduler.changes import burden, practices_of
+from scheduler.coach_load import BAD_SCORE, bad_coaches, coach_flags, coach_scores
 from scheduler.views import practice_counts_html
 from ui import dates
 from ui.common import mine
@@ -57,6 +58,43 @@ def render():
                 "team": "Team", "practices": "Practices", "court_2": bar("Court 2", "court_2"),
                 "at_3_45": bar("3:45", "at_3_45"), "weekend": bar("Weekend", "weekend"),
                 "off_usual": bar("Off usual", "off_usual"), "back_to_back": bar("Back-to-back", "back_to_back")})
+        st.subheader("Coach schedules")
+        st.caption("A coach's week is **bad** when its flags add up to "
+                   f"{BAD_SCORE}+ (High 3, Medium 2, Low 1). High: two places at once, a late session the night "
+                   "before their tournament. Medium: a break between sessions the same day, 4+ days in a row, a "
+                   "team practice Friday at 7:20. Low: changing courts between back-to-back sessions, 3+ late "
+                   "nights or 5+ days in a week.")
+        cf = coach_flags(result.assignments, result.tournaments)
+        if COACH_VIEW and MY_COACH:
+            cf = cf[cf["coach"] == MY_COACH]
+        bc = bad_coaches(cf)
+        if not len(cf):
+            st.success("No coach has a rough schedule.")
+        else:
+            if len(bc):
+                st.error(f"Bad schedules: {', '.join(f'**{c}**' for c in bc['coach'])}", icon="⚠️")
+                st.dataframe(bc, hide_index=True, width="stretch", column_config={
+                    "coach": "Coach", "bad_weeks": "Bad weeks",
+                    "worst": st.column_config.ProgressColumn("Worst week", format="%d", min_value=0,
+                                                             max_value=max(BAD_SCORE * 2, int(bc["worst"].max()))),
+                    "total": "Total", "issues": "What"})
+            else:
+                st.success("No coach has a bad week, just the smaller flags below.")
+            with st.expander(f"Every coach flag ({len(cf)})", expanded=False):
+                who = st.multiselect("Coaches", sorted(cf["coach"].unique()),
+                                     default=list(bc["coach"]) if len(bc) else [], key="coach_flags_who",
+                                     placeholder="Everyone")
+                show = cf[cf["coach"].isin(who)] if who else cf
+                sc = coach_scores(show)
+                st.dataframe(sc.assign(week_of=sc["week_of"].map(lambda d: f"{d:%b} {d.day}")), hide_index=True,
+                             width="stretch", column_config={
+                                 "coach": "Coach", "week_of": "Week of", "score": "Score", "bad": "Bad week",
+                                 "high": "High", "medium": "Medium", "low": "Low", "issues": "What"})
+                st.dataframe(show.assign(date=show["date"].map(lambda d: f"{d:%a %b} {d.day}"))
+                             .drop(columns="week_of"), hide_index=True, width="stretch", column_config={
+                                 "coach": "Coach", "date": "Date", "severity": "Severity", "issue": "Issue",
+                                 "detail": "Details"})
+
         st.subheader("Everything to review")
         if result.issues.empty:
             st.success("Nothing to review: every team has its practices on its usual schedule.")

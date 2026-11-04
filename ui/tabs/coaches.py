@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from scheduler.coach_load import BAD_SCORE, coach_flags, coach_scores
 from scheduler.config import DAYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKEND_KEYS, court_name, court_short
 from scheduler.data import COLUMNS
 from scheduler.export import to_ics
@@ -134,6 +135,20 @@ def render():
                 mine = mine.sort_values(["date", "o"])
                 mine["role"] = mine["name"].map(
                     lambda n: "Head" if n in heads else ("Assistant" if n in assists else ""))
+            cf = coach_flags(a, result.tournaments)
+            cf = cf[cf["coach"] == coach]
+            if len(cf):
+                sc = coach_scores(cf)
+                bad = sc[sc["bad"]]
+                lines = "\n".join(f"- **{r.date:%a %b} {r.date.day}** · {r.issue}: {r.detail}"
+                                   for r in cf.itertuples())
+                if len(bad):
+                    st.error(f"**Bad schedule** in {plural(len(bad), 'week')} "
+                             f"({', '.join(f'{w:%b} {w.day}' for w in bad['week_of'])}):\n\n{lines}", icon="⚠️")
+                else:
+                    st.warning(f"Things that make {coach}'s schedule harder:\n\n{lines}", icon="⚠️")
+                st.caption(f"A week is bad at {BAD_SCORE}+ points (High 3, Medium 2, Low 1). See Review → "
+                           "Coach schedules for every coach.")
             st.markdown(f"**{coach}'s schedule** · {plural(len(mine), 'session')}")
             if len(mine):
                 show = mine.assign(date=mine["date"].map(lambda d: f"{d:%a %b} {d.day}"))

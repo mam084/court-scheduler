@@ -2,7 +2,7 @@
 
 import io
 from collections import Counter
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
@@ -1935,3 +1935,26 @@ def test_team_dates_print_week_before_and_next_tournament():
     assert "Week before" in h and "pt-prev" in h
     assert h.count('class="pt-tn pt-next"') == len(going) and "Jan 9–10" in h
     assert h.count('class="pp-page"') == 1
+
+
+def test_coach_schedule_flags():
+    from scheduler.coach_load import bad_coaches, coach_flags
+    from scheduler.data import Tournament
+    d = date(2026, 11, 12)  # Thursday
+
+    def row(dd, slot, kind, name, court, coach):
+        return {"date": dd, "slot": slot, "kind": kind, "name": name, "court": court, "coach": coach}
+    a = pd.DataFrame([
+        row(d, "3:45", "Local", "Girls 12 League", 3, "Ana"),           # break, then 7:20
+        row(d, "7:20", "Practice", "18-Ana", 1, "Ana"),                 # late, tournament tomorrow
+        row(d + timedelta(days=1), "5:30", "Practice", "16-Ana", 4, "Ana"),
+        row(d + timedelta(days=1), "7:20", "Practice", "18-Ana", 7, "Ana"),  # Fri 7:20, court change
+        row(d, "5:30", "Practice", "16-Bea", 2, "Bea"),
+    ])
+    tn = [Tournament("Turkey Bash", "travel", d + timedelta(days=1), d + timedelta(days=2), ["16-Ana"], [], [])]
+    f = coach_flags(a, tn)
+    issues = set(f[f["coach"] == "Ana"]["issue"])
+    assert {"Break between sessions", "Late the night before a tournament", "Friday 7:20",
+            "Changes courts"} <= issues
+    assert not len(f[f["coach"] == "Bea"])
+    assert list(bad_coaches(f)["coach"]) == ["Ana"]
