@@ -445,7 +445,7 @@ def flags_print_html(flags: list[dict], resolved: dict, start: date, end: date,
 
 TEAM_CSS = """
 .pt { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
-.pt col.pt-coach { width: 92px; } .pt col.pt-team { width: 54px; } .pt col.pt-n { width: 20px; }
+.pt col.pt-coach { width: 80px; } .pt col.pt-team { width: 54px; } .pt col.pt-n { width: 20px; }
 .pt col.pt-next { width: 64px; }
 .pt th { font-weight: 700; color: #5b6475; padding: 1px 0; text-align: center; }
 .pt thead tr.pt-mon th { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; text-align: left;
@@ -459,9 +459,8 @@ TEAM_CSS = """
 .pt th.pt-prev, .pt td.pt-prev { color: #8a93a3; background: #f4f5f8; }
 .pt td.pt-prev.pt-tn span { border-color: #c98a8a; color: #b06060; }
 .pt th.pt-first, .pt td.pt-first { border-left: 2px solid #1f2a44; }
-.pt col.pt-wb { width: 64px; }
-.pt th.pt-wb, .pt td.pt-wb { text-align: left; padding: 0 3px; white-space: normal; line-height: 1.15;
-                             font-size: 10px; }
+.pt th.pt-wb, .pt td.pt-wb { text-align: left; padding: 0 3px; white-space: nowrap; line-height: 1.15;
+                             font-size: 10px; overflow: hidden; }
 .pt thead tr.pt-mon th.pt-wb { font-size: 8.5px; letter-spacing: .3px; }
 .pt td.pt-wb .pt-wbt { border: 1.3px solid #c98a8a; color: #b06060; border-radius: 999px; padding: 0 3px;
                        white-space: nowrap; }
@@ -571,6 +570,15 @@ def team_dates_print_html(result, closures: dict | None = None, order: list[str]
     # Nov 2026: the week before is one column with each team's dates as a comma list (it doesn't
     # need its own date columns lined up).
     show_prev = bool(prev_p or prev_t)
+    # Nov 2026: each team's week before stays on one line, so the column is as wide as the longest
+    # list (the coaches column gave up a little room for it).
+    wb_text = {t: _week_before_text(prev_p.get(t, set()), prev_t.get(t, set())) for t in teams} if show_prev else {}
+
+    def _wb_px(s: str) -> int:
+        circles = s.count('class="pt-wbt"')
+        plain = re.sub(r"<[^>]+>", "", s).replace("&ndash;", "–")
+        return int(len(plain) * 5.7 + circles * 9 + 8)
+    wb_w = max([60] + [_wb_px(x) for x in wb_text.values()])
 
     # Each team's next travel tournament after the last date.
     nxt = {}
@@ -605,7 +613,7 @@ def team_dates_print_html(result, closures: dict | None = None, order: list[str]
     nx_col = '<col class="pt-next">' if show_next else ""
     nx_th = ('<th class="pt-next"></th>', '<th class="pt-next">Next</th>', '<th class="pt-next">tourn.</th>') \
         if show_next else ("", "", "")
-    wb_col = '<col class="pt-wb">' if show_prev else ""
+    wb_col = f'<col class="pt-wb" style="width:{wb_w}px">' if show_prev else ""
     wb_th = ('<th class="pt-prev pt-wb">Week before</th>', '<th class="pt-prev pt-wb"></th>',
              f'<th class="pt-prev pt-wb">{prev_lo:%-m/%-d}–{prev_hi:%-m/%-d}</th>') if show_prev else ("", "", "")
     cols = ('<col class="pt-coach"><col class="pt-team">' + wb_col + "<col>" * len(days) + nx_col
@@ -628,8 +636,7 @@ def team_dates_print_html(result, closures: dict | None = None, order: list[str]
             "".join(f"<br><span>{html.escape(n)}</span>" for n in names[1:])
         cells, k = [], 0
         if show_prev:
-            cells.append(f'<td class="pt-prev pt-wb">{_week_before_text(prev_p.get(t, set()), prev_t.get(t, set()))}'
-                         '</td>')
+            cells.append(f'<td class="pt-prev pt-wb">{wb_text.get(t, "")}</td>')
         my_p = practice_days.get(t, set())
         my_t = tourn_days.get(t, set())
         while k < len(days):
