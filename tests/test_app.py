@@ -925,9 +925,13 @@ def test_request_shows_where_it_goes_and_never_bumps_a_team(db, monkeypatch):
     at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
     a = at.session_state["result"].assignments
     mine = a[(a["kind"] == "Practice") & (a["name"] == team)]
-    day = date(2026, 11, 4)
-    taken = a[(a["kind"] == "Practice") & (a["date"] == day) & (a["slot"] == "5:30") & (a["name"] != team)]
-    assert len(taken)
+    # A 5:30 another team holds, whose head coach isn't this team's (so the extra can go next to it).
+    pr = a[(a["kind"] == "Practice") & (a["slot"] == "5:30") & (a["name"] != team)]
+    pr = pr[pr["head"].map(lambda h: head not in str(h)) & pr["date"].map(lambda d: d.weekday() < 5)]
+    pr = pr[~pr["date"].isin(set(mine["date"]))]
+    assert len(pr)
+    day = pr.iloc[0]["date"]
+    taken = pr[pr["date"] == day]
     other, court = taken.iloc[0]["name"], int(taken.iloc[0]["court"])
     at.radio(key="nav").set_value("Edit practices").run()
     at.selectbox(key="ed_team").set_value(team).run()

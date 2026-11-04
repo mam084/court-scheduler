@@ -31,7 +31,8 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - Nothing on closure days, before a team's season start, or where a practice was removed by hand
 - At most the team's weekly number of practices (2 unless it asked for more), plus any extra practices added by hand
 - Only 14s and under practice at 3:45, and 14s and under never practice at 7:20 (unless the team is marked `late_ok`, and then only when needed)
-- Weekends: only open dates and blocks, only a team's allowed weekend options, and never one team alone in a block
+- Weekends: only open dates and blocks, only a team's allowed weekend options
+- **Never one team practicing alone**, at any time on any day (weekdays too). A locals program or local tournament in the gym at the same time counts as company. This outranks assistant coaches' no-dates
 - Local tournaments take their courts (all by default) until 7 PM, plus the coaches working them (listed, and their locals program's). 7:20 practices and the 7–9 PM weekend block still happen
 - Teams at a travel tournament don't practice on tournament days, **or the day after** (Nov 2026: a no-date for them that's never broken)
 - At most one practice per team per day (weeks run Sunday–Saturday)

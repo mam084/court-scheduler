@@ -12,8 +12,9 @@ Hard rules (never broken)
   - 'No' availability rows for a team or its head coach.
   - Age rules: only 14s & under at 3:45; 14s & under never at 7:20 / 7 PM.
   - No practices before a team's season start date.
-  - Weekends: only open dates/blocks, only a team's weekend_only options,
-    and never one team alone in a weekend block.
+  - Weekends: only open dates/blocks, only a team's weekend_only options.
+  - Never one team practicing alone, at any time on any day (a locals program or local
+    tournament in the gym then counts as company).
   - At most one practice per team per day (hand-placed extras can share a day) and two per week.
 
 Soft preferences (weights in config.py)
@@ -62,6 +63,7 @@ from .config import (
     slot_cost,
     slots_overlap,
 )
+from . import config as _cfg
 from .coach_load import team_back_to_back
 from .config import week_start as _week_start
 from .data import CleanInput, Rule, ScheduleInput, clean, span_text, tournament_conflicts
@@ -151,6 +153,11 @@ def solve(
         blocked = {c for lp in locals_at(d, s) if lp.on_site for c in lp.courts}
         blocked |= {c for tn in local_tourn if tn.blocks(d, s) for c in tn.courts}
         return [c for c in base if c not in blocked]
+
+    def gym_company(d, s) -> bool:
+        """A locals program or local tournament in the gym in slot s on day d (so a team practicing
+        then isn't alone)."""
+        return any(lp.on_site for lp in locals_at(d, s)) or any(tn.blocks(d, s) for tn in local_tourn)
 
     # Travel tournaments: days a team is away, and the days right around them.
     away = defaultdict(set)                 # team name -> dates at a tournament
@@ -664,20 +671,29 @@ def solve(
                     elif len(vs) > 1:
                         m.AddAtMostOne(vs)
 
-    # Weekend blocks: never one team alone; reward sharing blocks.
+    # Never one team practicing alone, at any time on any day (Nov 2026; was weekends only). A hard
+    # rule, so it outranks assistant coaches' no-dates and everything else soft. A locals program or
+    # local tournament in the gym at the same time counts as company, and so does a practice placed
+    # by hand. Weekend blocks used are also counted, to reward sharing them.
     block_used = {}
-    for d in weekend_dates:
+    weekend_set = set(weekend_dates)
+    for d in open_dates:
         for s in slots_on(d):
-            vs = [y[t, d, s] for t in T if (t, d, s) in y]
+            vs = [y[t, d, s] for t in T if (t, d, s) in y and (t, d, s) not in pinned]
             if not vs:
                 continue
-            if all((t, d, s) in pinned for t in T if (t, d, s) in y):
-                continue  # only practices placed by hand (e.g. over a break): a coach's call, alone or not
+            if d not in weekend_set and not _cfg.NEVER_ALONE_WEEKDAYS:
+                continue
+            company = gym_company(d, s) or any((t, d, s) in pinned for t in T)
+            if company and d not in weekend_set:
+                continue
             u = m.NewBoolVar(f"wb_{d}_{s}")
-            m.Add(sum(vs) >= 2 * u)
+            if not company:
+                m.Add(sum(vs) >= 2 * u)
             m.Add(sum(vs) <= len(vs) * u)
-            block_used[d, s] = u
-            obj.append(WEIGHTS["weekend_block"] * u)
+            if d in weekend_set:
+                block_used[d, s] = u
+                obj.append(WEIGHTS["weekend_block"] * u)
 
     # Required weekends ("14th or 15th must be used").
     groups = defaultdict(list)
@@ -1181,8 +1197,9 @@ def solve(
                 free = len(courts_on(d, s)) - len(booked_at.get((d, s), []))
                 if free <= 0:
                     continue
-                if d in data.weekends and not booked_at.get((d, s)):
-                    continue  # nobody else in that block: never one team alone on a weekend
+                if not booked_at.get((d, s)) and not gym_company(d, s) \
+                        and (d in data.weekends or _cfg.NEVER_ALONE_WEEKDAYS):
+                    continue  # nobody else then: never one team practicing alone
                 if d.weekday() >= 5 and team.weekend_only and not any(w.matches(d, s) for w in team.weekend_only):
                     continue
                 if any(h in coach_tourn[d, s] for h in team.heads):

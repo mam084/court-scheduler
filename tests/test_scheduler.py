@@ -23,6 +23,14 @@ from scheduler.data import (
 )
 from scheduler.solver import week_start
 
+
+@pytest.fixture()
+def alone_ok(monkeypatch):
+    """For tests of other rules in tiny setups (a team or two): lets a team practice alone on a
+    weekday, so the never-alone rule (Nov 2026) doesn't empty the schedule they're checking."""
+    # The solver's own copy of the config (the app tests reload the package mid-run).
+    monkeypatch.setattr(solve.__globals__["_cfg"], "NEVER_ALONE_WEEKDAYS", False)
+
 NOV = (date(2026, 11, 1), date(2026, 11, 30))
 
 
@@ -121,6 +129,7 @@ def test_age_rules_are_hard():
     assert not ((pr["age"] <= 14) & (pr["slot"] == "7:20")).any()
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_late_ok_exception_allows_7_20_but_avoids_it():
     teams = [{"team": "14 Black", "age": 14, "head_coach": "Sam", "late_ok": "Yes"},
              {"team": "14 Gold", "age": 14, "head_coach": "Lee"}]
@@ -168,6 +177,7 @@ def test_locals_block_courts_and_coaches_off_site_only_coaches():
     _check_hard_rules(inp, r)
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_recurring_and_ranged_no_dates():
     teams = [{"team": "14-Ari", "age": 14}]
     avail = [{"who": "14-Ari", "type": "No", "days": "Mon"},
@@ -215,6 +225,7 @@ def test_weekend_only_respected():
     assert set(noah["date"]) <= {date(2026, 11, 22)} and set(noah["slot"]) <= {"9AM", "11AM"}
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_double_up_rewarded():
     teams = [{"team": "15-Robin", "age": 15, "head_coach": "Robin"},
              {"team": "12-Robin", "age": 12, "head_coach": "Robin"}]
@@ -406,6 +417,7 @@ def test_storage_roundtrip_postgres():
     _store_roundtrip(Store(os.environ["TEST_DATABASE_URL"]))
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_date_range_partial_weeks_and_new_year():
     inp = simulate(4, 2, 2, seed=5, start=date(2026, 12, 15), end=date(2027, 1, 15))
     inp.availability = pd.concat([inp.availability, pd.DataFrame([{
@@ -432,6 +444,7 @@ def test_court_2_used_before_missing_a_practice():
     assert r.shortfalls.empty
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_practice_counts_flag_short_weeks():
     teams = [{"team": "15-A", "age": 15}, {"team": "15-B", "age": 15}]
     # 15-A is away at a travel tournament that whole week, so it can't practice.
@@ -571,6 +584,7 @@ def test_views_always_show_weekends():
     assert ">Sun<" in cal and ">Sat<" in cal
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_head_coach_no_dates_never_broken_team_flagged_with_openings():
     """A head coach's no-date is never broken, even with an assistant free (Nov 2026): the team
     comes up short, and the open times it could add one (with the no-date noted) are listed."""
@@ -750,6 +764,7 @@ def test_calendar_shows_local_tournament_on_closed_weekend():
     assert cal.count(">Boys 14 Local<") == 2   # Sat and Sun, though neither weekend day is open for practices
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_breaking_a_no_date_beats_practicing_next_to_a_tournament():
     """Only Tue and Fri (the day before a Sat-Sun tournament) are free that
     week. A no-date is broken instead of practicing Friday."""
@@ -814,6 +829,7 @@ def test_3_45_rotates_and_youngest_go_first():
     assert {"12-Ana", "13-Bo"} <= early_teams
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_team_that_asks_for_3_45_gets_it():
     teams = [{"team": "13-Eve", "age": 13}, {"team": "13-Fay", "age": 13}]
     wish = [{"team": "13-Eve", "choice": 1, "times": "3:45"}]
@@ -879,6 +895,7 @@ def test_wished_back_to_back_days_beat_a_neighbors_swap():
     assert (b2b["severity"] == "Low").all() and b2b["detail"].str.contains("asked").all()
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_open_requested_slot_beats_sticking_to_usual():
     # 14 Black asked for Tue/Wed 5:30. A one-week clinic is the only thing on
     # Wednesdays except the first week, so its usual week is Tue/Thu; in the
@@ -975,6 +992,7 @@ def test_wishlist_days_count_more_than_times():
     assert _wish_cost(w, "Tue", "7:20") < _wish_cost(w, "Mon", "5:30") < _wish_cost(w, "Mon", "7:20")
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_coach_in_a_program_needs_a_sub_before_a_no_date_breaks():
     """Week of 11/8: Wed, Thu and Fri open, 5:30 only. The head coach works a
     program Wed 5:30 and the assistant can't do Thursday. The team gets Wed
@@ -1255,6 +1273,7 @@ def test_pairing_is_the_last_resort():
     assert r7.metrics["paired_slots"] == 0
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_team_can_have_three_practices_a_week():
     teams = [{"team": "18 Black", "club": "Boys", "age": 18, "head_coach": "Al", "practices": "3"},
              {"team": "16-Bea", "age": 16}]
@@ -1267,6 +1286,7 @@ def test_team_can_have_three_practices_a_week():
     assert len(r.pattern[r.pattern["team"] == "18 Black"]) == 3
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_extra_practice_goes_on_top():
     teams = [{"team": "16-Bea", "age": 16}]
     inp = _inp(teams)
@@ -1322,6 +1342,7 @@ def test_hs_boys_keep_their_courts_from_530_to_720():
     assert changes == 0                                   # nets outrank the pecking order (Nov 2026)
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_coach_stays_on_court_for_back_to_back_teams():
     # (Girls then HS boys would need a net change, which outranks this.)
     teams = [{"team": "16-Ana", "club": "Girls", "age": 16, "head_coach": "Ana"},
@@ -1335,6 +1356,7 @@ def test_coach_stays_on_court_for_back_to_back_teams():
             assert g["court"].nunique() == 1, g
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_privates_conflicts_and_export():
     from openpyxl import load_workbook
 
@@ -1420,6 +1442,7 @@ def test_boys_above_girls_at_the_same_rank():
     assert w["14 Black"] > w["14-Ann"]
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_weekend_with_local_tournament_isnt_greyed_out_and_shows_under_the_day():
     from scheduler.views import court_grid_html, week_dates
     teams = [{"team": "16-Bea", "age": 16}]
@@ -1856,6 +1879,7 @@ def test_prints_use_short_labels_online_does_not():
     assert "14-Connor" in online and "S14-B" not in online
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_never_practice_the_day_after_a_travel_tournament():
     """The day after a tournament is never used, even if it means a short week (Nov 2026)."""
     teams = [{"team": "16-Ana", "age": 16, "head_coach": "Ana"}]
@@ -1895,6 +1919,7 @@ def test_friday_720_avoided():
     assert not len(pr[(pr["day"] == "Fri") & (pr["slot"] == "7:20")])   # even when they ask for it
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_no_late_practice_night_before_a_coachs_tournament():
     # Ana coaches 16-Ana (at a travel tournament Sat 11/14) and 18-Ana (not going): 18-Ana
     # doesn't practice late on Fri 11/13, even though it asked for Fridays at 7:20.
@@ -1997,6 +2022,7 @@ def test_team_back_to_back_days_flagged():
     assert h.count('class="cs-tag cs-b2b"') == 2
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_back_to_back_days_in_review():
     # Only Tue and Wed open for this team: every week is back-to-back, and each one is flagged.
     teams = [{"team": "16-Ana", "age": 16}]
@@ -2058,6 +2084,7 @@ def test_coach_at_a_travel_tournament_cant_coach_another_team_that_day():
                for o in op for x in o["options"])
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_no_thursday_friday_even_over_a_preferred_day():
     """Nov 2026: Thu->Fri is avoided harder than other back-to-backs (Wed/Thu is tolerable)."""
     teams = [{"team": "16-Tia", "age": 16, "head_coach": "Tia"}]
@@ -2103,6 +2130,7 @@ def _leo_case(thu_530_open: bool):
     return sorted(zip(wk["date"], wk["slot"]))
 
 
+@pytest.mark.usefixtures("alone_ok")
 def test_assistant_at_tournament_late_practice_beats_missing():
     # Thu 5:30 is out: Thu 7:20 the night before Leo's tournament, not Fri without Leo.
     assert (date(2026, 11, 19), "7:20") in _leo_case(thu_530_open=False)
@@ -2131,3 +2159,20 @@ def test_paper_print_big_local_tournament_and_last_session():
                  .drop_duplicates(["court", "slot"]))
     assert h.count('class="last"') == n_last > 0
     assert "border-top: 1.5px solid #555; padding: 0 5px" not in h   # no line above the first practice time
+
+
+def test_never_one_team_alone_any_day():
+    """Nov 2026: no team practices by itself at any time on any day, weekdays included (a locals
+    program in the gym then counts as company); it outranks assistant coaches' no-dates."""
+    s, e = date(2026, 12, 6), date(2026, 12, 19)
+    for seed in (3, 11):
+        inp = simulate(5, 3, 2, seed=seed, start=s, end=e)
+        r = solve(inp, s, e, time_limit_s=15)
+        assert r.ok
+        a = r.assignments
+        pr = a[a["kind"] == "Practice"]
+        other = a[a["kind"] != "Practice"]
+        company = set(zip(other["date"], other["slot"]))
+        per_slot = Counter(zip(pr["date"], pr["slot"]))
+        alone = [k for k, n in per_slot.items() if n == 1 and k not in company]
+        assert not alone, alone

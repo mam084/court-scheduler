@@ -221,6 +221,11 @@ PRIVATE_MINUTES = 60
 # Hard age rules
 # ---------------------------------------------------------------------------
 YOUNG_MAX_AGE = 14            # "14s & under"
+
+# Never one team practicing alone on a weekday either (Nov 2026; weekends always had it). A hard
+# rule: a team with nobody to share a time with loses that practice (and is flagged) rather than
+# practicing alone. Tests of other rules in tiny one- or two-team setups switch it off.
+NEVER_ALONE_WEEKDAYS = True
 YOUNG_ONLY_SLOTS = {"3:45"}   # only 14s & under can practice at 3:45
 NOT_FOR_YOUNG = {"7:20", "7PM"}  # 14s & under can't practice this late
 
@@ -246,7 +251,7 @@ WEIGHTS = {
     # The club's rule order, most important first (Oct 2026). Each step costs
     # roughly 2-4x the one below it, so one break of a higher rule outweighs
     # several of the next one down (e.g. two assistant no-dates still cost
-    # less than one head coach's). Never alone on a weekend, head coaches never double-booked,
+    # less than one head coach's). Never one team alone at any time (Nov 2026: any day, not just weekends), head coaches never double-booked,
     # age/timeslot rules, one team per court and 2 practices a week max are
     # hard rules, above all of these.
     #
