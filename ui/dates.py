@@ -89,10 +89,24 @@ def initial_day() -> date:
     return st.session_state.range_start
 
 
+def _url_day() -> date | None:
+    try:
+        return date.fromisoformat(str(st.query_params.get("day", "")))
+    except ValueError:
+        return None
+
+
 def view_day() -> date:
+    """The day being looked at. Nov 2026: it's kept in the page address (?day=YYYY-MM-DD), so a
+    refresh comes back to the same dates instead of jumping to the first scheduled ones."""
     d = st.session_state.get(VIEW_DAY)
     if d is None:
-        d = st.session_state[VIEW_DAY] = initial_day()
+        d = st.session_state[VIEW_DAY] = _url_day() or initial_day()
+    try:
+        if st.query_params.get("day") != d.isoformat():
+            st.query_params["day"] = d.isoformat()
+    except Exception:  # noqa: BLE001 - the address is only a convenience
+        pass
     return d
 
 

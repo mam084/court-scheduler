@@ -1330,3 +1330,21 @@ def test_flags_with_the_same_id_show_once(db):
     at.run()
     assert not at.exception, at.exception
     assert any("1 coverage flag to sort out" in e.label for e in at.expander)
+
+
+def test_refresh_keeps_the_dates_being_looked_at(db):
+    """Nov 2026: the day being looked at rides in the page address, so a refresh (a new session)
+    comes back to it instead of jumping to the first scheduled dates."""
+    from streamlit.testing.v1 import AppTest
+    _save(db, "November", 1)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    _auto_schedule(at, date(2026, 12, 6), date(2026, 12, 19))
+    assert not at.exception, at.exception
+    assert at.query_params["day"] in ("2026-12-06", ["2026-12-06"])
+    again = AppTest.from_file("../app.py", default_timeout=180)
+    again.query_params["day"] = "2026-12-06"
+    again.run()
+    assert not again.exception, again.exception
+    assert again.session_state["view_day"] == date(2026, 12, 6)
+    assert again.session_state["range_start"] == date(2026, 12, 6)
