@@ -174,11 +174,11 @@ def template_locals(a: pd.DataFrame, start: date | None = None, end: date | None
 def team_order() -> list[str]:
     """Team names, girls then boys, each in the pecking order (top team first)."""
     cleaned = S.cleaned
-    from scheduler.config import pecking_key, team_is_boys
+    from scheduler.config import pecking_keys, team_is_boys
     if not cleaned:
         return []
-    return [t.name for t in sorted(cleaned.teams, key=lambda t: (team_is_boys(t.club, t.name),
-                                                                 pecking_key(t.age, t.level, False)))]
+    keys = pecking_keys([(t.name, t.age, t.level, False, t.peck_move) for t in cleaned.teams])
+    return [t.name for t in sorted(cleaned.teams, key=lambda t: (team_is_boys(t.club, t.name), keys[t.name]))]
 
 
 def team_sections() -> dict[str, str]:

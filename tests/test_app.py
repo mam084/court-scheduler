@@ -1383,3 +1383,25 @@ def test_publish_lists_changes_readably(db):
     txt = next(c.value for c in at.code if c.value.startswith("Changes since"))
     assert "Week of" in txt and "→ Court" in txt
     assert any(b.label == "🖨 Print changes" for b in at.get("download_button"))
+
+
+def test_move_a_team_in_the_pecking_order(db):
+    """Nov 8, 2026: the Pecking order section can put a team above an older team."""
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Peck move", 6)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    teams = at.session_state["inp"].teams
+    ages = dict(zip(teams["team"], teams["age"].astype(float)))
+    young = min(ages, key=ages.get)
+    old = max(ages, key=ages.get)
+    from ui.nav import TAB_PECK
+    at.radio(key="nav").set_value(TAB_PECK).run()
+    at.selectbox(key="pm_team").set_value(young).run()
+    at.selectbox(key="pm_side").set_value("above").run()
+    at.selectbox(key="pm_target").set_value(old).run()
+    at.button(key="pm_go").click().run()
+    assert not at.exception, at.exception
+    t = at.session_state["inp"].teams
+    assert t.set_index("team").loc[young, "peck_move"] == f"above {old}"

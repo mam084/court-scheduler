@@ -65,12 +65,55 @@ def team_is_boys(club, name: str = "") -> bool:
     return is_boys_club(club) or bool(re.search(r"\b(black|green)\s*$", str(name).lower()))
 
 
+def peck_move_of(text) -> tuple[str, str] | None:
+    """'above 18-Danielle' -> ('above', '18-Danielle'); anything else -> None."""
+    t = str(text or "").strip()
+    head, _, rest = t.partition(" ")
+    if head.lower() in ("above", "below") and rest.strip():
+        return head.lower(), rest.strip()
+    return None
+
+
+def pecking_keys(entries) -> dict[str, tuple]:
+    """Each team's sort key in the pecking order, top first. entries: (name, age, rank, boys, move)
+    with move like 'above 18-Danielle' (a hand move across age groups, Nov 2026): the team sits
+    right above (or below) that team, whatever its own age and rank. A move onto a team that is
+    itself moved follows it; a loop, or a team that isn't there, is ignored."""
+    import re
+    norm = lambda s: re.sub(r"[^a-z0-9]", "", str(s).lower())  # noqa: E731
+    base = {n: pecking_key(a, r, b) for n, a, r, b, _ in entries}
+    by_norm = {norm(n): n for n in base}
+    moves = {}
+    for n, *_, mv in entries:
+        m = peck_move_of(mv)
+        if m and norm(m[1]) in by_norm and by_norm[norm(m[1])] != n:
+            moves[n] = (m[0], by_norm[norm(m[1])])
+    out = {}
+
+    def key(n, seen=()):
+        if n in out:
+            return out[n]
+        if n not in moves or n in seen:
+            return base[n] + (0.0,)
+        side, target = moves[n]
+        k = key(target, seen + (n,))
+        # Just above / below the target, before anything else tied with it.
+        out_k = k[:-1] + (k[-1] + (-0.5 if side == "above" else 0.5) / (len(seen) + 2),)
+        return out_k
+
+    for n in base:
+        out[n] = key(n)
+    return out
+
+
 def pecking_weights(teams) -> dict[str, int]:
     """How much each team 'deserves' the better courts, from the pecking
     order: the top team gets 20, the bottom team 2, everyone else spread in
     between (at a shared rank, e.g. 16-1, the boys team is just above the girls). The
-    lowest team is the one that ends up on Court 2 when it's needed."""
-    key = {t.name: pecking_key(t.age, t.level, team_is_boys(t.club, t.name)) for t in teams}
+    lowest team is the one that ends up on Court 2 when it's needed. Hand moves across
+    age groups ('17-James above 18-Danielle') count."""
+    key = pecking_keys([(t.name, t.age, t.level, team_is_boys(t.club, t.name), getattr(t, "peck_move", ""))
+                        for t in teams])
     keys = sorted(set(key.values()))
     if len(keys) <= 1:
         return {t.name: 10 for t in teams}

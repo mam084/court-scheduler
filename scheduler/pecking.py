@@ -245,8 +245,9 @@ def assistant_changes(matches: list[Match], teams: pd.DataFrame) -> list[tuple[s
 
 
 def order_table(teams: pd.DataFrame) -> pd.DataFrame:
-    """Teams in pecking order (top first), with a 'court priority' number."""
-    from .config import pecking_key
+    """Teams in pecking order (top first), with a 'court priority' number. Hand moves across age
+    groups (the peck_move column, 'above 18-Danielle') count; 'moved' says which."""
+    from .config import peck_move_of, pecking_keys
     rows = []
     for _, t in teams.iterrows():
         name = "" if blank(t.get("team")) else str(t["team"]).strip()
@@ -260,15 +261,26 @@ def order_table(teams: pd.DataFrame) -> pd.DataFrame:
         if rank is None:
             low = name.lower()
             rank = 1 if low.endswith("black") else 2 if low.endswith("green") else None
+        mv = "" if blank(t.get("peck_move")) else str(t["peck_move"]).strip()
         rows.append({"team": name, "club": "" if blank(t.get("club")) else str(t["club"]), "age": age,
                      "rank": "" if blank(t.get("rank")) else str(t["rank"]),
                      "head_coach": "" if blank(t.get("head_coach")) else str(t["head_coach"]),
                      "assistants": "" if blank(t.get("assistants")) else str(t["assistants"]),
-                     "_key": pecking_key(age, rank, team_side(t.get("club"), name) == "Boys"),
+                     "_rank": rank, "_boys": team_side(t.get("club"), name) == "Boys", "_mv": mv,
                      "_set": rank is not None})
     df = pd.DataFrame(rows)
     if df.empty:
         return df
+    keys = pecking_keys([(r["team"], r["age"], r["_rank"], r["_boys"], r["_mv"]) for r in rows])
+    df["_key"] = df["team"].map(keys)
+    names = set(df["team"])
+    df["moved"] = [m[0] + " " + m[1] if (m := peck_move_of(v)) and any(
+        re.sub(r"[^a-z0-9]", "", m[1].lower()) == re.sub(r"[^a-z0-9]", "", n.lower()) for n in names) else ""
+        for v in df["_mv"]]
+    df = df.sort_values(["_key", "club", "team"]).reset_index(drop=True)
+    keys_ = list(dict.fromkeys(df["_key"]))
+    df.insert(0, "order", df["_key"].map(lambda k: keys_.index(k) + 1))
+    return df.drop(columns=["_rank", "_boys", "_mv"])
     df = df.sort_values(["_key", "club", "team"]).reset_index(drop=True)
     keys = list(dict.fromkeys(df["_key"]))
     df.insert(0, "order", df["_key"].map(lambda k: keys.index(k) + 1))

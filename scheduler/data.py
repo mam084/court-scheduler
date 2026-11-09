@@ -82,7 +82,7 @@ from .config import (
 
 COLUMNS = {
     "Teams": ["team", "club", "age", "head_coach", "assistants", "start_date", "priority",
-              "weekend_only", "weekend_pref", "late_ok", "rank", "practices"],
+              "weekend_only", "weekend_pref", "late_ok", "rank", "practices", "peck_move"],
     "Availability": ["who", "type", "days", "dates", "times", "note"],
     "Wishlist": ["team", "choice", "days", "times", "note"],
     "Locals": ["program", "side", "days", "time", "courts", "coaches", "on_site", "dates", "skip"],
@@ -803,6 +803,9 @@ class Team:
     late_ok: bool = False
     level: int | None = None  # rank within the age group: 1 = top team, None = unknown
     per_week: int = PRACTICES_PER_WEEK  # practices a week this team wants
+    # A hand move in the pecking order across age groups (Nov 2026): "above 18-Danielle" or
+    # "below 16 Black" puts this team right next to that one, whatever their ages and ranks.
+    peck_move: str = ""
 
     def allowed(self, slot: str) -> bool:
         return slot_allowed_for_age(self.age, slot, self.late_ok)
@@ -1248,7 +1251,7 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 errors.append(f"{row}: practices should be between 1 and {MAX_PRACTICES_PER_WEEK} a week")
                 continue
         teams.append(Team(name, club, age, heads, assistants, team_start, priority, w_only, w_pref, late_ok,
-                          level, per_week))
+                          level, per_week, "" if blank(r.get("peck_move")) else str(r["peck_move"]).strip()))
 
     team_names = {t.name for t in teams}
     people = {c for t in teams for c in t.staff}
@@ -1566,6 +1569,12 @@ def rename_team(inp: ScheduleInput, old: str, new: str) -> None:
             df = df.copy().astype(object)
             df[col] = [new if same(v) else v for v in df[col]]
             setattr(inp, attr, df)
+    t = getattr(inp, "teams", None)   # "above 18-Danielle" follows a renamed team
+    if isinstance(t, pd.DataFrame) and "peck_move" in t.columns and len(t):
+        t = t.copy().astype(object)
+        t["peck_move"] = [v if blank(v) or " " not in str(v).strip() or not same(str(v).strip().split(" ", 1)[1])
+                          else f"{str(v).strip().split(' ', 1)[0]} {new}" for v in t["peck_move"]]
+        inp.teams = t
     t = getattr(inp, "tournaments", None)
     if isinstance(t, pd.DataFrame) and "teams" in t.columns and len(t):
         t = t.copy().astype(object)

@@ -2397,3 +2397,36 @@ def test_never_one_team_alone_any_day():
         per_slot = Counter(zip(pr["date"], pr["slot"]))
         alone = [k for k, n in per_slot.items() if n == 1 and k not in company]
         assert not alone, alone
+
+
+def test_move_a_team_across_age_groups():
+    """Nov 8, 2026: 17-James goes above 18-Danielle, which ranks (within an age) can't do. Courts
+    follow it; a rename keeps the move; undoing puts it back by age and rank."""
+    from scheduler import pecking as pk
+    from scheduler.config import pecking_weights
+    from scheduler.data import rename_team
+    teams = [{"team": "18 Black", "club": "Boys", "age": 18, "rank": "18-1", "head_coach": "Tyler"},
+             {"team": "18-Danielle", "club": "Girls", "age": 18, "rank": "18-1", "head_coach": "Danielle"},
+             {"team": "18-Two", "club": "Girls", "age": 18, "rank": "18-2", "head_coach": "Ana"},
+             {"team": "17-James", "club": "Girls", "age": 17, "rank": "17-1", "head_coach": "James",
+              "peck_move": "above 18-Danielle"},
+             {"team": "17 Black", "club": "Boys", "age": 17, "rank": "17-1", "head_coach": "Leo"}]
+    inp = _inp(teams)
+    o = pk.order_table(inp.teams)
+    assert o["team"].tolist() == ["18 Black", "17-James", "18-Danielle", "18-Two", "17 Black"]
+    assert o.set_index("team").loc["17-James", "moved"] == "above 18-Danielle"
+    w = pecking_weights(clean(inp, *NOV).teams)
+    assert w["18 Black"] > w["17-James"] > w["18-Danielle"]
+    # "below" works too, and a move onto a team that isn't there is ignored.
+    t = inp.teams.copy()
+    t.loc[t["team"] == "17-James", "peck_move"] = "below 18 Black"
+    assert pk.order_table(t)["team"].tolist()[:3] == ["18 Black", "17-James", "18-Danielle"]
+    t.loc[t["team"] == "17-James", "peck_move"] = "above 99-Nobody"
+    assert pk.order_table(t)["team"].tolist()[-1] == "17-James" and pk.order_table(t)["moved"].eq("").all()
+    # Renaming the team it sits above keeps the move.
+    rename_team(inp, "18-Danielle", "18-Dani")
+    assert pk.order_table(inp.teams)["team"].tolist()[1:3] == ["17-James", "18-Dani"]
+    # Undo: back by age and rank.
+    t = inp.teams.copy()
+    t.loc[t["team"] == "17-James", "peck_move"] = ""
+    assert pk.order_table(t)["team"].tolist()[:3] == ["18 Black", "18-Dani", "18-Two"]

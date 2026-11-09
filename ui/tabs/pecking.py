@@ -28,7 +28,7 @@ def render():
     st.markdown("The club's pecking order: **rank within each age group**, written like `16-3` (the third 16s "
                 "team) or just `3`. Boys and girls teams can share a rank; at the same rank the boys team goes just "
                 "above the girls (`14-1` boys, then `14-1` girls). Edit any rank in the table and press "
-                "**Save ranks**. "
+                "**Save ranks**; to put a team above an older one, use **Move a team across age groups** below. "
                 "Higher teams get the better courts (1 → 7 → 3 → 6 → 5 → 4 → 2): Courts 1 and 7 strictly by "
                 "rank, Courts 3–6 loosely (a coach staying on one court wins there unless the gap is big). "
                 "When Court 2 is needed, the lowest team gets it.")
@@ -42,15 +42,16 @@ def render():
                     "so they're placed between their age group's "
                     f"1s and 2s: {', '.join(missing)}.", icon="ℹ️")
         sig_key = abs(hash((st.session_state.get("inp_sig"), st.session_state.get("locals_ver", 0)))) % 10**8
-        shown = order[["order", "rank", "team", "club", "head_coach", "assistants"]]
+        shown = order[["order", "rank", "team", "club", "head_coach", "assistants", "moved"]]
         edited = st.data_editor(
             shown, hide_index=True, width="stretch", key=f"peck_edit_{sig_key}",
-            disabled=["order", "team", "club", "head_coach", "assistants"],
+            disabled=["order", "team", "club", "head_coach", "assistants", "moved"],
             column_config={
                 "order": st.column_config.NumberColumn("#", help="Position in the pecking order (1 = top). "
                                                        "At a shared rank, boys come before girls.", width="small"),
                 "rank": st.column_config.TextColumn("Rank", help="Like 16-3, or just 3", width="small"),
-                "team": "Team", "club": "Club", "head_coach": "Head coach", "assistants": "Assistants"})
+                "team": "Team", "club": "Club", "head_coach": "Head coach", "assistants": "Assistants",
+                "moved": st.column_config.TextColumn("Moved", help="Moved by hand, across age groups (below)")})
         changed = {r.team: r.rank for r, (_, o) in zip(edited.itertuples(), shown.iterrows())
                    if str(r.rank or "").strip() != str(o["rank"] or "").strip()}
         if st.button("Save ranks", type="primary", disabled=not changed,
@@ -62,6 +63,8 @@ def render():
                 t.loc[t["team"].astype(str).str.strip() == team, "rank"] = str(rank or "").strip()
             inp.teams = t
             _rebuild(f"Saved {plural(len(changed), 'rank')}. Schedule rebuilt.")
+
+        _move_team(order)
 
         dl = order.rename(columns={"rank": "Rank", "team": "Team", "club": "Club", "head_coach": "Head Coach",
                                    "assistants": "Asst. Coach"})[["Rank", "Club", "Team", "Head Coach", "Asst. Coach"]]
@@ -126,6 +129,37 @@ def render():
                              + ". Schedule rebuilt.")
 
     _rename_team()
+
+
+def _move_team(order: pd.DataFrame):
+    """Move a team right above or below another one, across age groups (17-James above 18-Danielle)."""
+    names = order["team"].tolist()
+    moved = order[order["moved"] != ""]
+    with st.expander("Move a team across age groups", expanded=bool(len(moved))):
+        st.caption("Ranks only order teams within an age group, with older ages first. To put a team "
+                   "somewhere else (say **17-James above 18-Danielle**), move it here. It stays next to that "
+                   "team even if ranks change; undo the move to put it back by its age and rank.")
+        c1, c2, c3, c4 = st.columns([2, 1, 2, 1], vertical_alignment="bottom")
+        team = c1.selectbox("Team", names, key="pm_team")
+        side = c2.selectbox("Goes", ["above", "below"], key="pm_side")
+        target = c3.selectbox("Team", [n for n in names if n != team], key="pm_target")
+        if c4.button("Move", type="primary", width="stretch", key="pm_go", disabled=not target):
+            _set_move(team, f"{side} {target}")
+            _rebuild(f"Moved {team} {side} {target} in the pecking order. Schedule rebuilt.")
+        for _, r in moved.iterrows():
+            a, b = st.columns([5, 1], vertical_alignment="center")
+            a.markdown(f"**{r['team']}** is {r['moved']}")
+            if b.button("Undo", key=f"pm_undo_{r['team']}", width="stretch"):
+                _set_move(r["team"], "")
+                _rebuild(f"{r['team']} is back by its age and rank. Schedule rebuilt.")
+
+
+def _set_move(team: str, move: str):
+    t = S.inp.teams.copy().astype(object)
+    if "peck_move" not in t.columns:
+        t["peck_move"] = ""
+    t.loc[t["team"].astype(str).str.strip() == team, "peck_move"] = move
+    S.inp.teams = t
 
 
 def _rename_team():
