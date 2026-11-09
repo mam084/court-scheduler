@@ -685,6 +685,8 @@ CHANGE_CSS = """
 .pc-week { font-size: 15px; font-weight: 800; margin: 16px 0 4px; border-bottom: 1.5px solid #1f2a44;
            padding-bottom: 2px; }
 .pc-tbl { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.pc-tbl col.pc-c0 { width: 74px; } .pc-tbl col.pc-c2d { width: 92px; }
+.pc-tbl td.pc-time { white-space: nowrap; color: #1f2a44; font-weight: 600; }
 .pc-tbl col.pc-c1 { width: 150px; } .pc-tbl col.pc-c2 { width: 72px; } .pc-tbl col.pc-c4 { width: 30%; }
 .pc-tbl td { padding: 5px 6px; border-bottom: 1px solid #d5d9e1; vertical-align: top; }
 .pc-tbl td.pc-team { font-weight: 800; padding-right: 10px; }
@@ -699,12 +701,14 @@ CHANGE_CSS = """
 """
 
 
-def changes_print_html(ch: pd.DataFrame, title: str, subtitle: str, labels: dict | None = None) -> str:
-    """Everything that changed since a published version, by week and then team, one line per
-    change with the reason. Portrait; long lists run onto more pages."""
+def changes_print_html(ch: pd.DataFrame, title: str, subtitle: str, labels: dict | None = None,
+                       by_day: bool = False) -> str:
+    """Everything that changed since a published version, by week and then team (or by_day: one
+    section per day, each day's changes by time), one line per change with the reason. Portrait;
+    long lists run onto more pages."""
     from html import escape as e
 
-    from .changes import changes_by_week
+    from .changes import changes_by_day, changes_by_week
     out = [f'<div class="pp-head"><h1>{e(title)}</h1><span class="pp-sub">{e(subtitle)} · printed '
            f'{date.today():%-m/%-d/%Y}</span></div>']
     if ch is None or ch.empty:
@@ -714,7 +718,18 @@ def changes_print_html(ch: pd.DataFrame, title: str, subtitle: str, labels: dict
         parts = [f"{int(counts[k])} {w}" for k, w in (("Moved", "moved"), ("Added", "added"), ("Removed", "removed"),
                                                      ("Court", "court changes")) if counts.get(k)]
         out.append(f'<div class="pc-sum">{ch["team"].nunique()} teams affected: {", ".join(parts)}.</div>')
-        for wk, teams in changes_by_week(ch, labels):
+        if by_day:
+            for d, items in changes_by_day(ch, labels):
+                out.append(f'<div class="pc-week">{d:%A %b %-d}</div><table class="pc-tbl"><colgroup>'
+                           '<col class="pc-c0"><col class="pc-c1"><col class="pc-c2d"><col><col class="pc-c4">'
+                           '</colgroup>')
+                for tm, nm, kind, what, why in items:
+                    cls = {"Moved away": "Removed", "Moved here": "Added"}.get(kind, kind)
+                    out.append(f'<tr class="pc-{cls}"><td class="pc-time">{e(tm)}</td>'
+                               f'<td class="pc-team">{e(nm)}</td><td class="pc-kind">{e(kind)}</td>'
+                               f'<td>{e(what)}</td><td class="pc-why">{e(why)}</td></tr>')
+                out.append("</table>")
+        for wk, teams in ([] if by_day else changes_by_week(ch, labels)):
             out.append(f'<div class="pc-week">Week of {wk:%a %b %-d}</div><table class="pc-tbl"><colgroup>'
                        '<col class="pc-c1"><col class="pc-c2"><col><col class="pc-c4"></colgroup>')
             for name, items in teams:

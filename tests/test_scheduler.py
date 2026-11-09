@@ -2459,3 +2459,31 @@ def test_every_place_in_the_pecking_order_counts_for_courts():
                              boys_of={0: True, 1: False, 2: False},
                              coach_links=[((2, d, "5:30"), (1, d, "7:20"))])
     assert c[0, d, "7:20"] == 1 and c[1, d, "7:20"] == 7
+
+
+def test_changes_by_day():
+    """Nov 9, 2026: the changes since publish, one section per day, each day's changes by time.
+    A move to another day shows on both days."""
+    from scheduler.changes import changes_by_day, changes_day_text, diff
+    from scheduler.prints import changes_print_html
+    old = pd.DataFrame([
+        {"kind": "Practice", "name": "16 Black", "date": date(2026, 11, 18), "slot": "5:30", "court": 7},
+        {"kind": "Practice", "name": "14-Ann", "date": date(2026, 11, 18), "slot": "7:20", "court": 3},
+        {"kind": "Practice", "name": "12-Kai", "date": date(2026, 11, 16), "slot": "3:45", "court": 4}])
+    new = pd.DataFrame([
+        {"kind": "Practice", "name": "16 Black", "date": date(2026, 11, 17), "slot": "5:30", "court": 3},
+        {"kind": "Practice", "name": "14-Ann", "date": date(2026, 11, 18), "slot": "7:20", "court": 1},
+        {"kind": "Practice", "name": "12-Kai", "date": date(2026, 11, 16), "slot": "5:30", "court": 2}])
+    ch = diff(old, new, None, *NOV)
+    days = changes_by_day(ch, {"16 Black": "S16-B"})
+    assert [d for d, _ in days] == [date(2026, 11, 16), date(2026, 11, 17), date(2026, 11, 18)]
+    d16, d17, d18 = (dict(((e[1], e[2]), e) for e in items) for _, items in days)
+    assert d16["12-Kai", "Moved"][3] == "from 3:45–5:30 · Court 4 to 5:30–7:20 · Court 2"
+    assert d17["S16-B (16 Black)", "Moved here"][3] == "Court 3 (was Wed 11/18 5:30–7:20 · Court 7)"
+    assert d18["S16-B (16 Black)", "Moved away"][3] == "Court 7 → Tue 11/17 5:30–7:20 · Court 3"
+    assert d18["14-Ann", "Court"][3] == "Court 3 → Court 1"
+    assert [e[1] for e in days[2][1]] == ["S16-B (16 Black)", "14-Ann"]       # by time: 5:30, then 7:20
+    txt = changes_day_text(ch, "Changes")
+    assert "Wednesday Nov 18" in txt and txt.index("Monday Nov 16") < txt.index("Tuesday Nov 17")
+    h = changes_print_html(ch, "Changes", "x", by_day=True)
+    assert h.count('class="pc-week"') == 3 and "Moved here" in h

@@ -137,15 +137,19 @@ def _court_taken(d: date, slot: str, court: int, data: CleanInput) -> str:
     return ""
 
 
+DAY_COLS = ["was_date", "was_slot", "was_court", "now_date", "now_slot", "now_court"]
+
+
 def diff(old: pd.DataFrame, new: pd.DataFrame, data: CleanInput | None, start: date, end: date,
          pinned: set | None = None) -> pd.DataFrame:
     """Every practice that differs between two schedules.
 
     Returns columns: team, week_of, change (Moved / Added / Removed / Court),
-    was, now, why, sort. A removed and an added practice for the same team in
-    the same week are paired up as one move.
+    was, now, why, and (for the by-day list, DAY_COLS) was_date, was_slot,
+    was_court, now_date, now_slot, now_court. A removed and an added practice
+    for the same team in the same week are paired up as one move.
     """
-    cols = ["team", "week_of", "change", "was", "now", "why"]
+    cols = ["team", "week_of", "change", "was", "now", "why"] + DAY_COLS
     old = old[old["kind"] == "Practice"] if "kind" in old.columns and len(old) else old
     new = new[new["kind"] == "Practice"] if "kind" in new.columns and len(new) else new
     # Only compare the dates both schedules cover.
@@ -166,6 +170,11 @@ def diff(old: pd.DataFrame, new: pd.DataFrame, data: CleanInput | None, start: d
         s = f"{r['date']:%a %-m/%-d} {SLOTS.get(r['slot'], r['slot'])}"
         return s + (f" · Court {int(r['court'])}" if with_court and pd.notna(r.get("court")) else "")
 
+    def at(r, side):
+        c = r.get("court")
+        return {f"{side}_date": r["date"], f"{side}_slot": r["slot"],
+                f"{side}_court": int(c) if pd.notna(c) else None}
+
     rows = []
     came_by = defaultdict(list)
     for k in came:
@@ -179,22 +188,24 @@ def diff(old: pd.DataFrame, new: pd.DataFrame, data: CleanInput | None, start: d
             extra = " (placed by hand)" if k2 in pinned else ""
             rows.append({"team": team, "week_of": week_start(d), "change": "Moved", "was": label(o[k]),
                          "now": label(n[k2]),
-                         "why": (why or "rearranged to fit other changes") + extra})
+                         "why": (why or "rearranged to fit other changes") + extra}
+                        | at(o[k], "was") | at(n[k2], "now"))
         else:
             rows.append({"team": team, "week_of": week_start(d), "change": "Removed", "was": label(o[k]),
-                         "now": "", "why": why or "rearranged to fit other changes"})
+                         "now": "", "why": why or "rearranged to fit other changes"} | at(o[k], "was"))
     for lst in came_by.values():
         for k2 in lst:
             rows.append({"team": k2[0], "week_of": week_start(k2[1]), "change": "Added", "was": "",
                          "now": label(n[k2]),
-                         "why": "placed by hand" if k2 in pinned else "added to reach 2 practices that week"})
+                         "why": "placed by hand" if k2 in pinned else "added to reach 2 practices that week"}
+                        | at(n[k2], "now"))
     for k in sorted(set(o) & set(n)):
         a, b = o[k], n[k]
         if pd.notna(a.get("court")) and pd.notna(b.get("court")) and int(a["court"]) != int(b["court"]):
             why = _court_taken(k[1], k[2], int(a["court"]), data) if data else ""
             rows.append({"team": k[0], "week_of": week_start(k[1]), "change": "Court",
                          "was": label(a), "now": f"Court {int(b['court'])}",
-                         "why": why or "courts rebalanced"})
+                         "why": why or "courts rebalanced"} | at(a, "was") | at(b, "now"))
     df = pd.DataFrame(rows, columns=cols)
     if len(df):
         order = {"Removed": 0, "Moved": 1, "Added": 2, "Court": 3}
@@ -236,6 +247,73 @@ def changes_by_week(ch: pd.DataFrame, labels: dict | None = None) -> list[tuple[
             teams.append((name, [(change_line(r), r.get("why") or "") for r in rows.to_dict(orient="records")]))
         out.append((wk, teams))
     return out
+
+
+def changes_by_day(ch: pd.DataFrame, labels: dict | None = None) -> list[tuple[date, list[tuple]]]:
+    """[(day, [(time, team label, kind, what, why)...])...], days in order, each day's changes by
+    time. A practice moved to another day shows on both days: 'Moved away' on the old one,
+    'Moved here' on the new one."""
+    labels = labels or {}
+    if ch is None or ch.empty or "was_date" not in ch.columns:
+        return []
+
+    def name(team):
+        lab = labels.get(team, team)
+        return lab if lab == team else f"{lab} ({team})"
+
+    def t(slot):
+        return SLOTS.get(slot, slot)
+
+    def place(r, side, with_day=False):
+        """Where a practice was / is. On its own day the time is in its own column, so just the
+        court (or the time too, when it changed within the day); on another day, day and time."""
+        d, sl, c = r[f"{side}_date"], r[f"{side}_slot"], r[f"{side}_court"]
+        ct = f"Court {int(c)}" if c is not None and pd.notna(c) else ""
+        if not with_day:
+            return ct or t(sl)
+        return f"{d:%a %-m/%-d} {t(sl)}" + (f" · {ct}" if ct else "")
+
+    def when(r, side):
+        return f"{t(r[side + '_slot'])} · {place(r, side)}"
+
+    days = defaultdict(list)
+    for r in ch.to_dict(orient="records"):
+        k, why, nm = r["change"], r.get("why") or "", name(r["team"])
+        if k == "Moved" and r["was_date"] == r["now_date"]:
+            days[r["now_date"]].append((r["now_slot"], nm, "Moved", f"from {when(r, 'was')} to {when(r, 'now')}",
+                                        why))
+        elif k == "Moved":
+            days[r["was_date"]].append((r["was_slot"], nm, "Moved away",
+                                        f"{place(r, 'was')} → {place(r, 'now', True)}", why))
+            days[r["now_date"]].append((r["now_slot"], nm, "Moved here",
+                                        f"{place(r, 'now')} (was {place(r, 'was', True)})", why))
+        elif k == "Removed":
+            days[r["was_date"]].append((r["was_slot"], nm, "Removed", place(r, "was"), why))
+        elif k == "Added":
+            days[r["now_date"]].append((r["now_slot"], nm, "Added", place(r, "now"), why))
+        elif k == "Court":
+            days[r["was_date"]].append((r["was_slot"], nm, "Court",
+                                        f"Court {int(r['was_court'])} → Court {int(r['now_court'])}", why))
+
+    def slot_i(sl):
+        return SLOT_KEYS.index(sl) if sl in SLOT_KEYS else 99
+
+    return [(d, [(t(e[0]),) + e[1:] for e in sorted(days[d], key=lambda e: (slot_i(e[0]), e[1]))])
+            for d in sorted(days)]
+
+
+def changes_day_text(ch: pd.DataFrame, title: str, labels: dict | None = None) -> str:
+    """The changes as plain text, one section per day, each day's changes by time."""
+    lines = [title, ""]
+    days = changes_by_day(ch, labels)
+    if not days:
+        lines.append("No changes.")
+    for d, items in days:
+        lines.append(f"{d:%A %b %-d}")
+        for tm, nm, kind, what, why in items:
+            lines.append(f"  {tm:<10} {nm}  {kind}: {what}" + (f"  ({why})" if why else ""))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def changes_text(ch: pd.DataFrame, title: str, labels: dict | None = None) -> str:

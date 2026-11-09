@@ -151,26 +151,32 @@ def _main():
                     c[i + 1].metric({"Court": "Court changes"}.get(k, k), int(counts.get(k, 0)))
                 who = st.multiselect("Only show these teams", sorted(ch["team"].unique()), key="pub_teams")
                 view = ch[ch["team"].isin(who)] if who else ch
-                st.dataframe(view.assign(week_of=view["week_of"].map(lambda d: f"{d:%b %-d}")).rename(columns={
+                from scheduler.changes import DAY_COLS
+                plain = view.drop(columns=[c for c in DAY_COLS if c in view.columns])
+                st.dataframe(plain.assign(week_of=view["week_of"].map(lambda d: f"{d:%b %-d}")).rename(columns={
                     "team": "Team", "week_of": "Week of", "change": "Change", "was": "Was", "now": "Now",
                     "why": "Why"}), hide_index=True, width="stretch")
-                # A readable list to print or paste (by week, then team, one line per change).
-                from scheduler.changes import changes_text
+                # A readable list to print or paste: by day (each day's changes by time) or by week
+                # and team, one line per change with its reason.
+                from scheduler.changes import changes_day_text, changes_text
                 from scheduler.labels import label_map
                 from scheduler.prints import changes_print_html
                 labs_ = label_map((t.name, t.club) for t in cleaned.teams) if cleaned is not None else {}
                 title_ = f"Changes since “{ver_['label']}”"
                 sub_ = f"published {published_at(ver_):%b %-d, %-I:%M %p} · {range_label(start, end)}"
-                html_ = changes_print_html(view, title_, sub_, labs_)
+                by_day = st.radio("Readable list", ["By day", "By week and team"], horizontal=True,
+                                  key="pub_list_by") == "By day"
+                html_ = changes_print_html(view, title_, sub_, labs_, by_day=by_day)
+                text_ = (changes_day_text if by_day else changes_text)(view, f"{title_} ({sub_})", labs_)
+                tag = "by_day" if by_day else "by_team"
                 c1, c2, c3 = st.columns(3)
-                c1.download_button("🖨 Print changes", html_.encode(), f"changes_since_{ver_['id'][:8]}.html",
+                c1.download_button("🖨 Print changes", html_.encode(), f"changes_{tag}_{ver_['id'][:8]}.html",
                                    mime="text/html", type="primary", width="stretch",
-                                   help="Every change by week and team, one line each with the reason. Open it "
-                                        "in your browser, then print or save as PDF.")
-                c2.download_button("Download changes (CSV)", view.to_csv(index=False).encode(),
+                                   help="Every change, one line each with the reason, laid out the way you picked "
+                                        "above. Open it in your browser, then print or save as PDF.")
+                c2.download_button("Download changes (CSV)", plain.to_csv(index=False).encode(),
                                    f"changes_since_{ver_['id'][:8]}.csv", mime="text/csv", width="stretch")
-                text_ = changes_text(view, f"{title_} ({sub_})", labs_)
-                c3.download_button("Download as text", text_.encode(), f"changes_since_{ver_['id'][:8]}.txt",
+                c3.download_button("Download as text", text_.encode(), f"changes_{tag}_{ver_['id'][:8]}.txt",
                                    mime="text/plain", width="stretch")
                 with st.expander("Readable list (copy into an email or text)", expanded=True):
                     st.code(text_, language=None)

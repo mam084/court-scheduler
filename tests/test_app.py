@@ -1395,8 +1395,11 @@ def test_publish_lists_changes_readably(db):
     at.run()
     assert not at.exception, at.exception
     txt = next(c.value for c in at.code if c.value.startswith("Changes since"))
-    assert "Week of" in txt and "→ Court" in txt
+    assert "Court:" in txt and "→ Court" in txt and "Week of" not in txt      # by day by default
     assert any(b.label == "🖨 Print changes" for b in at.get("download_button"))
+    at.radio(key="pub_list_by").set_value("By week and team").run()
+    txt = next(c.value for c in at.code if c.value.startswith("Changes since"))
+    assert "Week of" in txt
 
 
 def test_move_a_team_in_the_pecking_order(db):
