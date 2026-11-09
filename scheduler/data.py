@@ -144,8 +144,11 @@ class ScheduleInput:
     # Weekends not on the Open days list are open (the club's rule). False: only listed ones are
     # (kept for tests written around a closed-unless-listed weekend).
     weekends_open: bool = True
-    # The big family holidays are closed without being listed (False: only the Closures list; tests).
-    holidays_closed: bool = True
+    # The big family holidays (Thanksgiving, Christmas...): open days in 2-hour blocks with no locals
+    # programs (Nov 2026: the club writes in a closure when it does close). holidays_closed: the old
+    # rule, closed without being listed. Both False: holidays are ordinary days (tests).
+    holidays_open: bool = True
+    holidays_closed: bool = False
 
     def sheets(self) -> dict[str, pd.DataFrame]:
         out = {}
@@ -1373,11 +1376,23 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             closures[to_date(r["date"], year)] = "" if blank(r.get("reason")) else str(r["reason"])
         except (ValueError, TypeError) as e:
             errors.append(f"Closures row {i + 2}: {e}")
-    # The big family holidays are always closed (weekends too); the list adds any other closed days.
+    # The big family holidays (Nov 2026): open days in 2-hour blocks on every court, with no locals
+    # programs, unless the Closures list closes them (or the Open days list sets their hours).
+    # holidays_closed: the old rule, closed without being listed.
     from .closures import major_holidays
-    for y in (range(start.year - 1, end.year + 2) if getattr(inp, "holidays_closed", True) else ()):
+    holidays: dict[date, str] = {}
+    for y in range(start.year - 1, end.year + 2):
         for d, name in major_holidays(y).items():
-            closures.setdefault(d, name)
+            if getattr(inp, "holidays_closed", False):
+                closures.setdefault(d, name)
+            elif getattr(inp, "holidays_open", True):
+                holidays[d] = name
+                if d not in weekends:
+                    weekends[d] = WeekendDay(d, list(WEEKEND_KEYS), list(COURTS), None, False, name)
+                elif not weekends[d].note:
+                    weekends[d].note = name
+    for lp in locals_:
+        lp.skip |= set(holidays)
 
     # Weekends are open (9 AM-9 PM, every court) unless they're closed; the Open days list only
     # changes a weekend's hours or courts, or opens weekdays in blocks (a school break).

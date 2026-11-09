@@ -22,7 +22,8 @@ def render():
     inp, start, end, cleaned, closures = S.inp, S.start, S.end, S.cleaned, S.closures
     st.markdown("**Weekends are open** 9 AM–9 PM on every court, in **2-hour blocks** (9–11, 11–1 … 7–9), and are "
                 "used only when weekdays can't fit a practice. The big holidays (Thanksgiving and the day after, "
-                "Christmas Eve and Day, New Year's Eve and Day, July 4th) are always closed. Add a weekend here only "
+                "Christmas Eve and Day, New Year's Eve and Day, July 4th) are open days too, in 2-hour blocks, with "
+                "no locals programs; close one below if the club closes. Add a weekend here only "
                 "to change its hours or courts. **School breaks:** list the weekdays here (e.g. Dec 21 – Jan 2) and "
                 "they run in blocks too; a week that's all open days gets no practices automatically, and coaches "
                 "add the ones they want. Break **camps** are programs (the **Programs** tab, e.g. Mon–Fri 9–11 AM). "
@@ -130,7 +131,8 @@ def _closed_days():
                                       + dates.rebuild_for([(before, inp.closures, ("date",))]))
             st.rerun()
     hol = sorted((d, n) for y in (start.year, start.year + 1) for d, n in major_holidays(y).items() if d >= start)
-    st.caption("Always closed: " + ", ".join(f"{n} ({d:%a %b %-d})" for d, n in hol[:7]) + ".")
+    st.caption("Holidays (open days in 2-hour blocks, no locals programs; close one here if the club closes): "
+               + ", ".join(f"{n} ({d:%a %b %-d})" for d, n in hol[:7]) + ".")
     cl = inp.closures.dropna(how="all")
     if not cl.empty:
         view_ = cl.fillna("").astype(str)
@@ -140,7 +142,7 @@ def _closed_days():
         c1, c2 = st.columns([3, 1])
         drop_c = c1.multiselect("Reopen", labs, placeholder="Choose closed days to reopen", key="cl_drop")
         if c2.button("Reopen", disabled=not drop_c, width="stretch", key="cl_rm",
-                     help="The big holidays stay closed even if they're listed here."):
+                     help="Reopened days go back to normal (a holiday goes back to an open day)."):
             before = inp.closures.copy()
             inp.closures = cl.iloc[[i for i, lab in enumerate(labs) if lab not in drop_c]].reset_index(drop=True)
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1

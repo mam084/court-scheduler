@@ -118,7 +118,7 @@ def _inp(teams, availability=(), wishlist=(), locals_=(), weekends=(), closures=
     # These tests were written for weekends that are closed unless listed, and only listed closures.
     return ScheduleInput(_team_frame(teams), frame("Availability", availability), frame("Wishlist", wishlist),
                          frame("Locals", locals_), frame("Weekends", weekends), frame("Closures", closures),
-                         weekends_open=False, holidays_closed=False)
+                         weekends_open=False, holidays_closed=False, holidays_open=False)
 
 
 def test_age_rules_are_hard():
@@ -684,6 +684,21 @@ def test_publish_and_what_changed(tmp_path):
     assert "dentist" in row["why"].iloc[0] and head in row["why"].iloc[0]
     b = burden(r2.assignments)
     assert set(b["team"]) == set(pr["name"]) and (b["practices"] > 0).all()
+    # A readable list to print or paste: by week, then team, with the reason.
+    from scheduler.changes import change_line, changes_text
+    from scheduler.labels import label_map
+    from scheduler.prints import changes_print_html
+    labs = label_map((t.name, t.club) for t in clean(inp, *NOV).teams)
+    txt = changes_text(ch, "Changes since Nov v1", labs)
+    assert txt.startswith("Changes since Nov v1") and "Week of" in txt and "dentist" in txt
+    assert labs[victim["name"]] in txt
+    h = changes_print_html(ch, "Changes since Nov v1", "published Nov 1", labs)
+    assert h.count('class="pc-week"') == ch["week_of"].nunique() and "dentist" in h and "Print" in h
+    assert changes_text(ch.iloc[0:0], "x").endswith("No changes.\n")
+    assert change_line({"change": "Court", "was": "Tue 11/3 5:30–7:20 · Court 3", "now": "Court 1"}) \
+        == "Tue 11/3 5:30–7:20: Court 3 → Court 1"
+    assert change_line({"change": "Moved", "was": "Tue 11/3 5:30–7:20 · Court 3",
+                        "now": "Wed 11/4 5:30–7:20 · Court 1"}).startswith("Moved Tue 11/3")
 
 
 def test_restore_published_version():
@@ -997,11 +1012,15 @@ def test_rule_order():
         assert W[k] < W["second_weekend"], k
     # Friday 7:20 beats every preference put together, but not a weekend.
     assert W["weekend"] > W["friday_late"] > W["wish_day_miss"] + W["not_preferred_day"] + W["wish_time_miss"]
-    # Courts: nets, then coaches staying put, then the pecking order, then ages.
+    # Courts (Nov 8, 2026): never lower a net, then the court ranks, then the softer wishes (coach
+    # stays put, same net height, same side and similar ages next to each other), which win only
+    # between teams close together in the pecking order.
     from scheduler.config import PECKING_COURT_COST
     worst_pecking = W["pecking_court"] * max(PECKING_COURT_COST.values()) * 18   # top vs bottom team on Court 2
-    assert W["net_change_court"] > W["coach_stay"] > worst_pecking
-    assert W["pecking_court"] > 2 * 4 * W["age_near"]
+    assert W["net_lower_court"] > worst_pecking
+    soft = W["coach_stay"] + W["net_raise_court"] + W["near_side"] + 4 * W["near_age"]
+    assert worst_pecking > 4 * soft
+    assert W["pecking_court"] * 18 > W["coach_stay"] and W["pecking_court"] * 18 > W["net_raise_court"]
     assert W["weekend_required"] == 0  # a note for coaches, not a rule
 
 
@@ -1346,7 +1365,7 @@ def test_locals_cancel_one_session_and_add_one():
     assert set(loc[loc["date"] == date(2026, 11, 20)]["court"]) == {1, 2}  # the one extra session
 
 
-def test_hs_boys_keep_their_courts_from_530_to_720():
+def test_hs_boys_nets_never_come_down_from_530_to_720():
     teams = [{"team": f"{a} {c}", "club": "Boys", "age": a, "head_coach": f"B{a}{c}"}
              for a in (15, 16, 17, 18) for c in ("Black", "Green")]
     teams += [{"team": f"{a}-G{i}", "club": "Girls", "age": a} for a in (15, 16, 17) for i in range(2)]
@@ -1360,12 +1379,17 @@ def test_hs_boys_keep_their_courts_from_530_to_720():
         if kinds["5:30"] and kinds["7:20"] and kinds["5:30"] != kinds["7:20"]:
             changes += 1
     assert changes == r.metrics["net_changes"]
-    assert changes == 0                                   # nets outrank the pecking order (Nov 2026)
+    assert r.metrics["nets_lowered"] == 0                 # raising a net is fine, lowering isn't (Nov 8, 2026)
+    for _, g in pr[pr["slot"].isin(["5:30", "7:20"])].groupby(["date", "court"]):
+        if set(g["slot"]) == {"5:30", "7:20"}:
+            early = g[g["slot"] == "5:30"]["name"].isin(boys).iloc[0]
+            late = g[g["slot"] == "7:20"]["name"].isin(boys).iloc[0]
+            assert late or not early                       # never men's at 5:30 then women's at 7:20
 
 
 @pytest.mark.usefixtures("alone_ok")
 def test_coach_stays_on_court_for_back_to_back_teams():
-    # (Girls then HS boys would need a net change, which outranks this.)
+    # (With only two teams, the court ranks don't stand in the way.)
     teams = [{"team": "16-Ana", "club": "Girls", "age": 16, "head_coach": "Ana"},
              {"team": "18-Ana", "club": "Girls", "age": 18, "head_coach": "Ana"}]
     wish = [{"team": "16-Ana", "choice": 1, "days": "Mon, Wed", "times": "5:30"},
@@ -1739,19 +1763,33 @@ def test_form_names_match_the_club():
 
 
 
-def test_weekends_open_and_holidays_closed_by_default():
-    """With nothing listed, weekends are open 9 AM-9 PM on every court and the big holidays are closed
-    (weekends too); weekdays still come first."""
+def test_weekends_and_holidays_open_by_default():
+    """With nothing listed, weekends are open 9 AM-9 PM on every court and so are the big holidays
+    (Nov 2026: open days in blocks, no locals programs); weekdays still come first. Closing a holiday
+    on the Closures list closes it; the old holidays_closed rule still works."""
     teams = [{"team": f"16-T{i}", "age": 16} for i in range(4)]
-    inp = _inp(teams)
-    inp.weekends_open, inp.holidays_closed = True, True
+    loc = [{"program": "Thu League", "days": "Thu", "time": "5:30", "courts": "1", "coaches": "Pat",
+            "dates": "11/1/2026-1/9/2027"}]
+    inp = _inp(teams, locals_=loc)
+    inp.weekends_open, inp.holidays_open = True, True
     data = clean(inp, date(2026, 11, 1), date(2027, 1, 9))
     assert date(2026, 12, 19) in data.weekends and data.weekends[date(2026, 12, 19)].blocks[0] == "9AM"
-    assert data.closures[date(2026, 11, 26)] == "Thanksgiving" and date(2026, 12, 25) in data.closures
+    tg = date(2026, 11, 26)
+    assert tg not in data.closures and date(2026, 12, 25) not in data.closures
+    assert tg in data.weekends and data.weekends[tg].note == "Thanksgiving"
+    assert data.weekends[tg].courts == [1, 2, 3, 4, 5, 6, 7]
+    lp = data.locals[0]
+    assert lp.runs_on(date(2026, 11, 19)) and not lp.runs_on(tg)     # no locals on a holiday
     r = solve(inp, *NOV, time_limit_s=10)
     pr = r.assignments[r.assignments["kind"] == "Practice"]
     assert not pr["date"].map(lambda d: d.weekday() >= 5).any()       # open weekdays win
-    assert not (pr["date"] == date(2026, 11, 26)).any()
+    lo = r.assignments[r.assignments["kind"] == "Local"]
+    assert not (lo["date"] == tg).any()
+    # The club can still close one.
+    inp.closures = pd.DataFrame([{"date": "11/26/2026", "reason": "Closed for Thanksgiving"}])
+    assert clean(inp, *NOV).closures[tg] == "Closed for Thanksgiving"
+    inp.holidays_closed = True
+    assert date(2026, 12, 25) in clean(inp, date(2026, 11, 1), date(2027, 1, 9)).closures
 
 
 
@@ -1938,10 +1976,94 @@ def test_never_practice_the_day_after_a_travel_tournament():
 
 # ---------------------------------------------------------------- Nov 3, 2026 club changes --
 
-def test_courts_1_and_7_equal_3_to_6_equal_2_last():
-    from scheduler.config import COURT_COST
-    assert COURT_COST[1] == COURT_COST[7] < COURT_COST[3] == COURT_COST[4] == COURT_COST[5] == COURT_COST[6] \
-        < COURT_COST[2]
+def test_court_rank_order():
+    from scheduler.config import COURT_COST, COURT_NEIGHBORS, COURT_RANK, PECKING_COURT_COST
+    assert COURT_RANK == [1, 7, 3, 6, 5, 4, 2]                     # Nov 8, 2026
+    assert [PECKING_COURT_COST[c] for c in COURT_RANK] == sorted(PECKING_COURT_COST.values())
+    assert len(set(PECKING_COURT_COST.values())) == 7
+    assert COURT_COST[1] == COURT_COST[7] < COURT_COST[3] <= COURT_COST[2] and max(COURT_COST.values()) == COURT_COST[2]
+    assert {frozenset(e) for e in COURT_NEIGHBORS} == {frozenset(e) for e in
+                                                       [(1, 7), (1, 5), (7, 6), (6, 5), (5, 4), (4, 3), (3, 2)]}
+
+
+def _courts(n_teams, weights, ages=None, boys=None, nets=None, later=None):
+    """Stage 2 alone on one day: teams 0..n-1 at 5:30 (and `later` at 7:20)."""
+    from scheduler.solver import _assign_courts
+    d = date(2026, 11, 16)
+    booked = {(t, d, "5:30") for t in range(n_teams)}
+    T = list(range(n_teams + len(later or {})))
+    for t in (later or {}):
+        booked.add((t, d, "7:20"))
+    _, court_of, _ = _assign_courts(booked, T, lambda d_, s_: [1, 2, 3, 4, 5, 6, 7], weights, time_limit_s=5,
+                                    net_of=nets or {t: 1 for t in T}, ages=ages or {t: 16 for t in T},
+                                    boys_of=boys or {t: False for t in T})
+    return court_of, d
+
+
+def test_courts_follow_the_rank_1_7_3_6_5_4_2():
+    w = {t: 20 - 3 * t for t in range(7)}          # team 0 top of the pecking order
+    court_of, d = _courts(7, w)
+    assert [court_of[t, d, "5:30"] for t in range(7)] == [1, 7, 3, 6, 5, 4, 2]
+
+
+def test_same_side_and_age_on_neighboring_courts():
+    """Boys and girls teams close in the pecking order: each side sits together on courts next to
+    each other (1-7-6 / 5-4-3), rather than alternating down the rank."""
+    w = {0: 20, 1: 19, 2: 18, 3: 17, 4: 16, 5: 15}
+    boys = {0: True, 1: False, 2: True, 3: False, 4: True, 5: False}
+    court_of, d = _courts(6, w, boys=boys)
+    c = {t: court_of[t, d, "5:30"] for t in range(6)}
+    from scheduler.config import COURT_NEIGHBORS
+    nb = {frozenset(e) for e in COURT_NEIGHBORS}
+    mixed = sum(1 for a in range(6) for b in range(a + 1, 6)
+                if frozenset((c[a], c[b])) in nb and boys[a] != boys[b])
+    assert mixed <= 2, c   # the least possible: 1-7-6 vs 5-4-3 still touch at 1-5 and 6-5
+    assert c[0] in (1, 7) and 2 not in c.values()   # the top team still gets a best court
+
+
+def test_nets_go_up_not_down_and_ranks_beat_same_height():
+    """Court rank beats keeping the same net (a raise is fine); a net never comes down."""
+    from scheduler.config import NET_MEN, NET_WOMEN
+    # 5:30: a girls team (women's) at the top of the order and a low HS boys team (men's).
+    # 7:20: a top HS boys team. Rank: it takes Court 1 even though the girls were there (raise: fine).
+    w = {0: 20, 1: 4, 2: 20}
+    nets = {0: NET_WOMEN, 1: NET_MEN, 2: NET_MEN}
+    court_of, d = _courts(2, w, nets=nets, later={2: True})
+    assert court_of[0, d, "5:30"] == 1 and court_of[2, d, "7:20"] == 1
+    # 5:30: HS boys teams on the best courts; 7:20: the top girls team. It doesn't take a boys
+    # court (that would lower the net), even though Courts 1 and 7 are better.
+    w = {0: 20, 1: 19, 2: 2, 3: 15}
+    nets = {0: NET_MEN, 1: NET_MEN, 2: NET_WOMEN, 3: NET_WOMEN}
+    court_of, d = _courts(3, w, nets=nets, later={3: True})
+    assert {court_of[0, d, "5:30"], court_of[1, d, "5:30"]} == {1, 7}
+    assert court_of[3, d, "7:20"] not in (1, 7)
+
+
+@pytest.mark.usefixtures("alone_ok")
+def test_coach_girls_team_before_boys_team():
+    """Nov 8, 2026: a coach with a girls and a boys team: on a day both practice, girls first."""
+    teams = [{"team": "16-Leo", "club": "Girls", "age": 16, "head_coach": "Leo"},
+             {"team": "16 Black", "club": "Boys", "age": 16, "head_coach": "Leo"}]
+    wish = [{"team": "16 Black", "choice": 1, "days": "Mon, Wed", "times": "5:30, 7:20"},
+            {"team": "16-Leo", "choice": 1, "days": "Mon, Wed", "times": "5:30, 7:20"}]
+    r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    shared = 0
+    for _, g in pr.groupby("date"):
+        if set(g["name"]) == {"16-Leo", "16 Black"}:
+            shared += 1
+            sl = dict(zip(g["name"], g["slot"]))
+            assert sl["16-Leo"] == "5:30" and sl["16 Black"] == "7:20", g
+    assert shared
+    # Not counted when the ages make it impossible (18s girls never 3:45, 13s boys never 7:20).
+    from scheduler.solver import solve as _s  # noqa: F401
+    teams = [{"team": "18-Wes", "club": "Girls", "age": 18, "head_coach": "Wes"},
+             {"team": "13 Black", "club": "Boys", "age": 13, "head_coach": "Wes"}]
+    wish = [{"team": "13 Black", "choice": 1, "days": "Mon, Wed", "times": "5:30"},
+            {"team": "18-Wes", "choice": 1, "days": "Mon, Wed", "times": "7:20"}]
+    r = solve(_inp(teams, wishlist=wish), *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    assert (pr["date"].map(lambda d: d.weekday()) .isin([0, 2])).mean() > 0.9   # still their asked-for days
 
 
 def test_net_heights_and_order():

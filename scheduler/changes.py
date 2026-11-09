@@ -203,6 +203,56 @@ def diff(old: pd.DataFrame, new: pd.DataFrame, data: CleanInput | None, start: d
     return df
 
 
+# ------------------------------------------------------- readable list --
+
+def change_line(r) -> str:
+    """One change as a plain sentence: 'Moved Tue 12/8 5:30–7:20 · Court 3 → Wed 12/9 5:30–7:20 · Court 1'."""
+    k, was, now = r["change"], r.get("was") or "", r.get("now") or ""
+    if k == "Moved":
+        return f"Moved {was} → {now}"
+    if k == "Added":
+        return f"Added {now}"
+    if k == "Removed":
+        return f"Removed {was}"
+    if k == "Court":
+        when = was.rsplit(" · Court", 1)
+        return f"{when[0]}: Court{when[1]} → {now}" if len(when) == 2 else f"{was} → {now}"
+    return f"{k} {was} {now}".strip()
+
+
+def changes_by_week(ch: pd.DataFrame, labels: dict | None = None) -> list[tuple[date, list[tuple[str, list]]]]:
+    """[(week's Sunday, [(team label, [(sentence, why)...])...])...], weeks in order, teams A-Z."""
+    labels = labels or {}
+    out = []
+    if ch is None or ch.empty:
+        return out
+    order = {"Removed": 0, "Moved": 1, "Added": 2, "Court": 3}
+    for wk, g in ch.groupby("week_of", sort=True):
+        teams = []
+        for team in sorted(g["team"].unique(), key=lambda t: str(labels.get(t, t))):
+            rows = g[g["team"] == team].assign(o=g["change"].map(order)).sort_values("o")
+            lab = labels.get(team, team)
+            name = lab if lab == team else f"{lab} ({team})"
+            teams.append((name, [(change_line(r), r.get("why") or "") for r in rows.to_dict(orient="records")]))
+        out.append((wk, teams))
+    return out
+
+
+def changes_text(ch: pd.DataFrame, title: str, labels: dict | None = None) -> str:
+    """The changes as plain text, by week and team, for pasting into an email or text."""
+    lines = [title, ""]
+    weeks = changes_by_week(ch, labels)
+    if not weeks:
+        lines.append("No changes.")
+    for wk, teams in weeks:
+        lines.append(f"Week of {wk:%a %b %-d}")
+        for name, items in teams:
+            for i, (line, why) in enumerate(items):
+                lines.append(f"  {name if i == 0 else ' ' * len(name)}  {line}" + (f"  ({why})" if why else ""))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 # ------------------------------------------------------------- fairness --
 
 def burden(practices: pd.DataFrame, issues: pd.DataFrame | None = None) -> pd.DataFrame:

@@ -277,6 +277,9 @@ def test_restore_published_version_button(db):
     at.sidebar.button(key="as_go").click().run()
     at.session_state["keep_prev"] = True
     at.run()
+    assert not at.exception, at.exception
+    if not any("No changes" in s.value for s in at.success):   # the readable list of what changed
+        assert any(c.value.startswith("Changes since") and "Week of" in c.value for c in at.code)
     next(b for b in at.button if "Restore this version" in b.label).click().run()
     assert not at.exception
     a = at.session_state["result"].assignments
@@ -1352,3 +1355,23 @@ def test_refresh_keeps_the_dates_being_looked_at(db):
     assert not again.exception, again.exception
     assert again.session_state["view_day"] == date(2026, 12, 6)
     assert again.session_state["range_start"] == date(2026, 12, 6)
+
+
+def test_publish_lists_changes_readably(db):
+    """Nov 8, 2026: the Publish page prints what changed since a version, by week and team."""
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Changes list", 6)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Publish").run()
+    next(b for b in at.button if "Publish this schedule" in b.label).click().run()
+    # Pretend the published version had the first practice on another court.
+    pub = at.session_state["published"]
+    p0 = pub[-1]["practices"][0]
+    p0["court"] = 2 if int(p0["court"]) != 2 else 3
+    at.run()
+    assert not at.exception, at.exception
+    txt = next(c.value for c in at.code if c.value.startswith("Changes since"))
+    assert "Week of" in txt and "→ Court" in txt
+    assert any(b.label == "🖨 Print changes" for b in at.get("download_button"))

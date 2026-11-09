@@ -107,8 +107,10 @@ def render():
                                     open_slots=open_slot_map(None, cleaned) if show_open else None,
                                     local_coaches=show_lc),
                     unsafe_allow_html=True)
-        st.caption("Courts 1 and 7 are best, 3–6 equal, Court 2 last. Courts are picked after the day is set: "
-                   "net heights first, then coaches staying on one court, then the pecking order.")
+        st.caption("Court ranks, best first: 1 → 7 → 3 → 6 → 5 → 4 → 2. Courts are picked after the day is set: "
+                   "a net never comes down (raising is fine), then the court ranks by pecking order, then (where the "
+                   "ranks allow) coaches staying on one court, the same net height, and the same side and similar "
+                   "ages next to each other.")
     else:
         dd = week_dates(ws, ws, we, result.weekend_dates)
         wk_short = result.shortfalls[result.shortfalls["week_of"] == ws] if len(result.shortfalls) else []

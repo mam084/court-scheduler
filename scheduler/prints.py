@@ -677,3 +677,66 @@ def team_dates_print_html(result, closures: dict | None = None, order: list[str]
             + '# = practices in these dates · coaches: head coach first</div></section>')
     return _page(title or "Team practice dates", f"<style>{TEAM_CSS}</style>{page}", landscape=False,
                  tip="Fits on one portrait page.")
+
+
+# ------------------------------------------------------------- what changed --
+
+CHANGE_CSS = """
+.pc-week { font-size: 15px; font-weight: 800; margin: 16px 0 4px; border-bottom: 1.5px solid #1f2a44;
+           padding-bottom: 2px; }
+.pc-tbl { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.pc-tbl col.pc-c1 { width: 150px; } .pc-tbl col.pc-c2 { width: 72px; } .pc-tbl col.pc-c4 { width: 30%; }
+.pc-tbl td { padding: 5px 6px; border-bottom: 1px solid #d5d9e1; vertical-align: top; }
+.pc-tbl td.pc-team { font-weight: 800; padding-right: 10px; }
+.pc-tbl td.pc-kind { white-space: nowrap; font-size: 11px; font-weight: 700; text-transform: uppercase;
+                     letter-spacing: .5px; }
+.pc-tbl tr.pc-Removed td.pc-kind { color: #B21E1E; } .pc-tbl tr.pc-Added td.pc-kind { color: #1B5E20; }
+.pc-tbl tr.pc-Moved td.pc-kind { color: #1f2a44; } .pc-tbl tr.pc-Court td.pc-kind { color: #8a5a00; }
+.pc-tbl td.pc-why { color: #5b6475; font-size: 11.5px; }
+.pc-tbl tr.pc-cont td { border-top: 0; }
+.pc-sum { font-size: 13px; margin: 2px 0 6px; color: #1f2a44; }
+.pc-none { font-size: 14px; color: #1B5E20; padding: 12px 0; }
+"""
+
+
+def changes_print_html(ch: pd.DataFrame, title: str, subtitle: str, labels: dict | None = None) -> str:
+    """Everything that changed since a published version, by week and then team, one line per
+    change with the reason. Portrait; long lists run onto more pages."""
+    from html import escape as e
+
+    from .changes import changes_by_week
+    out = [f'<div class="pp-head"><h1>{e(title)}</h1><span class="pp-sub">{e(subtitle)} · printed '
+           f'{date.today():%-m/%-d/%Y}</span></div>']
+    if ch is None or ch.empty:
+        out.append('<div class="pc-none">No changes.</div>')
+    else:
+        counts = ch["change"].value_counts()
+        parts = [f"{int(counts[k])} {w}" for k, w in (("Moved", "moved"), ("Added", "added"), ("Removed", "removed"),
+                                                     ("Court", "court changes")) if counts.get(k)]
+        out.append(f'<div class="pc-sum">{ch["team"].nunique()} teams affected: {", ".join(parts)}.</div>')
+        for wk, teams in changes_by_week(ch, labels):
+            out.append(f'<div class="pc-week">Week of {wk:%a %b %-d}</div><table class="pc-tbl"><colgroup>'
+                       '<col class="pc-c1"><col class="pc-c2"><col><col class="pc-c4"></colgroup>')
+            for name, items in teams:
+                for i, (line, why) in enumerate(items):
+                    kind, _, rest = line.partition(" ")
+                    if kind not in ("Moved", "Added", "Removed"):
+                        kind, rest = "Court", line
+                    out.append(f'<tr class="pc-{kind}{" pc-cont" if i else ""}">'
+                               f'<td class="pc-team">{e(name) if i == 0 else ""}</td>'
+                               f'<td class="pc-kind">{e(kind)}</td><td>{e(rest)}</td>'
+                               f'<td class="pc-why">{e(why)}</td></tr>')
+            out.append("</table>")
+    body = f"<style>{CHANGE_CSS}</style><section>{''.join(out)}</section>"
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(title)}</title>
+<style>{BASE_CSS}
+@page {{ size: portrait; margin: 0.45in; }}
+.pc-tbl tr {{ break-inside: avoid; }} .pc-week {{ break-after: avoid; }}
+</style></head><body>
+{PRINT_BUTTON}
+<div class="pp-tip">To print or save as PDF: press <b>Print</b> (or Ctrl/Cmd + P). Prints portrait; a long list
+runs onto more pages.</div>
+{body}
+</body></html>"""
