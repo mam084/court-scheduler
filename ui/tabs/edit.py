@@ -215,9 +215,7 @@ def render():
         pat = result.pattern if result is not None else pd.DataFrame(columns=["team", "day", "slot", "court"])
         usual_rows = pat[pat["team"] == e_team] if len(pat) else pat
         usual_txt = ", ".join(f"{r.day} {r.slot}" for r in usual_rows.itertuples()) or "none"
-        _hc = "home_court" if "home_court" in usual_rows.columns else "court"  # schedules saved before home_court
-        home = f" · home Court {usual_rows[_hc].iloc[0]}" if len(usual_rows) else ""
-        st.caption(f"Usual days: **{usual_txt}**{home} · **{plural(e_per_week, 'practice')} a week**")
+        st.caption(f"Usual days: **{usual_txt}** · **{plural(e_per_week, 'practice')} a week**")
 
         c_left, c_right = st.columns([3, 2])
         with c_left:
@@ -464,15 +462,13 @@ def render():
                 us = st.selectbox("Time", WEEKDAY_KEYS, format_func=lambda k: SLOTS[k], key=f"ed_us_{e_team}",
                                   index=WEEKDAY_KEYS.index(usual_rows["slot"].iloc[0])
                                   if len(usual_rows) and usual_rows["slot"].iloc[0] in WEEKDAY_KEYS else 1)
-                uc = st.selectbox("Home court", ["Any"] + COURTS, key=f"ed_uc_{e_team}",
-                                  format_func=lambda c: "Scheduler picks" if c == "Any" else f"Court {c}")
                 if st.button("Set usual days", type="primary", width="stretch", disabled=not ud):
                     keep = inp.overrides[~((inp.overrides["team"] == e_team) &
                                            inp.overrides["action"].astype(str).str.lower().str.startswith("usual"))]
                     original = inp.overrides.copy()
                     inp.overrides = keep.reset_index(drop=True)
                     apply_overrides([{"team": e_team, "action": "Usual", "date": "", "days": ", ".join(ud),
-                                      "time": us, "court": "" if uc == "Any" else str(uc), "note": "set by hand"}],
+                                      "time": us, "court": "", "note": "set by hand"}],   # no home court (Nov 2026)
                                     f"{e_team} now practices {' & '.join(ud)} at {us}.", backup=original)
 
         if CAN:

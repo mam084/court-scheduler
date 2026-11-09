@@ -154,11 +154,9 @@ def test_court_view_opens_on_first_week(db):
     at = AppTest.from_file("../app.py", default_timeout=180)
     at.query_params["project"] = pid
     at.run()
-    show = next(s for s in at.selectbox if s.label == "Show")
-    assert show.value == "Week" and "Weekly template" in show.options
-    assert any("Week of Nov 1–7" in m.value for m in at.markdown)
-    show.set_value("Weekly template").run()
     assert not at.exception
+    assert not any(s.label == "Show" for s in at.selectbox)   # no weekly template view (Nov 2026)
+    assert any("Week of" in m.value for m in at.markdown)
 
 
 def test_suggest_a_preference_adds_wish_and_not_preferred(db):
@@ -224,7 +222,7 @@ def test_pecking_order_page_and_calendar_downloads(db):
     at.radio(key="nav").set_value("Calendar").run()
     assert not at.exception
     labels = [d.proto.label for d in at.get("download_button")]
-    assert {"Google Calendar (.ics)", "Printable calendar · color", "Printable calendar · one page a month",
+    assert {"Export to personal calendar (.ics)", "Printable calendar · color", "Printable calendar · one page a month",
             "Calendar (Excel)"} <= set(labels)
 
 
@@ -418,6 +416,22 @@ def test_first_sign_in_seeds_admins_and_coach_sees_limited_app(db, monkeypatch):
     assert team in at.selectbox(key="ed_team").options
     assert at.radio(key="ed_mode").options == ["Ask to move a practice", "Ask for an extra practice",
                                                "Ask to cancel a practice"]   # no preferences (Nov 2026)
+
+
+def test_coach_sees_no_every_team_prints(db, monkeypatch):
+    """Every team's dates prints are for the scheduling admins (Nov 2026); coaches export their own calendar."""
+    pid = _save(db, "Roles", 27)
+    head, _ = _head_of_first_team(db, pid)
+    db.save_user("coach@sdvbc.org", "Coach", head)
+    at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
+    for page in ("Court view", "Calendar"):
+        at.radio(key="nav").set_value(page).run()
+        assert not at.exception, at.exception
+        labels = [d.proto.label for d in at.get("download_button")]
+        assert not any(lab.startswith("Every team's dates") for lab in labels), (page, labels)
+    assert "Export to personal calendar (.ics)" in labels
+    at.radio(key="nav").set_value("Coaches").run()
+    assert "Export to personal calendar (.ics)" in [d.proto.label for d in at.get("download_button")]
 
 
 def test_coach_cannot_set_preferences(db, monkeypatch):

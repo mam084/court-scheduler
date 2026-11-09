@@ -167,8 +167,9 @@ def render():
                                                 "Court": court_name(p["court"]), "Type": p["type"], "Team": p["team"],
                                                 "Player": p["player"]} for p in mine_p]),
                                  hide_index=True, width="stretch")
-                st.download_button(f"Add {coach}'s schedule to Google Calendar (.ics)",
+                st.download_button("Export to personal calendar (.ics)",
                                    lambda: to_ics(result, coach),
                                    f"{coach.replace(' ', '_')}_{start:%Y%m%d}-{end:%Y%m%d}.ics",
                                    mime="text/calendar",
-                                   help="In Google Calendar: Settings → Import & export → Import this file.")
+                                   help=f"{coach}'s whole schedule as a calendar file. Google Calendar: Settings → "
+                                        "Import & export → Import. Apple Calendar or Outlook: open the file.")

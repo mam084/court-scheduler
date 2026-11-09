@@ -13,7 +13,6 @@ import streamlit as st
 
 from scheduler import clean, mail, month_range, simulate
 from scheduler import google as gsvc
-from scheduler.config import DAYS
 from scheduler.data import ATTRS
 from scheduler.storage import MAIN_ID
 from ui.state import S
@@ -154,21 +153,6 @@ def mine(team_text) -> bool:
     if not COACH_VIEW:
         return True
     return bool({x.strip() for x in re.split(r"[;,]", str(team_text or ""))} & MY_TEAMS)
-
-
-def template_locals(a: pd.DataFrame, start: date | None = None, end: date | None = None) -> pd.DataFrame:
-    """Locals that are part of the usual week: running on most of that weekday's dates between
-    start and end (default: the dates being worked on)."""
-    start, end, closures = start or S.start, end or S.end, S.closures
-    loc = a[a["kind"] == "Local"]
-    if loc.empty:
-        return loc
-    per_day = {wd: len({d for d in pd.date_range(start, end).date if DAYS[d.weekday()] == wd and d not in closures})
-               for wd in DAYS}
-    counts = loc.groupby(["name", "day", "slot", "court"])["date"].nunique().reset_index(name="n")
-    keep = counts[counts.apply(lambda r: r["n"] * 2 >= per_day[r["day"]], axis=1)]
-    return loc.drop_duplicates(subset=["day", "slot", "court", "name"]).merge(
-        keep[["name", "day", "slot", "court"]], on=["name", "day", "slot", "court"])
 
 
 def team_order() -> list[str]:

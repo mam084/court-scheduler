@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-import pandas as pd
 import streamlit as st
 
 from scheduler.changes import diff, practices_of
@@ -32,7 +31,6 @@ from ui.common import (
     team_coaches,
     team_order,
     team_sections,
-    template_locals,
 )
 from ui.state import S
 
@@ -46,26 +44,17 @@ def render():
     COACH_VIEW = S.COACH_VIEW
     MY_COACH = S.MY_COACH
     MY_TEAMS = S.MY_TEAMS
-    c1, c2 = st.columns([1, 2])
-    pick = c1.selectbox("Show", ["Week", "Weekly template"], key="cv_show",
-                        help="Weeks show the actual dates, including weekends, makeups and closures; the template "
-                             "is each team's usual weekday slot.")
-    if pick == "Week":
-        ws = dates.week_picker("cv")
-        we = ws + timedelta(days=6)
-        result, gaps = dates.window(ws, we)
-        dates.where_note(ws, we, gaps)
-    else:
-        result, gaps = S.result, []
-        ws = we = None
-        if result is not None:
-            st.caption(f"The usual week for {range_label(S.start, S.end)}.")
+    # (the "Weekly template" view was removed, Nov 2026: weeks only)
+    ws = dates.week_picker("cv")
+    we = ws + timedelta(days=6)
+    result, gaps = dates.window(ws, we)
+    dates.where_note(ws, we, gaps)
     if result is None:
         st.caption("Nothing on the calendar here yet.")
         return
     a = result.assignments
     stripes = club_stripes(a["club"]) if "club" in a else {}
-    hl = set(c2.multiselect("Highlight a club, team or coach", people_options(a)))
+    hl = set(st.multiselect("Highlight a club, team or coach", people_options(a)))
     tcols = iter(st.columns(4 if MY_COACH else 3))
     if MY_COACH:
         if next(tcols).toggle("Highlight my practices", key="hl_mine",
@@ -90,7 +79,7 @@ def render():
         week_privs = [p for p in week_privs if p["coach"] in hl or p["team"] in hl]
     if not show_moved:
         a = a.assign(on_pattern=True)
-    if published and S.result is not None and pick == "Week" and S.start <= we and ws <= S.end:
+    if published and S.result is not None and S.start <= we and ws <= S.end:
         _s0, _e0 = S.start, S.end
         ch = diff(practices_of(published[-1]), S.result.assignments, cleaned, _s0, _e0)
         if len(ch):
@@ -98,32 +87,18 @@ def render():
                        "was published. See **Publish** for the list.")
 
     st.markdown(legend_html(a.loc[a["kind"] == "Practice", "age"], stripes, show_moved), unsafe_allow_html=True)
-    if pick == "Weekly template":
-        tmpl = result.pattern.rename(columns={"team": "name"}).assign(kind="Practice", on_pattern=True)
-        loc = template_locals(a, S.start, S.end)
-        book = pd.concat([tmpl, loc[[c for c in list(tmpl.columns) + ["side"] if c in loc.columns]]],
-                         ignore_index=True)
-        st.markdown(court_grid_html(book, None, closures, hl or None, stripes,
-                                    open_slots=open_slot_map(None, cleaned) if show_open else None,
-                                    local_coaches=show_lc),
-                    unsafe_allow_html=True)
-        st.caption("Court ranks, best first: 1 → 7 → 3 → 6 → 5 → 4 → 2. Courts are picked after the day is set: "
-                   "a net never comes down (raising is fine); Courts 1 and 7 go by rank and Court 2 to the lowest "
-                   "team; on Courts 3–6 a coach stays on one court unless the rank gap is big; then the same side "
-                   "and similar ages next to each other, then the same net height.")
-    else:
-        dd = week_dates(ws, ws, we, result.weekend_dates)
-        wk_short = result.shortfalls[result.shortfalls["week_of"] == ws] if len(result.shortfalls) else []
-        if len(wk_short) and COACH_VIEW:
-            wk_short = wk_short[wk_short["team"].map(mine)]
-        if len(wk_short):
-            st.error(f"Short of practices this week: {short_list_text(wk_short)}", icon="⚠️")
-        st.markdown(court_grid_html(a, dd, closures, hl or None, stripes, result.tournaments,
-                                    result.weekend_dates,
-                                    open_slots=open_slot_map(dd, cleaned) if show_open else None,
-                                    privates=[p for p in week_privs if week_start(p["date"]) == ws],
-                                    local_coaches=show_lc),
-                    unsafe_allow_html=True)
+    dd = week_dates(ws, ws, we, result.weekend_dates)
+    wk_short = result.shortfalls[result.shortfalls["week_of"] == ws] if len(result.shortfalls) else []
+    if len(wk_short) and COACH_VIEW:
+        wk_short = wk_short[wk_short["team"].map(mine)]
+    if len(wk_short):
+        st.error(f"Short of practices this week: {short_list_text(wk_short)}", icon="⚠️")
+    st.markdown(court_grid_html(a, dd, closures, hl or None, stripes, result.tournaments,
+                                result.weekend_dates,
+                                open_slots=open_slot_map(dd, cleaned) if show_open else None,
+                                privates=[p for p in week_privs if week_start(p["date"]) == ws],
+                                local_coaches=show_lc),
+                unsafe_allow_html=True)
 
     # Printouts and downloads: any dates (the scheduled run this week is in, by default).
     with st.expander("Print or download", expanded=False):
@@ -166,19 +141,21 @@ def render():
                                 "(courts 1-4, then 5-7 and the practice court). "
                                 "With **Show open court times** on, every open court time prints with a line to "
                                 "write a name in. Open it in your browser, then print or save as PDF.")
-        # Worked out now: the file itself is only built when the button is clicked, after this run.
-        order, sections, coaches = team_order(), team_sections(), team_coaches()
-        _before = dates.week_before(start)
-        e1, e2 = st.columns(2)
-        e1.download_button("Every team's dates · print", lambda: team_dates_print_html(
-                               _win(), closures, order, title_, sections, coaches, _before).encode(),
-                           f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html", width="stretch",
-                           help="Like the handwritten sheet: each team's coaches, then the dates it practices "
-                                "across in date order, tournament days circled. Starts with the week before "
-                                "(greyed) and ends with each team's next tournament. One portrait page.")
-        e2.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
-                               _win(), closures, order, title_, sections),
-                           f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", width="stretch",
-                           help="One row per team (girls, then boys, each in the pecking order) with every "
-                                "practice (time and court) and tournament date; tournament days are circled. "
-                                "Prints landscape on one page wide.")
+        # Every team's dates prints: scheduling admins only (coaches don't need them, Nov 2026)
+        if S.CAN:
+            # Worked out now: the file itself is only built when the button is clicked, after this run.
+            order, sections, coaches = team_order(), team_sections(), team_coaches()
+            _before = dates.week_before(start)
+            e1, e2 = st.columns(2)
+            e1.download_button("Every team's dates · print", lambda: team_dates_print_html(
+                                   _win(), closures, order, title_, sections, coaches, _before).encode(),
+                               f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.html", mime="text/html", width="stretch",
+                               help="Like the handwritten sheet: each team's coaches, then the dates it practices "
+                                    "across in date order, tournament days circled. Starts with the week before "
+                                    "(greyed) and ends with each team's next tournament. One portrait page.")
+            e2.download_button("Every team's dates (Excel)", lambda: team_dates_excel(
+                                   _win(), closures, order, title_, sections),
+                               f"team_dates_{start:%Y%m%d}-{end:%Y%m%d}.xlsx", width="stretch",
+                               help="One row per team (girls, then boys, each in the pecking order) with every "
+                                    "practice (time and court) and tournament date; tournament days are circled. "
+                                    "Prints landscape on one page wide.")
