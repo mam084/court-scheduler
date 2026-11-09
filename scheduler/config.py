@@ -107,19 +107,17 @@ def pecking_keys(entries) -> dict[str, tuple]:
 
 
 def pecking_weights(teams) -> dict[str, int]:
-    """How much each team 'deserves' the better courts, from the pecking
-    order: the top team gets 20, the bottom team 2, everyone else spread in
-    between (at a shared rank, e.g. 16-1, the boys team is just above the girls). The
-    lowest team is the one that ends up on Court 2 when it's needed. Hand moves across
-    age groups ('17-James above 18-Danielle') count."""
+    """How much each team 'deserves' the better courts, from the pecking order: one point per place,
+    the bottom team 1 and the top team the number of places (at a shared rank, e.g. 16-1, the boys
+    team is just above the girls). Every place counts (Nov 9, 2026: rounding to a 2-20 scale gave
+    teams next to each other in a ~40-team club the same number, so they counted as tied for
+    Courts 1 and 7). The lowest team is the one that ends up on Court 2 when it's needed. Hand
+    moves across age groups ('17-James above 18-Danielle') count."""
     key = pecking_keys([(t.name, t.age, t.level, team_is_boys(t.club, t.name), getattr(t, "peck_move", ""))
                         for t in teams])
     keys = sorted(set(key.values()))
-    if len(keys) <= 1:
-        return {t.name: 10 for t in teams}
     pos = {k: i for i, k in enumerate(keys)}  # 0 = top
-    n = len(keys) - 1
-    return {t.name: 2 + round(18 * (n - pos[key[t.name]]) / n) for t in teams}
+    return {t.name: len(keys) - pos[key[t.name]] for t in teams}
 
 
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]  # index = date.weekday()
@@ -445,11 +443,11 @@ WEIGHTS = {
     #    one team one place in the pecking order costs 20 x 30 = 600 there),
     # 3. a coach with back-to-back sessions stays on the same court: beats the rank order inside
     #    the middle tier (3, 6, 5, 4: one step for teams next to each other in the pecking order
-    #    costs 30), loses to it when the gap is big (about 200 worth: two places in the order
-    #    three courts apart, or a few places one court apart),
+    #    costs 30), loses to it when the gap is big (about 200 worth: three places in the order
+    #    three courts apart, or seven places one court apart),
     # 4. the same side (boys / girls) and similar ages on neighboring courts (COURT_NEIGHBORS),
     # 5. the same net height from one time to the next (raising is allowed but not wanted).
-    "net_lower_court": 400000,
+    "net_lower_court": 2000000,
     "pecking_court": 30,
     "coach_stay": 200,
     "net_raise_court": 20,

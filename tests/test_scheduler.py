@@ -2430,3 +2430,32 @@ def test_move_a_team_across_age_groups():
     t = inp.teams.copy()
     t.loc[t["team"] == "17-James", "peck_move"] = ""
     assert pk.order_table(t)["team"].tolist()[:3] == ["18 Black", "18-Dani", "18-Two"]
+
+
+def test_every_place_in_the_pecking_order_counts_for_courts():
+    """Nov 9, 2026 bug: with ~40 teams the 2-20 court-priority scale gave neighbors in the order the
+    same number, so the top two teams at a time counted as tied for Court 1 and a coach staying
+    put decided it. Every place now counts."""
+    from types import SimpleNamespace as NS
+
+    from scheduler.config import pecking_weights
+    from scheduler.solver import _assign_courts
+    ages = [18] * 6 + [17] * 6 + [16] * 8 + [15] * 8 + [14] * 6 + [13] * 6
+    teams = [NS(name=f"T{i}", age=a, level=i, club="Girls" if i % 2 else "Boys", peck_move="")
+             for i, a in enumerate(ages)]
+    w = pecking_weights(teams)
+    assert len(set(w.values())) == len(teams) and w["T0"] == len(teams) and w["T39"] == 1
+    # A moved team gets its own place too.
+    teams[13].peck_move = "above T5"
+    w2 = pecking_weights(teams)
+    assert w2["T4"] > w2["T13"] > w2["T5"] and len(set(w2.values())) == len(teams)
+    # T0 and T1 (next to each other) at 7:20; T1's coach had T30 on Court 1 at 5:30. T0 still gets 1.
+    d = date(2026, 11, 16)
+    idx = {"T0": 0, "T1": 1, "T30": 2}
+    booked = {(0, d, "7:20"), (1, d, "7:20"), (2, d, "5:30")}
+    _, c, _ = _assign_courts(booked, [0, 1, 2], lambda d_, s_: [1, 2, 3, 4, 5, 6, 7],
+                             {i: w[n] for n, i in idx.items()}, time_limit_s=5,
+                             net_of={0: 1, 1: 1, 2: 1}, ages={0: 18, 1: 18, 2: 15},
+                             boys_of={0: True, 1: False, 2: False},
+                             coach_links=[((2, d, "5:30"), (1, d, "7:20"))])
+    assert c[0, d, "7:20"] == 1 and c[1, d, "7:20"] == 7
