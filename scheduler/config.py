@@ -33,9 +33,12 @@ def court_short(c) -> str:
 COURT_RANK = [1, 7, 3, 6, 5, 4, 2]
 COURT_COST = {1: 0, 7: 0, 3: 1, 6: 1, 5: 1, 4: 1, 2: 6}
 COURT_RANK_TEXT = "1 → 7 → 3 → 6 → 5 → 4 → 2"
-# Picking courts within a timeslot (stage 2): one step per place in COURT_RANK, Court 2 well below
-# the rest. x the team's pecking weight, so higher teams get the better courts.
-PECKING_COURT_COST = {1: 0, 7: 1, 3: 2, 6: 3, 5: 4, 4: 5, 2: 12}
+# Picking courts within a timeslot (stage 2), in tiers (Nov 8, 2026): Courts 1 and 7 are locked by
+# rank (the top team in the timeslot gets 1, the next 7) and Court 2 goes to the lowest team; Courts
+# 3, 6, 5 and 4 are a middle tier where the rank order (3 -> 6 -> 5 -> 4) gives way to a coach
+# staying on their court, unless the gap between the teams is big. x the team's pecking weight.
+PECKING_COURT_COST = {1: 0, 7: 20, 3: 40, 6: 41, 5: 42, 4: 43, 2: 100}
+COURT_TIERS = [[1], [7], [3, 6, 5, 4], [2]]
 # Which courts sit next to each other in the gym (Nov 8, 2026): teams of the same side (boys / girls)
 # and about the same age go on neighboring courts when the court ranks allow.
 COURT_NEIGHBORS = {(1, 7), (1, 5), (7, 6), (6, 5), (5, 4), (4, 3), (3, 2)}
@@ -395,20 +398,18 @@ WEIGHTS = {
     "net_lower": 400,
     # Stage 2 (courts), once the days and times are set, in this order (Nov 8, 2026):
     # 1. never lower a net (a court with men's at 5:30 and women's at 7:20),
-    # 2. the court ranks (COURT_RANK: better courts to higher teams in the pecking order),
-    # 3. a coach with back-to-back sessions stays on the same court, and the same net height from
-    #    one time to the next (raising is allowed): strictly below the court ranks (a coach moves
-    #    courts rather than 18 Black ends up on Court 7). A few of these together still cost less
-    #    than one team one step down the ranks (pecking_court x 1).
-    # 4. the same side (boys / girls) and similar ages on neighboring courts (COURT_NEIGHBORS):
-    #    "when possible", so it can reorder teams close together in the pecking order.
-    # "pecking_court" x PECKING_COURT_COST x the team's pecking weight (2-20): swapping two teams
-    # next to each other in the pecking order one court apart costs about 30, the top and bottom
-    # team on Court 1 vs Court 2 about 6,500.
-    "net_lower_court": 16000,
+    # 2. Courts 1 and 7 by rank, Court 2 to the lowest team (PECKING_COURT_COST's big steps:
+    #    one team one place in the pecking order costs 20 x 30 = 600 there),
+    # 3. a coach with back-to-back sessions stays on the same court: beats the rank order inside
+    #    the middle tier (3, 6, 5, 4: one step for teams next to each other in the pecking order
+    #    costs 30), loses to it when the gap is big (about 200 worth: two places in the order
+    #    three courts apart, or a few places one court apart),
+    # 4. the same side (boys / girls) and similar ages on neighboring courts (COURT_NEIGHBORS),
+    # 5. the same net height from one time to the next (raising is allowed but not wanted).
+    "net_lower_court": 400000,
     "pecking_court": 30,
-    "coach_stay": 6,
-    "net_raise_court": 6,
+    "coach_stay": 200,
+    "net_raise_court": 20,
     "near_side": 90,   # per pair of neighboring courts with a boys team next to a girls team
     "near_age": 24,    # per year of age between teams on neighboring courts (up to 4)
     "keep_court": 4,

@@ -1,6 +1,7 @@
 """Checks every hard rule on solved schedules, plus input parsing."""
 
 import io
+import itertools
 from collections import Counter
 from datetime import date, timedelta
 
@@ -1012,16 +1013,18 @@ def test_rule_order():
         assert W[k] < W["second_weekend"], k
     # Friday 7:20 beats every preference put together, but not a weekend.
     assert W["weekend"] > W["friday_late"] > W["wish_day_miss"] + W["not_preferred_day"] + W["wish_time_miss"]
-    # Courts (Nov 8, 2026): never lower a net, then the court ranks, then the softer wishes (coach
-    # stays put, same net height, same side and similar ages next to each other), which win only
-    # between teams close together in the pecking order.
-    from scheduler.config import PECKING_COURT_COST
-    worst_pecking = W["pecking_court"] * max(PECKING_COURT_COST.values()) * 18   # top vs bottom team on Court 2
+    # Courts (Nov 8, 2026): never lower a net, then Courts 1 / 7 / Court 2 locked by rank, then
+    # coaches staying put inside the middle tier (3, 6, 5, 4), then neighbors and same net heights.
+    from scheduler.config import PECKING_COURT_COST as PC
+    worst_pecking = W["pecking_court"] * max(PC.values()) * 18   # top vs bottom team on Court 2
     assert W["net_lower_court"] > worst_pecking
-    soft = W["coach_stay"] + W["net_raise_court"] + W["near_side"] + 4 * W["near_age"]
-    assert worst_pecking > 4 * soft
-    # Coaches staying put and same net heights: strictly below one step down the ranks (Nov 8, 2026).
-    assert W["pecking_court"] > 2 * W["coach_stay"] + 2 * W["net_raise_court"]
+    tier_step = W["pecking_court"] * min(PC[7] - PC[1], PC[3] - PC[7], PC[2] - PC[4])
+    mid_step = W["pecking_court"] * (PC[6] - PC[3])
+    soft = W["coach_stay"] + 3 * W["near_side"] + W["net_raise_court"]
+    assert tier_step > soft                       # nothing soft moves a team across a tier
+    assert W["coach_stay"] > mid_step             # inside the middle tier a coach stays put...
+    assert W["coach_stay"] < 3 * 3 * mid_step     # ...unless the gap is big (3 places, 3 courts)
+    assert mid_step > W["net_raise_court"]
     assert W["weekend_required"] == 0  # a note for coaches, not a rule
 
 
@@ -2018,8 +2021,14 @@ def test_same_side_and_age_on_neighboring_courts():
     nb = {frozenset(e) for e in COURT_NEIGHBORS}
     mixed = sum(1 for a in range(6) for b in range(a + 1, 6)
                 if frozenset((c[a], c[b])) in nb and boys[a] != boys[b])
-    assert mixed <= 2, c   # the least possible: 1-7-6 vs 5-4-3 still touch at 1-5 and 6-5
-    assert c[0] in (1, 7) and 2 not in c.values()   # the top team still gets a best court
+    assert c[0] == 1 and c[1] == 7 and 2 not in c.values()   # Courts 1 and 7 locked by rank
+    # The middle tier groups the sides: the least possible with a boys team on 1 and girls on 7.
+    best = min(sum(1 for e in nb if len(e) == 2 and all(x in arr for x in e)
+                   and len({arr[x] for x in e}) == 2)
+               for arr in ({1: True, 7: False} | dict(zip(p, sd))
+                           for p in itertools.permutations([3, 6, 5, 4])
+                           for sd in [(True, False, True, False)]))
+    assert mixed == best, c
 
 
 def test_nets_go_up_not_down_and_ranks_beat_same_height():
@@ -2041,7 +2050,8 @@ def test_nets_go_up_not_down_and_ranks_beat_same_height():
 
 
 def test_coach_moves_courts_before_a_top_team_drops_a_court():
-    """Nov 8, 2026: rather a coach move courts than 18 Black end up on Court 7."""
+    """Nov 8, 2026: rather a coach move courts than 18 Black end up on Court 7 (Courts 1 and 7 are
+    locked by rank)."""
     from scheduler.solver import _assign_courts
     d = date(2026, 11, 16)
     # 5:30: 18-girls (top girls) and the coach's low girls team; 7:20: 18 Black and 17 Black.
@@ -2054,6 +2064,33 @@ def test_coach_moves_courts_before_a_top_team_drops_a_court():
                                     coach_links=links)
     assert court_of[0, d, "7:20"] == 1 and court_of[1, d, "7:20"] == 7
     assert court_of[2, d, "5:30"] != 1
+
+
+def test_coach_stays_put_inside_the_middle_tier():
+    """Nov 8, 2026: 14-2 and 14-3 next to each other in the order; 14-3's coach had 12s on Court 5
+    at 3:45, so 14-3 takes Court 5 and 14-2 moves to Court 4. A big gap still beats the coach, and
+    Courts 1 and 7 stay by rank."""
+    from scheduler.solver import _assign_courts
+    d = date(2026, 11, 16)
+    # 5:30: four teams above (0-3), 14-2 (4) and 14-3 (5); the coach's 12s (6) at 3:45.
+    w = {0: 20, 1: 19, 2: 18, 3: 17, 4: 9, 5: 8, 6: 3}
+    booked = {(t, d, "5:30") for t in range(6)} | {(6, d, "3:45")}
+    links = [((6, d, "3:45"), (5, d, "5:30"))]
+    base = dict(time_limit_s=5, net_of={t: 1 for t in range(7)}, ages={t: 14 for t in range(7)},
+                boys_of={t: False for t in range(7)}, coach_links=links)
+
+    def run(c12):
+        on = lambda d_, s_: [c12] if s_ == "3:45" else [1, 2, 3, 4, 5, 6, 7]  # noqa: E731
+        _, c, _ = _assign_courts(booked, list(range(7)), on, w, **base)
+        return {t: c[t, d, "5:30"] for t in range(6)}
+
+    c = run(5)
+    assert c[5] == 5 and c[4] == 4                     # coach stays; 14-2 one court down
+    assert c[0] == 1 and c[1] == 7 and c[2] == 3 and c[3] == 6
+    c = run(3)
+    assert c[2] == 3 and c[5] != 3                     # big gap (18s vs 14-3): rank wins
+    c = run(1)
+    assert c[0] == 1                                   # Court 1 locked by rank
 
 
 @pytest.mark.usefixtures("alone_ok")
