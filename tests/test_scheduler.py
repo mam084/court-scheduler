@@ -1020,7 +1020,8 @@ def test_rule_order():
     assert W["net_lower_court"] > worst_pecking
     soft = W["coach_stay"] + W["net_raise_court"] + W["near_side"] + 4 * W["near_age"]
     assert worst_pecking > 4 * soft
-    assert W["pecking_court"] * 18 > W["coach_stay"] and W["pecking_court"] * 18 > W["net_raise_court"]
+    # Coaches staying put and same net heights: strictly below one step down the ranks (Nov 8, 2026).
+    assert W["pecking_court"] > 2 * W["coach_stay"] + 2 * W["net_raise_court"]
     assert W["weekend_required"] == 0  # a note for coaches, not a rule
 
 
@@ -2037,6 +2038,22 @@ def test_nets_go_up_not_down_and_ranks_beat_same_height():
     court_of, d = _courts(3, w, nets=nets, later={3: True})
     assert {court_of[0, d, "5:30"], court_of[1, d, "5:30"]} == {1, 7}
     assert court_of[3, d, "7:20"] not in (1, 7)
+
+
+def test_coach_moves_courts_before_a_top_team_drops_a_court():
+    """Nov 8, 2026: rather a coach move courts than 18 Black end up on Court 7."""
+    from scheduler.solver import _assign_courts
+    d = date(2026, 11, 16)
+    # 5:30: 18-girls (top girls) and the coach's low girls team; 7:20: 18 Black and 17 Black.
+    booked = {(3, d, "5:30"), (2, d, "5:30"), (0, d, "7:20"), (1, d, "7:20")}
+    w = {0: 20, 1: 19, 2: 5, 3: 18}
+    links = [((2, d, "5:30"), (0, d, "7:20"))]          # same coach, back to back
+    _, court_of, _ = _assign_courts(booked, [0, 1, 2, 3], lambda d_, s_: [1, 2, 3, 4, 5, 6, 7], w,
+                                    time_limit_s=5, net_of={0: 2, 1: 2, 2: 1, 3: 1},
+                                    ages={0: 18, 1: 17, 2: 14, 3: 18}, boys_of={0: True, 1: True, 2: False, 3: False},
+                                    coach_links=links)
+    assert court_of[0, d, "7:20"] == 1 and court_of[1, d, "7:20"] == 7
+    assert court_of[2, d, "5:30"] != 1
 
 
 @pytest.mark.usefixtures("alone_ok")

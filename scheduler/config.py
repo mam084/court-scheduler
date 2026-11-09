@@ -396,19 +396,21 @@ WEIGHTS = {
     # Stage 2 (courts), once the days and times are set, in this order (Nov 8, 2026):
     # 1. never lower a net (a court with men's at 5:30 and women's at 7:20),
     # 2. the court ranks (COURT_RANK: better courts to higher teams in the pecking order),
-    # 3. softer wishes the court ranks give way to when the gap between two teams is big:
-    #    a coach with back-to-back sessions stays on the same court, the same net height
-    #    from one time to the next (raising is allowed but not wanted), and the same side
-    #    (boys / girls) and similar ages on neighboring courts (COURT_NEIGHBORS).
+    # 3. a coach with back-to-back sessions stays on the same court, and the same net height from
+    #    one time to the next (raising is allowed): strictly below the court ranks (a coach moves
+    #    courts rather than 18 Black ends up on Court 7). A few of these together still cost less
+    #    than one team one step down the ranks (pecking_court x 1).
+    # 4. the same side (boys / girls) and similar ages on neighboring courts (COURT_NEIGHBORS):
+    #    "when possible", so it can reorder teams close together in the pecking order.
     # "pecking_court" x PECKING_COURT_COST x the team's pecking weight (2-20): swapping two teams
-    # next to each other in the pecking order one court apart costs about 10, the top and bottom
-    # team on Court 1 vs Court 2 about 2,000.
+    # next to each other in the pecking order one court apart costs about 30, the top and bottom
+    # team on Court 1 vs Court 2 about 6,500.
     "net_lower_court": 16000,
-    "pecking_court": 10,
-    "coach_stay": 150,
-    "net_raise_court": 60,
-    "near_side": 30,   # per pair of neighboring courts with a boys team next to a girls team
-    "near_age": 8,     # per year of age between teams on neighboring courts (up to 4)
+    "pecking_court": 30,
+    "coach_stay": 6,
+    "net_raise_court": 6,
+    "near_side": 90,   # per pair of neighboring courts with a boys team next to a girls team
+    "near_age": 24,    # per year of age between teams on neighboring courts (up to 4)
     "keep_court": 4,
     # each weekend 2-hour block opened: the club would rather put 4 teams in
     # 9-11 than 2 at 9-11 and 2 at 11-1 when there's room (on a busy weekend

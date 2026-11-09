@@ -108,9 +108,9 @@ def render():
                                     local_coaches=show_lc),
                     unsafe_allow_html=True)
         st.caption("Court ranks, best first: 1 → 7 → 3 → 6 → 5 → 4 → 2. Courts are picked after the day is set: "
-                   "a net never comes down (raising is fine), then the court ranks by pecking order, then (where the "
-                   "ranks allow) coaches staying on one court, the same net height, and the same side and similar "
-                   "ages next to each other.")
+                   "a net never comes down (raising is fine), then the court ranks by pecking order, then coaches "
+                   "staying on one court and the same net height, then the same side and similar ages next to "
+                   "each other.")
     else:
         dd = week_dates(ws, ws, we, result.weekend_dates)
         wk_short = result.shortfalls[result.shortfalls["week_of"] == ws] if len(result.shortfalls) else []
