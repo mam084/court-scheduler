@@ -8,7 +8,8 @@ import pandas as pd
 import streamlit as st
 
 from scheduler import google as gsvc
-from scheduler.config import DAYS, SLOTS
+from scheduler import privates as pv
+from scheduler.config import ALL_COURTS, DAYS, SLOTS, court_name, court_short
 from scheduler.solver import week_start
 from scheduler.storage import MAIN_ID
 from scheduler.views import club_stripes, court_grid_html, week_dates
@@ -122,13 +123,57 @@ def _review(req: dict) -> tuple[bool, dict | None]:
     return True, dict(req, detail=dict(req["detail"], rows=rows))
 
 
+def _review_private(req: dict) -> tuple[bool, dict]:
+    """A private request drawn on its week's court view, with what it clashes with (court, coach,
+    another private, a closure). A taken court can be swapped for one that's open then. Returns
+    (can approve, the request with the court it goes on)."""
+    row = dict((req.get("detail") or {}).get("private") or {})
+    year = S.start.year if S.start else date.today().year
+    got, bad = pv.rows(pd.DataFrame([row]), year)
+    if not got:
+        st.caption("Couldn't read this private's date or time" + (f" ({bad[0]})" if bad else "") + ".")
+        return True, req
+    p = got[0]
+    d, rid = p["date"], req["id"]
+    day_r = dates.window(d, d)[0]
+    a_day = day_r.assignments if day_r is not None else None
+    others = list(S.privs or [])
+    free = pv.free_courts(d, p["start"], a_day, others, ALL_COURTS)
+    if p["court"] not in free and free:
+        st.warning(f"{court_name(p['court'])} is taken then.")
+        p["court"] = st.selectbox("Put it on", free, format_func=court_name, key=f"rq_pv_court_{rid}",
+                                  help="Only courts open then are listed.")
+        row["court"] = court_short(p["court"])
+        req = dict(req, detail=dict(req["detail"], private=row))
+    clash = pv.conflicts(others + [dict(p, row=-1)], a_day, S.closures).get(-1, [])
+    if clash:
+        st.warning("Heads up: " + "; ".join(clash) + ".")
+    else:
+        st.caption(f"✓ {court_name(p['court'])} and {p['coach']} are free then.")
+    with st.expander("Where it would go", expanded=True):
+        ws = week_start(d)
+        r, _ = dates.window(ws, ws + timedelta(days=6))
+        if r is None:
+            st.caption("Nothing on the calendar that week yet.")
+        else:
+            a = r.assignments
+            dd = week_dates(ws, ws, ws + timedelta(days=6), r.weekend_dates)
+            week_pv = [x for x in others if week_start(x["date"]) == ws] + [dict(p, requested=True)]
+            st.markdown(court_grid_html(a, dd, S.closures, {p["coach"]}, club_stripes(a["club"]), r.tournaments,
+                                        r.weekend_dates, privates=week_pv), unsafe_allow_html=True)
+            st.caption(f"The dashed private is the request. {p['coach']}'s practices and privates stand out; "
+                       "everything else is faded.")
+    return True, req
+
+
 def render():
     """Requests section."""
     store, VIEWER, CAN = S.store, S.VIEWER, S.CAN
     me_email = VIEWER.person.email if VIEWER.person else ""
     if CAN:
-        st.markdown("Coaches' requests: moves, extra practices, cancellations and privates. Each move or extra "
-                    "practice shows where it would go. **Approve** puts it on an open court (it never pushes out "
+        st.markdown("Coaches' requests: moves, extra practices, cancellations and privates. Each move, extra "
+                    "practice or private shows where it would go on that week's courts. **Approve** puts it on "
+                    "an open court (it never pushes out "
                     "anything already there) and emails the coach; **Decline** emails them your note. Nobody "
                     "approves their own request.")
         conn_ = g_conn()
@@ -144,7 +189,8 @@ def render():
                 own = bool(me_email) and r["email"] == me_email
                 if own:
                     st.caption("You asked for this, so another scheduling admin has to decide it.")
-                ok_, r_go = _review(r) if r["kind"] in ("move", "extra") else (True, r)
+                ok_, r_go = (_review(r) if r["kind"] in ("move", "extra")
+                             else _review_private(r) if r["kind"] == "private" else (True, r))
                 c1, c2, c3, c4 = st.columns([3, 1, 1, 1], vertical_alignment="bottom")
                 note_ = c1.text_input("Note to the coach (optional)", key=f"rq_note_{r['id']}",
                                       placeholder="e.g. moved to Court 5 instead")

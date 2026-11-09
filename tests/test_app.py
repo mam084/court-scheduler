@@ -416,35 +416,21 @@ def test_first_sign_in_seeds_admins_and_coach_sees_limited_app(db, monkeypatch):
     at, _ = _as(db, monkeypatch, "newcoach@sdvbc.org", pid=pid)
     at.radio(key="nav").set_value("Edit practices").run()
     assert team in at.selectbox(key="ed_team").options
-    assert at.radio(key="ed_mode").options == ["Suggest a preference", "Ask to move a practice",
-                                               "Ask for an extra practice", "Ask to cancel a practice"]
+    assert at.radio(key="ed_mode").options == ["Ask to move a practice", "Ask for an extra practice",
+                                               "Ask to cancel a practice"]   # no preferences (Nov 2026)
 
 
-def test_coach_preference_saves_without_rebuild_or_overwriting(db, monkeypatch):
-    from scheduler.storage import make_payload, read_payload, read_published
+def test_coach_cannot_set_preferences(db, monkeypatch):
+    """Preferences are set by the scheduling admins only (Nov 2026); coaches only ask for changes."""
     pid = _save(db, "Roles", 22)
     head, team = _head_of_first_team(db, pid)
     db.save_user("coach@sdvbc.org", "Coach", head)
     at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
-    before = db.get(pid)["payload"]["result"]["assignments"]
-    # Meanwhile an admin adds a closure in another session.
-    rec = db.get(pid)
-    i_, s_, e_, set_, r_ = read_payload(rec["payload"])
-    i_.closures = pd.concat([i_.closures, pd.DataFrame([{"date": "11/20/2026", "reason": "Gym floor"}])],
-                            ignore_index=True)
-    db.save(pid, rec["name"], make_payload(i_, s_, e_, set_, r_, read_published(rec["payload"])))
     at.radio(key="nav").set_value("Edit practices").run()
     at.selectbox(key="ed_team").set_value(team).run()
-    pk = f"pref_{team}"
-    at.multiselect(key=f"{pk}_pd").set_value(["Thu"]).run()
-    next(b for b in at.button if b.label == "Save preference").click().run()
-    assert not at.exception, at.exception
-    pay = db.get(pid)["payload"]
-    assert any(w["team"] == team and w["days"] == "Thu" for w in pay["inputs"]["Wishlist"])
-    assert any(c["reason"] == "Gym floor" for c in pay["inputs"]["Closures"])   # admin's edit kept
-    assert pay["result"]["assignments"] == before                              # no rebuild by a coach
-    assert team in pay["settings"]["pending_prefs"][-1]
-    assert db.activity()[0]["action"] == "Preference"
+    assert "Suggest a preference" not in at.radio(key="ed_mode").options
+    assert not any(m.key == f"pref_{team}_pd" for m in at.multiselect)
+    assert not any(b.label == "Save preference" for b in at.button)
 
 
 def test_app_admin_can_view_as_and_manage_access(db, monkeypatch):
@@ -505,7 +491,7 @@ def test_outside_email_only_person_gets_publish_emails(db):
     assert access.coach_emails(db.users())["Jane Doe"] == "jane@gmail.com"
 
 
-def test_coach_adds_own_no_date_and_sees_only_their_things(db, monkeypatch):
+def test_coach_cannot_add_no_dates_and_sees_only_their_things(db, monkeypatch):
     pid = _save(db, "Roles", 25)
     head, team = _head_of_first_team(db, pid)
     db.save_user("coach@sdvbc.org", "Coach", head)
@@ -518,12 +504,25 @@ def test_coach_adds_own_no_date_and_sees_only_their_things(db, monkeypatch):
     assert not at.exception
     at.radio(key="nav").set_value("Coaches").run()
     assert at.selectbox(key=f"coach_pick_{head}").value == head      # opens on them
+    nk = f"nd_{head}"   # no-dates are set by the scheduling admins only (Nov 2026)
+    assert not any(m.key == f"{nk}_days" for m in at.multiselect)
+    assert not any(b.key == f"{nk}_add" for b in at.button)
+    assert any("Tell a scheduling admin" in c.value for c in at.caption)
+
+
+def test_admin_adds_a_coachs_no_date(db, monkeypatch):
+    pid = _save(db, "Roles", 26)
+    head, _ = _head_of_first_team(db, pid)
+    db.save_user("cliff@sdvbc.org", "Cliff", "", False, True)
+    at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Coaches").run()
+    at.selectbox(key="coach_pick_").set_value(head).run()
     nk = f"nd_{head}"
     at.multiselect(key=f"{nk}_days").set_value(["Fri"]).run()
     next(b for b in at.button if b.key == f"{nk}_add").click().run()
     assert not at.exception, at.exception
-    av = db.get(pid)["payload"]["inputs"]["Availability"]
-    assert any(r["who"] == head and r["type"] == "No" and r["days"] == "Fri" for r in av)
+    av = at.session_state["inp"].availability
+    assert any(r.who == head and r.type == "No" and r.days == "Fri" for r in av.itertuples())
 
 
 def test_program_tournament_dates_round_trip_through_the_form(db):
@@ -791,6 +790,15 @@ def test_coach_requests_a_private(db, monkeypatch):
     assert not at.exception, at.exception
     r = db.requests("pending")[0]
     assert r["kind"] == "private" and r["detail"]["private"]["coach"] == head
+    # A scheduling admin sees it on that week's courts, then approves it.
+    db.save_user("cliff@sdvbc.org", "Cliff", "", False, True)
+    at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Requests").run()
+    assert not at.exception, at.exception
+    assert any("Requested private" in m.value for m in at.markdown)
+    next(b for b in at.button if b.key == f"rq_ok_{r['id']}").click().run()
+    assert not at.exception, at.exception
+    assert (at.session_state["inp"].privates["coach"] == head).any()
 
 
 def test_add_coaches_from_schedule(db, monkeypatch):

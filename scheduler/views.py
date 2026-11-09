@@ -119,6 +119,7 @@ CSS = """
 .cs-grid td.cs-tcell { vertical-align: middle; }
 .cs-chip.cs-priv { background: #F5EEFF; color: #4C1D95; border-left-color: #8B5CF6; padding: 2px 5px; }
 .cs-chip.cs-priv span { font-size: 11px; }
+.cs-chip.cs-priv.cs-req { outline: 2px dashed #8B5CF6; outline-offset: 1px; font-weight: 600; }
 .cs-grid th .cs-thead-t { margin-top: 4px; text-align: left; font-weight: 600; }
 .cs-grid th .cs-thead-t .cs-chip { margin: 0 0 3px 0; padding: 2px 5px; font-size: 11px; line-height: 1.2; }
 .cs-grid th .cs-thead-t .cs-chip span { display: block; font-weight: 400; font-size: 10.5px; opacity: .9; }
@@ -278,13 +279,21 @@ def courts_label(courts) -> str:
     return ", ".join(parts)
 
 
-def _private_chip(p) -> str:
+def _private_chip(p, highlight=None) -> str:
+    """A private on the court grid. A `requested` one (a coach's request, drawn for the admin
+    reviewing it) stands out; with a highlight on, other coaches' privates fade like practices do."""
     who = html.escape(str(p["coach"]))
     what = html.escape(p.get("what") or "")
     title = f"Private {p['time']}–{p['end_label']} · {p['coach']}" + (f" · {p['what']}" if p.get("what") else "")
-    return (f'<div class="cs-chip cs-priv" title="{html.escape(title)}">'
+    cls = "cs-chip cs-priv"
+    if p.get("requested"):
+        cls += " cs-req"
+    elif highlight and not (p["coach"] in highlight or (p.get("team") or "") in highlight):
+        cls += " cs-dim"
+    label = "Requested private" if p.get("requested") else "Private"
+    return (f'<div class="{cls}" title="{html.escape(title)}">'
             f'<span class="cs-time">{html.escape(p["time"])}</span>'
-            f' Private · {who}' + (f'<br><span>{what}</span>' if what else "") + "</div>")
+            f' {label} · {who}' + (f'<br><span>{what}</span>' if what else "") + "</div>")
 
 
 def _tourn_style(tn) -> str:
@@ -430,7 +439,8 @@ def court_grid_html(
                 items.append((0 if weekend else _band(m), m, _chip(r, stripes, highlight, local_coaches=local_coaches)))
             here_pv = [pv for pv in (privates or []) if pv["day"] == wd and pv["court"] == c]
             for pv in here_pv:
-                items.append((0 if weekend else _band(pv["start"]), pv["start"] + 0.25, _private_chip(pv)))
+                items.append((0 if weekend else _band(pv["start"]), pv["start"] + 0.25,
+                              _private_chip(pv, highlight)))
             if open_slots:
                 taken = [r["slot"] for r in cell]
                 free = [sl for sl, cs in (open_slots.get(wd) or {}).items()

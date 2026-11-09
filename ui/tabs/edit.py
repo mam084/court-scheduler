@@ -197,10 +197,9 @@ def render():
                         "and fits everything else around them.")
             team_names = [t.name for t in cleaned.teams]
         else:
-            st.markdown("Tell the scheduler what your teams would rather have, or ask for a change. Preferences "
-                        "save right away and are weighed against every other team's at the next rebuild. Moves, "
-                        "extra practices and cancellations go to the scheduling admins to approve (you'll get an "
-                        "email either way). Your own no-dates and times are on the **Coaches** tab.")
+            st.markdown("Ask for a change to your team's practices. Moves, extra practices and cancellations go "
+                        "to the scheduling admins to approve (you'll get an email either way). For your team's "
+                        "preferred days and times or your no-dates, tell a scheduling admin.")
             team_names = VIEWER.my_teams(cleaned.teams)
             if not team_names:
                 st.info("Your login isn't linked to a team yet. Ask an app admin to link it to your coach name."
@@ -238,11 +237,11 @@ def render():
             mode = st.radio("What do you want to do?", ["Suggest a preference", "Move a practice", "Remove a practice",
                                                         "Add a practice", "Makeup practice", "Set usual days",
                                                         "Practices per week"]
-                            if CAN else ["Suggest a preference", "Ask to move a practice", "Ask for an extra practice",
+                            if CAN else ["Ask to move a practice", "Ask for an extra practice",
                                          "Ask to cancel a practice"],
                             key="ed_mode",
-                            help="A preference is weighed against everyone else's and kept when possible. "
-                                 "The other options pin a practice exactly where you put it.")
+                            help=("A preference is weighed against everyone else's and kept when possible. "
+                                  "The other options pin a practice exactly where you put it.") if CAN else None)
             labels = [f"{r.date:%a %b %-d} · {r.slot_label} · Court {r.court}" for r in tp.itertuples()]
             if mode in ("Move a practice", "Remove a practice"):
                 if not labels:

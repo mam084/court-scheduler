@@ -69,8 +69,10 @@ def render():
         c3.markdown("**No-dates & not-preferred**\n\n" + ("\n".join(
             f"- {r.who}: {'no' if r.kind == 'no' else 'not preferred'} {r.describe()}" for r in rules) or "_none_"))
 
-        # ---- a coach's own no-dates / times (any coach for scheduling admins)
-        if CAN or (MY_COACH and coach == MY_COACH):
+        # ---- a coach's no-dates / times: scheduling admins only (Nov 2026; coaches tell an admin)
+        if not CAN and MY_COACH and coach == MY_COACH:
+            st.caption("Can't make a day or time? Tell a scheduling admin and they'll add it.")
+        if CAN:
             with st.expander(f"{'Your' if coach == MY_COACH else coach + chr(39) + 's'} no-dates and times",
                              expanded=coach == MY_COACH and not CAN):
                 st.caption("Days and times you can't coach. The scheduler keeps your teams off them (a head "

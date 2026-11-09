@@ -54,8 +54,8 @@ def render():
                 st.info(f"📬 **{plural(_n_req, 'change request')}** waiting on the **Requests** tab.")
         run = False
         if not CAN:
-            st.caption("Change your teams' preferences in **Edit practices**, and ask for moves, extra practices, "
-                       "cancellations and privates there or in **Privates**. The scheduling admins approve those on "
+            st.caption("Ask for moves, extra practices and cancellations in **Edit practices**, and for privates "
+                       "in **Privates**. The scheduling admins approve those on "
                        "the **Requests** tab.")
         else:
             run = _auto_schedule() or bool(st.session_state.pop("build_now", False))

@@ -5,8 +5,10 @@ Three roles, which can be combined:
     anyone to test what they see.
   - Scheduling admin: edits the schedule, programs, tournaments and inputs,
     rebuilds and publishes, and (stage 2) approves coaches' change requests.
-  - Coach (everyone signed in): sees the whole schedule, and changes their
-    own teams' preferences right away. Other changes will be requests.
+  - Coach (everyone signed in): sees the whole schedule and asks for changes
+    (moves, extra practices, cancellations, privates), which a scheduling admin
+    approves. Preferences and no-dates are set by the scheduling admins
+    (Nov 2026).
 
 Sign-in is with Google (Streamlit's built-in login, set up in secrets).
 Only addresses on the club's domain(s) can get in, plus any outside
