@@ -2549,3 +2549,18 @@ def test_restore_version_with_extra_practice():
     assert r.ok
     got = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["name"] == team)]
     assert (got["date"] == free[0]).any()
+
+
+def test_restore_with_makeup_adds_nothing():
+    """Restoring a version built with a makeup week brings it back as it was: the makeup practice
+    is part of the team's week, not an extra on top, so nothing new gets added."""
+    from scheduler.changes import practices_of, snapshot
+    teams = [{"team": f"16-T{i}", "age": 16} for i in range(6)]
+    inp = _inp(teams)
+    inp.overrides = pd.DataFrame([{"team": f"16-T{i}", "action": "Makeup", "date": "11/03/2026", "days": "",
+                                   "time": "", "court": "", "note": "short last week"} for i in range(3)])
+    old = practices_of(snapshot(solve(inp, *NOV, time_limit_s=10), "v1"))
+    r = solve(inp, *NOV, time_limit_s=10, previous=old, restore=old)
+    key = ["name", "date", "slot"]
+    got = r.assignments[r.assignments["kind"] == "Practice"]
+    assert set(map(tuple, got[key].values)) == set(map(tuple, old[key].values))

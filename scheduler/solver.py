@@ -1375,6 +1375,11 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
             taken[d, s].add(c)
     outside, gone = 0, set()
 
+    def usual(t, d):
+        # The team's week: its usual practices, plus any makeups and extras that week.
+        ws_ = week_start(d)
+        return teams[t].per_week + data.makeups.get((teams[t].name, ws_), 0) + extras[t, ws_]
+
     def drop(name, d, s, why):
         notes.append({"kept": False, "team": name, "date": d, "slot": s,
                       "text": f"Not restored: {name} on {d:%a %-m/%-d} at {s}, because {why}"})
@@ -1405,7 +1410,7 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
         elif (t, d, s) in team_days:
             drop(name, d, s, "the team already has a practice placed by hand then")
         elif (per_week[t, week_start(d)]
-              >= max(team.per_week + extras[t, week_start(d)], in_version[name, week_start(d)])):
+              >= max(usual(t, d), in_version[name, week_start(d)])):
             drop(name, d, s, f"the team already has {per_week[t, week_start(d)]} practices placed that week")
         elif count[d, s] >= len(courts_on(d, s)):
             drop(name, d, s, "every court is taken then")
@@ -1414,7 +1419,7 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
         else:
             if c is not None and (c not in courts_on(d, s) or c in taken[d, s]):
                 c = None  # its court is taken now: any free court will do
-            if per_week[t, week_start(d)] >= team.per_week + extras[t, week_start(d)]:
+            if per_week[t, week_start(d)] >= usual(t, d):
                 # The version had more practices that week than the team's usual number (an extra
                 # that's since been removed, an imported week...): it comes back as an extra, so the
                 # weekly limit makes room for it instead of making the whole schedule impossible.
