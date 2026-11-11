@@ -2487,3 +2487,26 @@ def test_changes_by_day():
     assert "Wednesday Nov 18" in txt and txt.index("Monday Nov 16") < txt.index("Tuesday Nov 17")
     h = changes_print_html(ch, "Changes", "x", by_day=True)
     assert h.count('class="pc-week"') == 3 and "Moved here" in h
+
+
+def test_daytime_block_on_a_regular_weekday():
+    """A practice added by hand at 9-11 (or 1-3) on a regular weekday (Veterans Day, Thanksgiving
+    week) goes in, and the day keeps its usual weekday times for everyone else (Nov 2026)."""
+    teams = [{"team": f"15-D{i}", "age": 15} for i in range(4)]
+    inp = _with_overrides(_inp(teams), [
+        {"team": "15-D0", "action": "Extra", "date": "11/11/2026", "time": "9AM", "court": "1"},
+        {"team": "15-D1", "action": "Extra", "date": "11/11/2026", "time": "1PM", "court": "6"}])
+    r = solve(inp, *NOV, time_limit_s=15)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    day = pr[pr["date"] == date(2026, 11, 11)]
+    assert set(zip(day[day["slot"].isin(["9AM", "1PM"])]["name"], day[day["slot"].isin(["9AM", "1PM"])]["slot"])) \
+        == {("15-D0", "9AM"), ("15-D1", "1PM")}            # only the hand-placed ones use the daytime
+    assert not pr[(pr["date"] != date(2026, 11, 11)) & pr["slot"].isin(["9AM", "11AM", "1PM"])].any().any()
+    assert set(pr["slot"]) - {"9AM", "1PM"} <= {"3:45", "5:30", "7:20"}
+
+
+def test_late_block_on_a_regular_weekday_is_refused():
+    teams = [{"team": "15-D0", "age": 15}]
+    inp = _with_overrides(_inp(teams), [{"team": "15-D0", "action": "Add", "date": "11/11/2026", "time": "5PM"}])
+    with pytest.raises(ValueError, match="regular weekday"):
+        solve(inp, *NOV, time_limit_s=10)

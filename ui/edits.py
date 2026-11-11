@@ -148,7 +148,7 @@ def court_use(d: date, slot: str) -> dict | None:
     """Who has each court at slot on day d: {court: what}; courts the day doesn't open (a block day
     on fewer courts, a closure) read 'not open then'. None when d isn't scheduled yet (nothing to
     check against)."""
-    from scheduler.config import COURTS, SLOT_TIMES, WEEKDAY_KEYS, slots_overlap
+    from scheduler.config import COURTS, SLOT_TIMES, WEEKDAY_DAYTIME, WEEKDAY_KEYS, slots_overlap
     from ui import dates
     if dates.run_at(d) is None:
         return None
@@ -160,7 +160,7 @@ def court_use(d: date, slot: str) -> dict | None:
         if slot not in wk.blocks:
             return {c: "not open then" for c in COURTS}
         used = {c: "not open then" for c in COURTS if c not in wk.courts}
-    elif d.weekday() >= 5 or slot not in WEEKDAY_KEYS:
+    elif d.weekday() >= 5 or slot not in WEEKDAY_KEYS + WEEKDAY_DAYTIME:
         return {c: "not open then" for c in COURTS}
     else:
         used = {}

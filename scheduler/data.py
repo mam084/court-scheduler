@@ -73,6 +73,7 @@ from .config import (
     WEEKDAY_KEYS,
     WEEKDAYS,
     WEEKEND,
+    WEEKDAY_DAYTIME,
     WEEKEND_KEYS,
     blocked_by_local_tournament,
     default_priority,
@@ -1514,9 +1515,12 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                     raise ValueError("needs exactly one time")
                 slot = next(iter(times))
                 block = d.weekday() >= 5 or d in weekends  # weekends and break days run in 2-hour blocks
-                if block != (slot in WEEKEND_KEYS):
-                    raise ValueError(f"{d:%a %-m/%-d} needs a {'2-hour block' if block else 'weekday'} time"
-                                     + (" (it's an open day)" if block and d.weekday() < 5 else ""))
+                if block and slot not in WEEKEND_KEYS:
+                    raise ValueError(f"{d:%a %-m/%-d} needs a 2-hour block time"
+                                     + (" (it's an open day)" if d.weekday() < 5 else ""))
+                if not block and slot in WEEKEND_KEYS and slot not in WEEKDAY_DAYTIME:
+                    raise ValueError(f"{d:%a %-m/%-d} is a regular weekday: use 3:45, 5:30 or 7:20, or a "
+                                     "daytime block (9-11, 11-1 or 1-3) for a practice during the day")
                 if slot in PROGRAM_KEYS:
                     raise ValueError("JumpStart times are for programs, not team practices")
                 if not team.allowed(slot):

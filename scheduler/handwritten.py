@@ -5,6 +5,8 @@ the way the sheets write it (S14-B, 16-E, 14-Ca) or by its full name. Each row b
 hand edit, so the practice is pinned where the sheet has it and the scheduler fits around it.
 
 Times can be the start ("17:30", "5:30", "9:00") or the sheet's label ("5:30-7:20", "9-11").
+On a regular weekday, 9-11, 11-1 and 1-3 are daytime blocks (a day off school): the day keeps its
+usual 3:45 / 5:30 / 7:20 times for everyone else.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from .labels import label_map
 
 # 24h start -> slot key.
 _WEEKDAY_START = {(15, 45): "3:45", (17, 30): "5:30", (19, 20): "7:20"}
+_DAYTIME_START = {(9, 0): "9AM", (11, 0): "11AM", (13, 0): "1PM"}  # weekday daytime blocks
 _WEEKEND_START = {(9, 0): "9AM", (11, 0): "11AM", (13, 0): "1PM", (15, 0): "3PM", (17, 0): "5PM", (19, 0): "7PM"}
 
 
@@ -51,7 +54,9 @@ def slot_for(d: date, value) -> str:
         return table[(h, mi)]
     if not weekend and h < 12 and (h + 12, mi) in table:
         return table[(h + 12, mi)]
-    raise ValueError(f"'{value}' isn't a {'weekend block' if weekend else 'weekday practice'} time")
+    if not weekend and (h, mi) in _DAYTIME_START:  # "9-11", "1-3" on a weekday: a daytime block
+        return _DAYTIME_START[(h, mi)]
+    raise ValueError(f"'{value}' isn't a {'weekend block' if weekend else 'weekday practice (or 9-11, 11-1, 1-3)'} time")
 
 
 def read_rows(data: bytes, filename: str = "") -> pd.DataFrame:

@@ -181,6 +181,11 @@ WEEKDAY_KEYS = list(WEEKDAY_SLOTS)        # team practice slots
 PROGRAM_KEYS = list(PROGRAM_SLOTS)
 WEEKEND_KEYS = list(WEEKEND_SLOTS)
 AM_BLOCKS = {"9AM", "11AM"}
+# Daytime blocks a practice can be added at by hand on a regular weekday (a day off school, like
+# Veterans Day, or 1-3 PM Thanksgiving week), while the day keeps its usual 3:45 / 5:30 / 7:20 times
+# for everyone else (Nov 2026). They end by 3 PM, before the weekday times start. The scheduler
+# never puts a practice in one on its own: only hand-placed / imported practices go there.
+WEEKDAY_DAYTIME = ["9AM", "11AM", "1PM"]
 PM_BLOCKS = {"1PM", "3PM", "5PM", "7PM"}
 
 # 24h (start, end) for calendar files.

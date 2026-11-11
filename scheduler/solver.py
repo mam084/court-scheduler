@@ -53,6 +53,7 @@ from .config import (
     SLOT_KEYS,
     SLOT_TIMES,
     SLOTS,
+    WEEKDAY_DAYTIME,
     WEEKDAY_KEYS,
     WEEKDAYS,
     WEIGHTS,
@@ -139,8 +140,23 @@ def solve(
     # breaks), which run in 2-hour blocks like a weekend.
     weekend_dates = [d for d in open_dates if d in data.weekends]
 
+    # Daytime blocks on regular weekdays (Nov 2026): a practice placed by hand (or restored) at 9-11,
+    # 11-1 or 1-3 on a day that otherwise runs its usual weekday times. Only those practices use
+    # them; the scheduler never adds one there itself.
+    day_extra: dict[date, list[str]] = defaultdict(list)
+    _rv = restore[restore["kind"] == "Practice"] if restore is not None and len(restore) and "kind" in restore \
+        else restore
+    for d_, s_ in [(pn.day, pn.slot) for pn in data.pins] + (
+            [(r.date, r.slot) for r in _rv.itertuples()] if _rv is not None and len(_rv) else []):
+        if d_.weekday() < 5 and d_ not in data.weekends and s_ in WEEKDAY_DAYTIME and s_ not in day_extra[d_]:
+            day_extra[d_].append(s_)
+
     def slots_on(d):
-        return data.weekends[d].blocks if d in data.weekends else WEEKDAY_KEYS
+        if d in data.weekends:
+            return data.weekends[d].blocks
+        if day_extra.get(d):
+            return [s for s in WEEKDAY_DAYTIME if s in day_extra[d]] + WEEKDAY_KEYS
+        return WEEKDAY_KEYS
 
     def locals_at(d, s):
         """Programs taking courts/coaches in slot s (incl. overlapping JumpStart times)."""
@@ -375,7 +391,7 @@ def solve(
                     m.Add(y[t, d, s] == 1)
                 else:
                     if off_day or not team.allowed(s) or not courts_on(d, s) or week_start(d) in break_weeks \
-                            or week_start(d) in hand_weeks:
+                            or week_start(d) in hand_weeks or s in day_extra.get(d, ()):
                         continue
                     if d.weekday() >= 5 and team.weekend_only and not any(w.matches(d, s) for w in team.weekend_only):
                         continue

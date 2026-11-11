@@ -65,3 +65,10 @@ def test_third_practice_in_a_week_goes_in_as_extra():
     assert act[("16-Edgar", "12/07/2026")] == "Add"
     assert act[("14 Black", "12/01/2026")] == "Add" and act[("14 Black", "12/03/2026")] == "Extra"
     assert problems == []
+
+
+def test_daytime_blocks_on_a_weekday():
+    assert slot_for(WED, "9-11") == "9AM"
+    assert slot_for(WED, "1-3") == "1PM"
+    assert slot_for(WED, "1:00-3:00") == "1PM"
+    assert slot_for(WED, "9AM") == "9AM"
