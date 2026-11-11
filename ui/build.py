@@ -119,8 +119,22 @@ def run():
                     # A coach's request, or a hand edit once these dates are published: every other
                     # practice stays exactly where it is (same time, same court), so nobody's pushed out.
                     restore = _held(st.session_state.result.assignments, holding)
+                _old_result = st.session_state.get("result")
                 st.session_state.result = solve(inp, start, end, time_limit_s=time_limit, makeup_closures=makeup,
                                                 previous=prev, previous_pattern=prev_pat, restore=restore)
+                if restore_ver is not None and not st.session_state.result.ok:
+                    # The version can't come back exactly with today's inputs. Rather than leave no
+                    # schedule at all, rebuild as close to it as possible.
+                    st.session_state.result = solve(inp, start, end, time_limit_s=time_limit,
+                                                    makeup_closures=makeup, previous=prev,
+                                                    previous_pattern=prev_pat)
+                    st.session_state.flash = (f"“{restore_ver['label']}” couldn't come back exactly with the "
+                                              "current inputs, so the schedule was rebuilt as close to it as "
+                                              "possible. See **Publish** for what differs.")
+                if not st.session_state.result.ok and _old_result is not None and _old_result.ok and not S.run_pressed:
+                    # A change or restore that can't be built never wipes out the schedule that was there.
+                    st.session_state.result = _old_result
+                    st.error("That couldn't be scheduled, so nothing changed. The schedule is as it was.")
                 if restore_ver is not None:
                     st.session_state.base_version = restore_ver["id"]
                 st.session_state.pop("pending_rebuild", None)

@@ -2526,3 +2526,26 @@ def test_three_kinds_of_private():
     import io
     wb = load_workbook(io.BytesIO(pv.to_excel(privs, ["Ann"])))
     assert [c.value for c in wb["Coaches"][2]][:5] == ["Ann", 3, 1, 2, 6]
+
+
+def test_restore_version_with_extra_practice():
+    """A published version where a team had a 3rd practice one week (its Extra since removed)
+    comes back whole instead of making the schedule impossible."""
+    from scheduler.changes import practices_of, snapshot
+    inp = simulate(6, 4, 4, 2026, 11, 7)
+    old = practices_of(snapshot(solve(inp, *NOV, time_limit_s=20), "v1"))
+    team = old.iloc[0]["name"]
+    mine = old[old["name"] == team]
+    for _, row in mine.iterrows():
+        ws = week_start(row["date"])
+        free = [ws + timedelta(i) for i in range(7) if (ws + timedelta(i)).weekday() < 5
+                and ws + timedelta(i) not in set(mine["date"]) and NOV[0] <= ws + timedelta(i) <= NOV[1]]
+        if free:
+            break
+    row = row.copy()
+    row["date"], row["court"], row["day"] = free[0], None, f"{free[0]:%a}"
+    old3 = pd.concat([old, pd.DataFrame([row])], ignore_index=True)
+    r = solve(inp, *NOV, time_limit_s=20, previous=old3, restore=old3)
+    assert r.ok
+    got = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["name"] == team)]
+    assert (got["date"] == free[0]).any()
