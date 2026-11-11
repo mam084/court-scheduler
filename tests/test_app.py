@@ -1455,3 +1455,23 @@ def test_warnings_can_be_dismissed_and_brought_back(db):
     at2.button(key="wd_back_all").click().run()
     assert not at2.exception, at2.exception
     assert any("First made-up note" in w.value for w in at2.warning)
+
+
+def test_requests_are_grouped_by_coach(db, monkeypatch):
+    """The admin's Requests list groups waiting requests by coach, longest waiting first (Nov 2026)."""
+    import time
+    pid = _save(db, "Roles", 34)
+    head, team = _head_of_first_team(db, pid)
+    db.save_user("cliff@sdvbc.org", "Cliff", "", False, True)
+    a1 = db.add_request("ann@sdvbc.org", "Ann", "cancel", team, "", "Ann cancel 1", {"rows": []})
+    time.sleep(0.01)
+    b1 = db.add_request("bo@sdvbc.org", "Bo", "cancel", team, "", "Bo cancel", {"rows": []})
+    time.sleep(0.01)
+    a2 = db.add_request("ann@sdvbc.org", "Ann", "cancel", team, "", "Ann cancel 2", {"rows": []})
+    at, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Requests").run()
+    assert not at.exception, at.exception
+    heads = [m.value for m in at.markdown if m.value.startswith("#### ")]
+    assert heads == ["#### Ann", "#### Bo"]
+    order = [b.key for b in at.button if b.key and b.key.startswith("rq_ok_")]
+    assert order == [f"rq_ok_{a1}", f"rq_ok_{a2}", f"rq_ok_{b1}"]       # Ann's two together

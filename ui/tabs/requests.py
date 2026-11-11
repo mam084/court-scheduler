@@ -166,6 +166,37 @@ def _review_private(req: dict) -> tuple[bool, dict]:
     return True, req
 
 
+def _pending_card(r: dict, me_email: str):
+    """One waiting request: what it is, where it would go, and approve / decline / remove."""
+    store, VIEWER = S.store, S.VIEWER
+    with st.container(border=True):
+        st.markdown(f"**{r['summary']}**  \n{r['email'] or 'no email'} · asked {_req_when(r)}"
+                    + (f"  \n_{r['note']}_" if r["note"] else ""))
+        own = bool(me_email) and r["email"] == me_email
+        if own:
+            st.caption("You asked for this, so another scheduling admin has to decide it.")
+        ok_, r_go = (_review(r) if r["kind"] in ("move", "extra")
+                     else _review_private(r) if r["kind"] == "private" else (True, r))
+        c1, c2, c3, c4 = st.columns([3, 1, 1, 1], vertical_alignment="bottom")
+        note_ = c1.text_input("Note to the coach (optional)", key=f"rq_note_{r['id']}",
+                              placeholder="e.g. moved to Court 5 instead")
+        if c2.button("Approve", type="primary", key=f"rq_ok_{r['id']}", width="stretch",
+                     disabled=own or not ok_):
+            approve(r_go, note_.strip())
+        if c3.button("Decline", key=f"rq_no_{r['id']}", width="stretch", disabled=own):
+            st.session_state.flash = decided(r, "denied", note_.strip())
+            st.rerun()
+        if c4.button("Remove", key=f"rq_rm_{r['id']}", width="stretch",
+                     help="Take it off the list without approving or declining it. Nobody is emailed."):
+            store.delete_requests([r["id"]])
+            store.log(VIEWER.log_name, "Request removed", r["summary"], MAIN_ID)
+            st.session_state.flash = f"Removed the request: {r['summary']}."
+            st.rerun()
+
+
+_KIND = {"move": "move", "extra": "extra practice", "cancel": "cancel", "private": "private"}
+
+
 def render():
     """Requests section."""
     store, VIEWER, CAN = S.store, S.VIEWER, S.CAN
@@ -182,31 +213,22 @@ def render():
         pend = store.requests("pending")
         if not pend:
             st.success("No requests waiting.")
-        for r in pend:
+        # Grouped by coach (Nov 2026): whoever has waited longest comes first, and each coach's
+        # requests are in the order they asked.
+        by_coach: dict[str, list[dict]] = {}
+        for r in sorted(pend, key=lambda r: str(r["created_at"])):
+            by_coach.setdefault(r["who"] or r["email"] or "Unknown", []).append(r)
+        if len(by_coach) > 1:
+            st.caption(f"{len(pend)} requests from {len(by_coach)} coaches, longest waiting first.")
+        for who, reqs in by_coach.items():
+            kinds = sorted({_KIND.get(r["kind"], r["kind"]) for r in reqs})
             with st.container(border=True):
-                st.markdown(f"**{r['summary']}**  \n{r['who']} · {r['email'] or 'no email'} · {_req_when(r)}"
-                            + (f"  \n_{r['note']}_" if r["note"] else ""))
-                own = bool(me_email) and r["email"] == me_email
-                if own:
-                    st.caption("You asked for this, so another scheduling admin has to decide it.")
-                ok_, r_go = (_review(r) if r["kind"] in ("move", "extra")
-                             else _review_private(r) if r["kind"] == "private" else (True, r))
-                c1, c2, c3, c4 = st.columns([3, 1, 1, 1], vertical_alignment="bottom")
-                note_ = c1.text_input("Note to the coach (optional)", key=f"rq_note_{r['id']}",
-                                      placeholder="e.g. moved to Court 5 instead")
-                if c2.button("Approve", type="primary", key=f"rq_ok_{r['id']}", width="stretch",
-                             disabled=own or not ok_):
-                    approve(r_go, note_.strip())
-                if c3.button("Decline", key=f"rq_no_{r['id']}", width="stretch", disabled=own):
-                    st.session_state.flash = decided(r, "denied", note_.strip())
-                    st.rerun()
-                if c4.button("Remove", key=f"rq_rm_{r['id']}", width="stretch",
-                             help="Take it off the list without approving or declining it. Nobody is emailed."):
-                    store.delete_requests([r["id"]])
-                    store.log(VIEWER.log_name, "Request removed", r["summary"], MAIN_ID)
-                    st.session_state.flash = f"Removed the request: {r['summary']}."
-                    st.rerun()
-        done_ = [r for r in store.requests() if r["status"] != "pending"][:50]
+                st.markdown(f"#### {who}")
+                st.caption(f"{len(reqs)} request{'s' if len(reqs) != 1 else ''} · {', '.join(kinds)}")
+                for r in reqs:
+                    _pending_card(r, me_email)
+        done_ = sorted([r for r in store.requests() if r["status"] != "pending"][:50],
+                       key=lambda r: (str(r["who"]).lower(), -pd.Timestamp(r["created_at"]).value))
         if done_:
             with st.expander(f"Decided ({len(done_)})"):
                 h1, h2 = st.columns([3, 1], vertical_alignment="bottom")
@@ -218,7 +240,7 @@ def render():
                     st.session_state.flash = f"Cleared {n_} decided request{'s' if n_ != 1 else ''}."
                     st.rerun()
                 st.dataframe(pd.DataFrame([{
-                    "Asked": _req_when(r), "Who": r["who"], "Request": r["summary"],
+                    "Who": r["who"], "Asked": _req_when(r), "Request": r["summary"],
                     "Decision": {"approved": "Approved", "denied": "Declined", "withdrawn": "Withdrawn"}.get(
                         r["status"], r["status"]),
                     "By": r["decided_by"], "Note": r["decision_note"]} for r in done_]),
