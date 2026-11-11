@@ -14,6 +14,74 @@ from ui.nav import ADMIN_ONLY, ALL_VIEWS, TAB_ACCESS
 from ui.state import S
 
 
+def _alert(show, kind: str, head, lines: list[str], tail: str = "") -> dict:
+    """One warning: its kind (st.error / st.warning), a heading made from how many lines are still
+    showing, one line per thing to look at (each can be dismissed), and a closing note."""
+    return {"show": show, "kind": kind, "head": head, "lines": list(lines), "tail": tail}
+
+
+def _plain(text: str) -> str:
+    return text.replace("**", "")
+
+
+def _dismissed_key(coach_view: bool) -> str:
+    """Admins' dismissals are saved with these dates; a coach's last only for their visit."""
+    return "dismissed_mine" if coach_view else "dismissed"
+
+
+def warnings_box(alerts: list[dict], coach_view: bool = False):
+    """Every warning in one box. Each line can be dismissed (or a whole warning at once); dismissed
+    lines move to a list at the bottom where they can be brought back. A line that changes (a
+    different date, team or reason) is new, so it shows again."""
+    key = _dismissed_key(coach_view)
+    gone = set(st.session_state.get(key) or [])
+
+    def tag(a, line):
+        return f"{a['kind']}|{line}"
+
+    live = []
+    for a in alerts:
+        left = [ln for ln in a["lines"] if tag(a, ln) not in gone]
+        if left:
+            live.append((a, left))
+    hidden = [(a, ln) for a in alerts for ln in a["lines"] if tag(a, ln) in gone]
+
+    def dismiss(tags):
+        st.session_state[key] = sorted(gone | set(tags))
+        st.rerun()
+
+    def restore(tags):
+        st.session_state[key] = sorted(gone - set(tags))
+        st.rerun()
+
+    n_red = sum(a["show"] is st.error for a, _ in live)
+    label = (plural(len(live), "warning") if live else "No warnings") + (f" · {n_red} to fix" if n_red else "") \
+        + (f" · {len(hidden)} dismissed" if hidden else "")
+    with st.expander(label, expanded=bool(live), key="warnings_box", icon="🚩" if n_red else "⚠️"):
+        for i, (a, left) in enumerate(live):
+            a["show"](a["head"](len(left)) + "\n" + "\n".join(f"- {ln}" for ln in left)
+                      + (f"\n\n{a['tail']}" if a["tail"] else ""))
+            with st.popover("Dismiss…", key=f"wd_pop_{a['kind']}_{i}"):
+                pick = st.multiselect("Lines to dismiss", left, format_func=_plain, key=f"wd_pick_{a['kind']}_{i}",
+                                      placeholder="Pick one or more")
+                c1, c2 = st.columns(2)
+                if c1.button("Dismiss selected", disabled=not pick, key=f"wd_some_{a['kind']}_{i}", width="stretch"):
+                    dismiss(tag(a, ln) for ln in pick)
+                if c2.button(f"Dismiss all {len(left)}", key=f"wd_all_{a['kind']}_{i}", width="stretch"):
+                    dismiss(tag(a, ln) for ln in left)
+        if hidden:
+            st.caption(f"**{plural(len(hidden), 'dismissed line')}**"
+                       + ("" if coach_view else " (dismissed for these dates; anyone can bring them back)"))
+            lab = {tag(a, ln): _plain(ln) for a, ln in hidden}
+            back = st.multiselect("Bring back", list(lab), format_func=lab.get, key="wd_back",
+                                  placeholder="Pick lines to show again")
+            c1, c2 = st.columns(2)
+            if c1.button("Bring back selected", disabled=not back, key="wd_back_go", width="stretch"):
+                restore(back)
+            if c2.button("Bring back all", key="wd_back_all", width="stretch"):
+                restore(lab)
+
+
 def render():
     """Title, numbers, flags and warnings; then the section menu. Records the chosen section."""
     ME = S.ME
@@ -85,58 +153,59 @@ def render():
             short = short[short["team"].map(mine)]
         if len(short):
             n_teams, n_missed = short["team"].nunique(), int(short["short"].sum())
-            lines = [f"- **Week of {ws:%b %-d}:** {short_list_text(g)}" for ws, g in short.groupby("week_of")]
-            alerts.append((st.error, f"**{plural(n_teams, 'team')} {'is' if n_teams == 1 else 'are'} short "
-                                     f"{plural(n_missed, 'practice')}:**\n" + "\n".join(lines)
-                           + ("" if COACH_VIEW else "\n\nWhy each one happened is in the **Review** tab, and the full "
-                                                     "week-by-week counts are there too.")))
+            lines = [f"**Week of {ws:%b %-d}:** {short_list_text(g)}" for ws, g in short.groupby("week_of")]
+            alerts.append(_alert(st.error, "short", lambda n: (f"**{plural(n_teams, 'team')} "
+                                 f"{'is' if n_teams == 1 else 'are'} short {plural(n_missed, 'practice')}:**")
+                                 if n == len(lines) else f"**Teams short of practices ({plural(n, 'week')}):**",
+                                 lines, "" if COACH_VIEW else "Why each one happened is in the **Review** tab, and "
+                                                              "the full week-by-week counts are there too."))
         my_broken = [b for b in result.broken if mine(b["team"])]
         if my_broken:
-            lines = [f"- **{b['team']}** · {b['date']:%a %b %-d} {b['slot_label']}: {b['who']}" for b in my_broken]
-            alerts.append((st.warning, f"**{plural(len(my_broken), 'practice')} had to go on a no-date** so the team "
-                                       "still gets 2 practices that week:\n" + "\n".join(lines)))
+            lines = [f"**{b['team']}** · {b['date']:%a %b %-d} {b['slot_label']}: {b['who']}" for b in my_broken]
+            alerts.append(_alert(st.warning, "nodate", lambda n: f"**{plural(n, 'practice')} had to go on a "
+                                 "no-date** so the team still gets 2 practices that week:", lines))
         # Practices placed by hand on or next to the team's own travel tournament (pins skip that rule).
         a_ = result.assignments
         pins = a_[(a_["kind"] == "Practice") & (a_["pinned"] == True)] if "pinned" in a_ else a_.iloc[0:0]  # noqa: E712
-        t_lines = [f"- **{r.name}** · {r.date:%a %b %-d} {r.slot_label}: {why}"
+        t_lines = [f"**{r.name}** · {r.date:%a %b %-d} {r.slot_label}: {why}"
                    for r in pins.itertuples() if mine(r.name) and (why := tournament_note(r.name, r.date))]
         if t_lines:
-            alerts.append((st.warning, f"**{plural(len(t_lines), 'practice')} placed by hand next to or during the "
-                                       "team's tournament** (the scheduler never puts one there; undo it in **Edit "
-                                       "practices** → Manual changes if it's a mistake):\n" + "\n".join(t_lines)))
+            alerts.append(_alert(st.warning, "tourn", lambda n: f"**{plural(n, 'practice')} placed by hand next to "
+                                 "or during the team's tournament** (the scheduler never puts one there; undo it in "
+                                 "**Edit practices** → Manual changes if it's a mistake):", t_lines))
         iss = result.issues if result.issues is not None else pd.DataFrame(columns=["issue"])
         if COACH_VIEW and len(iss):
             iss = iss[iss["team"].map(mine)]
         satsun = iss[iss["issue"].astype(str).str.startswith("Saturday then Sunday")] if len(iss) else iss
         if len(satsun):
-            lines = [f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}" for r in satsun.itertuples()]
-            alerts.append((st.warning, f"**{plural(len(satsun), 'team')} practice{'s' if len(satsun) == 1 else ''} "
-                                       "Saturday then Sunday**, the only way to avoid a missed practice or a head "
-                                       "coach's no-date:\n" + "\n".join(lines)))
+            lines = [f"**{r.team}** · {r.issue.split(': ', 1)[-1]}" for r in satsun.itertuples()]
+            alerts.append(_alert(st.warning, "satsun", lambda n: f"**{plural(n, 'team')} practice"
+                                 f"{'s' if n == 1 else ''} Saturday then Sunday**, the only way to avoid a missed "
+                                 "practice or a head coach's no-date:", lines))
         b2b = iss[iss["issue"].astype(str).str.startswith("Back-to-back days")] if len(iss) else iss
         asked = b2b["detail"].astype(str).str.contains("asked") if len(b2b) else b2b
         if len(b2b) and (~asked).any():
-            lines = [f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}" for r in b2b[~asked].itertuples()]
-            more = f"\n\n({int(asked.sum())} more the team asked for, e.g. Tue/Wed: see Review.)" \
-                if asked.any() else ""
-            alerts.append((st.warning, f"**{plural(int((~asked).sum()), 'time')} a team practices two days in a "
-                                       "row:**\n" + "\n".join(lines) + more))
+            lines = [f"**{r.team}** · {r.issue.split(': ', 1)[-1]}" for r in b2b[~asked].itertuples()]
+            more = f"({int(asked.sum())} more the team asked for, e.g. Tue/Wed: see Review.)" if asked.any() else ""
+            alerts.append(_alert(st.warning, "b2b", lambda n: f"**{plural(n, 'time')} a team practices two days "
+                                 "in a row:**", lines, more))
         pair = iss[iss["issue"].astype(str).str.startswith("Paired:")] if len(iss) else iss
         if len(pair):
             pair = pair.assign(_o=pair["issue"].map(lambda x: x.split(": ", 1)[-1])).sort_values(["week_of", "_o"])
-            lines = [f"- **{r.issue.split(': ', 1)[-1]}** · {r.detail.split(';')[0]}: {r.team}"
+            lines = [f"**{r.issue.split(': ', 1)[-1]}** · {r.detail.split(';')[0]}: {r.team}"
                      for r in pair.itertuples()]
-            alerts.append((st.warning, f"**{plural(len(pair), 'timeslot')} had to pair teams (3 teams on 2 courts)**, "
-                                       "the only way to keep those practices without breaking a no-date:\n"
-                           + "\n".join(lines)))
+            alerts.append(_alert(st.warning, "pair", lambda n: f"**{plural(n, 'timeslot')} had to pair teams (3 "
+                                 "teams on 2 courts)**, the only way to keep those practices without breaking a "
+                                 "no-date:", lines))
         asst = iss[iss["issue"].astype(str).str.startswith("Assistant no-date broken")] if len(iss) else iss
         if len(asst):
-            alerts.append((st.warning, f"**{plural(len(asst), 'practice')} without an assistant who marked a "
-                                       "no-date:**\n" + "\n".join(f"- **{r.team}** · {r.issue.split(': ', 1)[-1]}: "
-                                                                   f"{r.detail}" for r in asst.itertuples())))
+            alerts.append(_alert(st.warning, "asst", lambda n: f"**{plural(n, 'practice')} without an assistant "
+                                 "who marked a no-date:**",
+                                 [f"**{r.team}** · {r.issue.split(': ', 1)[-1]}: {r.detail}"
+                                  for r in asst.itertuples()]))
         if result.warnings and CAN:
-            alerts.append((st.warning, f"**{plural(len(result.warnings), 'note')} about the input:**\n"
-                           + "\n".join(f"- {w}" for w in result.warnings)))
+            alerts.append(_alert(st.warning, "input", lambda n: f"**{plural(n, 'note')} about the input:**",
+                                 list(result.warnings)))
         if m.get("status") == "FEASIBLE" and CAN:
             st.caption(f"The solver hit its {time_limit}-second limit, so this is a good schedule but maybe not "
                        "the best one. Raise the time limit in **Solver settings** for a better one.")
@@ -153,11 +222,7 @@ def render():
     flags_panel(key="flags_top", result=result)
 
     if alerts:
-        n_red = sum(f is st.error for f, _ in alerts)
-        with st.expander(f"{plural(len(alerts), 'warning')}" + (f" · {n_red} to fix" if n_red else ""),
-                         expanded=True, key="warnings_box", icon="🚩" if n_red else "⚠️"):
-            for show, text in alerts:
-                show(text)
+        warnings_box(alerts, COACH_VIEW)
 
     if "flash" in st.session_state:
         st.success(st.session_state.pop("flash"))

@@ -33,6 +33,7 @@ def _load_into_session(rec: dict, key: str | None = None):
         time_limit=int(settings.get("time_limit", 60)), makeup=bool(settings.get("makeup", True)),
         keep_prev=bool(settings.get("keep_prev", True)), published=published_,
         base_version=settings.get("base_version"), pending_prefs=list(settings.get("pending_prefs") or []),
+        dismissed=list(settings.get("dismissed") or []),
         periods=periods_, periods_dirty=set(), periods_deleted=set(),
         _db_stamp=str(rec["updated_at"]),
         last_saved=payload_hash(make_payload(inp_, s_, e_, settings, result_, published_, periods=periods_)),
@@ -58,7 +59,8 @@ def period_entry() -> dict:
             "settings": {"time_limit": st.session_state.time_limit, "makeup": st.session_state.makeup,
                          "keep_prev": st.session_state.get("keep_prev", True),
                          "base_version": st.session_state.get("base_version"),
-                         "pending_prefs": list(st.session_state.get("pending_prefs") or [])},
+                         "pending_prefs": list(st.session_state.get("pending_prefs") or []),
+                 "dismissed": list(st.session_state.get("dismissed") or [])},
             "result": result_to_dict(st.session_state.get("result")),
             "published": list(st.session_state.get("published") or [])}
 
@@ -93,7 +95,8 @@ def switch_period(key: str, new: tuple[date, date] | None = None):
         range_start=s_, range_end=e_,
         time_limit=int(settings.get("time_limit", 60)), makeup=bool(settings.get("makeup", True)),
         keep_prev=bool(settings.get("keep_prev", True)), published=published_,
-        base_version=settings.get("base_version"), pending_prefs=list(settings.get("pending_prefs") or []))
+        base_version=settings.get("base_version"), pending_prefs=list(settings.get("pending_prefs") or []),
+        dismissed=list(settings.get("dismissed") or []))
     for k in ("w_range_start", "w_range_end"):
         st.session_state.pop(k, None)
     st.session_state._active_sig = payload_hash(period_entry())
@@ -229,7 +232,8 @@ def autosave():
     # changed this run, so a refresh or a new visit picks up where you left off.
     _settings = {"time_limit": time_limit, "makeup": makeup, "keep_prev": st.session_state.get("keep_prev", True),
                  "base_version": st.session_state.get("base_version"),
-                 "pending_prefs": list(st.session_state.get("pending_prefs") or [])}
+                 "pending_prefs": list(st.session_state.get("pending_prefs") or []),
+                 "dismissed": list(st.session_state.get("dismissed") or [])}
     # Building the whole payload is the slow part, so only do it when something
     # could have changed: the solved schedule, published versions, settings,
     # dates or any input table.

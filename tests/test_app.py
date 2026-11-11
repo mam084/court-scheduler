@@ -1422,3 +1422,35 @@ def test_move_a_team_in_the_pecking_order(db):
     assert not at.exception, at.exception
     t = at.session_state["inp"].teams
     assert t.set_index("team").loc[young, "peck_move"] == f"above {old}"
+
+
+def test_warnings_can_be_dismissed_and_brought_back(db):
+    """An admin dismisses warning lines (one, or a whole warning); they stay dismissed after a
+    refresh and can be brought back (Nov 2026)."""
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.storage import MAIN_ID, all_periods
+    inp = simulate(4, 2, 2, seed=1, start=date(2026, 11, 1), end=date(2026, 11, 30))
+    r = solve(inp, date(2026, 11, 1), date(2026, 11, 30), time_limit_s=10)
+    r.warnings = ["First made-up note", "Second made-up note"]
+    db.save(MAIN_ID, "November", make_payload(inp, date(2026, 11, 1), date(2026, 11, 30),
+                                              {"time_limit": 10, "makeup": True}, r))
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    assert not at.exception, at.exception
+    pick = next(w for w in at.multiselect if w.key.startswith("wd_pick_input"))
+    pick.set_value(["First made-up note"]).run()
+    next(b for b in at.button if b.key.startswith("wd_some_input")).click().run()
+    assert not at.exception, at.exception
+    assert at.session_state["dismissed"] == ["input|First made-up note"]
+    assert not any("First made-up note" in w.value for w in at.warning)
+    assert any("Second made-up note" in w.value for w in at.warning)
+    # Saved with these dates: still dismissed after a refresh.
+    settings = next(iter(all_periods(db.get(MAIN_ID)["payload"]).values()))["settings"]
+    assert settings.get("dismissed") == ["input|First made-up note"]
+    at2 = AppTest.from_file("../app.py", default_timeout=180)
+    at2.run()
+    assert not any("First made-up note" in w.value for w in at2.warning)
+    at2.button(key="wd_back_all").click().run()
+    assert not at2.exception, at2.exception
+    assert any("First made-up note" in w.value for w in at2.warning)
