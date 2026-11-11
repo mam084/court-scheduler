@@ -2564,3 +2564,28 @@ def test_restore_with_makeup_adds_nothing():
     key = ["name", "date", "slot"]
     got = r.assignments[r.assignments["kind"] == "Practice"]
     assert set(map(tuple, got[key].values)) == set(map(tuple, old[key].values))
+
+
+def test_undoing_an_extra_on_published_dates_moves_nothing_else():
+    """Undo selected on an Extra, once the dates are published: only that practice goes away."""
+    from ui.build import _held
+    inp = simulate(6, 4, 4, 2026, 11, 7)
+    r1 = solve(inp, *NOV, time_limit_s=20)
+    p1 = r1.assignments[r1.assignments["kind"] == "Practice"]
+    team = p1.iloc[0]["name"]
+    mine = set(p1[p1["name"] == team]["date"])
+    day = next(d for d in (date(2026, 11, 2) + timedelta(i) for i in range(20))
+               if d.weekday() < 5 and d not in mine)
+    inp.overrides = pd.DataFrame([{"team": team, "action": "Extra", "date": f"{day:%m/%d/%Y}", "days": "",
+                                   "time": "5:30", "court": "", "note": ""}])
+    r2 = solve(inp, *NOV, time_limit_s=20, previous=p1)
+    before = r2.assignments[r2.assignments["kind"] == "Practice"]
+    assert ((before["name"] == team) & (before["date"] == day)).any()
+    hold = {"detail": {"rows": [{"team": team, "action": "Remove", "date": f"{day:%m/%d/%Y}", "time": "5:30"}]}}
+    inp.overrides = inp.overrides.iloc[0:0]
+    r3 = solve(inp, *NOV, time_limit_s=20, previous=before, restore=_held(r2.assignments, hold))
+    after = r3.assignments[r3.assignments["kind"] == "Practice"]
+    key = ["name", "date", "slot", "court"]
+    b, a = set(map(tuple, before[key].values)), set(map(tuple, after[key].values))
+    assert {x[:3] for x in b - a} == {(team, day, "5:30")}
+    assert a <= b

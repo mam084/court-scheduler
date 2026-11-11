@@ -505,6 +505,18 @@ def render():
                 st.dataframe(view.rename(columns=str.title), hide_index=True, width="stretch")
                 undo = st.multiselect("Undo changes", list(lab), format_func=lambda i: lab[i], key="ed_undo")
                 if st.button("Undo selected", disabled=not undo):
+                    # Like any hand edit on published dates: every other practice stays exactly where
+                    # it is. An undone Add/Extra takes its practice away; an undone Usual frees that team.
+                    held_rows = []
+                    for i in undo:
+                        r_ = inp.overrides.loc[i]
+                        act_ = str(r_.get("action", "")).strip().lower()
+                        if act_ in ("add", "extra"):
+                            held_rows.append({"team": r_["team"], "action": "Remove", "date": r_["date"],
+                                              "time": r_["time"]})
+                        elif act_.startswith("usual"):
+                            held_rows.append({"team": r_["team"], "action": r_["action"]})
+                    st.session_state.holding = {"detail": {"rows": held_rows}}
                     inp.overrides = inp.overrides.drop(index=undo).reset_index(drop=True)
                     st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
                     st.session_state.resolve = True
