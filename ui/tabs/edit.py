@@ -183,9 +183,20 @@ def _add_imported(rows: list[dict], weeks: list, filename: str):
     st.rerun()
 
 
+_CLEAR = "_ed_clear_keys"
+
+
+def _clear_after(keys: list[str]):
+    """Empties these form fields on the next run, once the add / request went through (Nov 2026):
+    otherwise the form still shows the practice just added and says the team already practices then."""
+    st.session_state[_CLEAR] = list(keys)
+
+
 def render():
     """Edit practices section."""
     VIEWER, CAN, inp, result, cleaned = S.VIEWER, S.CAN, S.inp, S.result, S.cleaned
+    for k in st.session_state.pop(_CLEAR, None) or []:
+        st.session_state.pop(k, None)
     span = dates.season()
     if span is None or cleaned is None:
         st.caption("Nothing's scheduled yet.")
@@ -345,6 +356,7 @@ def render():
                 where = "" if xc in ("Any", None) else f", Court {xc}"
                 if st.button("Send request", type="primary", width="stretch", key=f"rq_x_go_{e_team}",
                              disabled=bool(dup) or xc is None):
+                    _clear_after([f"rq_x_d_{e_team}", f"rq_x_t_{e_team}", f"rq_x_c_{e_team}", f"rq_x_why_{e_team}"])
                     submit_request("extra", e_team, f"Extra practice for {e_team} on {ad:%a %b %-d} at {as_}{where}",
                                    {"rows": [{"team": e_team, "action": "Extra", "date": f"{ad:%m/%d/%Y}", "days": "",
                                               "time": as_, "court": "" if xc == "Any" else str(xc),
@@ -417,11 +429,13 @@ def render():
                 extra = how_add.startswith("Extra")
                 if st.button("Add it", type="primary", width="stretch", disabled=bool(dup_a)):
                     ac = _placed(ad, as_, ac, e_team)
+                    _clear_after(["ed_ad", "ed_as", "ed_ac", "ed_add_how"])
                     apply_overrides([{"team": e_team, "action": "Extra" if extra else "Add", "date": f"{ad:%m/%d/%Y}",
                                       "days": "", "time": as_, "court": "" if ac == "Any" else str(ac),
                                       "note": "extra practice" if extra else "added by hand"}],
                                     f"Added {'an extra' if extra else 'a'} practice for {e_team} "
                                     f"on {ad:%a %b %-d} at {as_}.", stage=True)
+                    st.session_state.pop(_CLEAR, None)   # still here: it didn't go through, keep the form
             elif mode == "Makeup practice":
                 st.caption("One or more practices on top of the usual ones for a single week (say, a team "
                            "that was short a practice last time). The scheduler picks when, like any other "

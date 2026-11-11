@@ -356,6 +356,9 @@ def test_add_extra_practice_and_three_a_week(db):
     ov = at.session_state["inp"].overrides
     assert ov.iloc[-1]["action"] == "Extra" and ov.iloc[-1]["team"] == team
     assert at.session_state["result"].assignments["extra"].fillna(False).any()
+    # The form empties once it's added, so it doesn't say the team already practices then (Nov 2026).
+    assert at.date_input(key="ed_ad").value != date(2026, 11, 4)
+    assert not any("already practices then" in e.value for e in at.error)
     at.radio(key="ed_mode").set_value("Practices per week").run()
     at.number_input(key=f"ed_pw_{team}").set_value(3).run()
     next(b for b in at.button if b.label == "Save").click().run()
