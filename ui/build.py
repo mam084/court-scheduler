@@ -85,7 +85,18 @@ def run():
     resolve = st.session_state.pop("resolve", False)
     built = (st.session_state.get("result") is not None
              and st.session_state.get("result_period") == (start, end))
-    if resolve and not built and not S.run_pressed:
+    _ok = built and st.session_state.result.ok
+    if not _ok and S.CAN and any(v.get("practices") for v in published) and not S.run_pressed and not resolve:
+        # Published dates with no working build (a restore or change that couldn't be scheduled
+        # left none): bring back the version they're based on, once per visit.
+        _tried = st.session_state.setdefault("_auto_restored", set())
+        if (start, end) not in _tried:
+            _tried.add((start, end))
+            _ver = (next((v for v in published if v["id"] == st.session_state.get("base_version")), None)
+                    or [v for v in published if v.get("practices")][-1])
+            st.session_state.restore_version = _ver["id"]
+            resolve = True
+    if resolve and not built and not S.run_pressed and st.session_state.get("restore_version") is None:
         resolve = False
         st.session_state.pop("overrides_backup", None)
         st.session_state.pop("holding", None)
@@ -119,7 +130,7 @@ def run():
                     # A coach's request, or a hand edit once these dates are published: every other
                     # practice stays exactly where it is (same time, same court), so nobody's pushed out.
                     restore = _held(st.session_state.result.assignments, holding)
-                _old_result = st.session_state.get("result")
+                _old_result = st.session_state.get("result") if built else None
                 st.session_state.result = solve(inp, start, end, time_limit_s=time_limit, makeup_closures=makeup,
                                                 previous=prev, previous_pattern=prev_pat, restore=restore)
                 if restore_ver is not None and not st.session_state.result.ok:
@@ -128,7 +139,7 @@ def run():
                     st.session_state.result = solve(inp, start, end, time_limit_s=time_limit,
                                                     makeup_closures=makeup, previous=prev,
                                                     previous_pattern=prev_pat)
-                    st.session_state.flash = (f"“{restore_ver['label']}” couldn't come back exactly with the "
+                    st.session_state.flash = (f"“{restore_ver.get('label', 'That version')}” couldn't come back exactly with the "
                                               "current inputs, so the schedule was rebuilt as close to it as "
                                               "possible. See **Publish** for what differs.")
                 if not st.session_state.result.ok and _old_result is not None and _old_result.ok and not S.run_pressed:

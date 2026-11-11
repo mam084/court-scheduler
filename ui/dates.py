@@ -46,10 +46,12 @@ def runs() -> list[tuple[str, date, date]]:
     """Every run of dates that's been scheduled (built), the one being worked on included,
     in date order: (key, start, end)."""
     out = []
-    if _active_built():
+    # Dates with published versions stay on the calendar even when their build is missing (a
+    # restore or change that couldn't be scheduled): the page rebuilds them from their version.
+    if _active_built() or st.session_state.get("published"):
         out.append((active_key(), st.session_state.range_start, st.session_state.range_end))
     for k, ent in st.session_state.get("periods", {}).items():
-        if ent.get("result") and k != active_key():
+        if (ent.get("result") or ent.get("published")) and k != active_key():
             out.append((k, date.fromisoformat(ent["start"]), date.fromisoformat(ent["end"])))
     return sorted(out, key=lambda r: (r[1], r[2]))
 

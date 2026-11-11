@@ -1478,3 +1478,28 @@ def test_requests_are_grouped_by_coach(db, monkeypatch):
     assert heads == ["#### Ann", "#### Bo"]
     order = [b.key for b in at.button if b.key and b.key.startswith("rq_ok_")]
     assert order == [f"rq_ok_{a1}", f"rq_ok_{a2}", f"rq_ok_{b1}"]       # Ann's two together
+
+
+def test_published_dates_with_no_build_come_back(db):
+    """A restore or change that couldn't be scheduled left published dates with no build: they
+    stay on the calendar and the page brings back their published version."""
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Lost build", 6)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Publish").run()
+    next(b for b in at.button if "Publish this schedule" in b.label).click().run()
+    rec = db.get(pid)
+    v1 = rec["payload"]["published"][0]
+    want = {(p["name"], p["date"], p["slot"]) for p in v1["practices"]}
+    payload = dict(rec["payload"], result=None)  # what the failed restore left behind
+    db.save(pid, rec["name"], payload)
+    at2 = AppTest.from_file("../app.py", default_timeout=180)
+    at2.query_params["project"] = pid
+    at2.run()
+    assert not at2.exception, at2.exception
+    r = at2.session_state["result"]
+    assert r is not None and r.ok
+    a = r.assignments[r.assignments["kind"] == "Practice"]
+    assert set(zip(a["name"], a["date"].map(str), a["slot"])) == want
