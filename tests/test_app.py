@@ -326,7 +326,8 @@ def test_book_a_private_and_it_saves(db):
     at.radio(key="nav").set_value("Privates").run()
     coach = at.selectbox(key="pv_coach").options[0]
     at.selectbox(key="pv_coach").set_value(coach).run()
-    at.toggle(key="pv_is_team").set_value(True).run()
+    assert at.radio(key="pv_type").value == "Player"     # a player private is the default
+    at.radio(key="pv_type").set_value("Team").run()
     next(b for b in at.button if b.label == "Book private").click().run()
     assert not at.exception
     pr = at.session_state["inp"].privates

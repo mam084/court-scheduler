@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from scheduler import privates as pv
 from scheduler.coach_load import BAD_SCORE, coach_flags, coach_scores
 from scheduler.config import DAYS, SLOT_KEYS, SLOTS, WEEKDAY_KEYS, WEEKEND_KEYS, court_name, court_short
 from scheduler.data import COLUMNS
@@ -164,7 +165,7 @@ def render():
                     st.markdown(f"**{coach}'s privates** · {plural(len(mine_p), 'session')}")
                     st.dataframe(pd.DataFrame([{"Date": f"{p['date']:%a %b %-d}",
                                                 "Time": f"{p['time']}–{p['end_label']}",
-                                                "Court": court_name(p["court"]), "Type": p["type"], "Team": p["team"],
+                                                "Court": court_name(p["court"]), "Type": pv.TYPE_LABELS[p["type"]], "Team": p["team"],
                                                 "Player": p["player"]} for p in mine_p]),
                                  hide_index=True, width="stretch")
                 st.download_button("Export to personal calendar (.ics)",

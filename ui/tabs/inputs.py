@@ -44,7 +44,7 @@ def render():
         "Calendars": "Google Calendar links (easier: the Publish tab). kind = Team, Club or Program; name = the "
                      "team / club / program; calendar_id = the calendar's ID from its Google Calendar settings.",
         "Privates": "1-hour private lessons (easier: the Privates tab). time = start, like 4:00 PM. court = P "
-                    "(practice court) or 1-7. type = Team or Personal; team = which team, for team privates.",
+                    "(practice court) or 1-7. type = Player (the default), Team or Coach reps; team = which team, for team privates.",
         "Tournaments": "type = Local (hosted here: blocks its courts and coaches until 7 PM; blank courts = all; "
                        "coaches = who's working it) or Travel "
                        "(away: the teams matching club + ages, or the listed teams, can't practice those days "

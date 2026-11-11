@@ -31,7 +31,7 @@ Overrides     team, action, date, days, time, court, note: manual edits the
                 Cancel  same, but no makeup (the week's target drops by 1)
                 Usual   fix the team's usual weekly days + time (+ court)
 Privates      coach, date, time (start; 1-hour sessions), court, type (Team /
-              Personal), team (team privates), player, note
+              Coach reps; blank = a player private), team (team privates), player, note
 Tournaments   name, type (Local / Travel), start_date, end_date, club, ages,
               teams, program, courts, coaches, note
                 Local  = hosted here: blocks its courts (default all) until

@@ -6,8 +6,8 @@ by a practice, program or another private, or a coach who's busy then, is
 flagged so it can be moved.
 
 Privates sheet: coach, date, time (start, e.g. "4:00 PM"), court ("P" =
-practice court, the default), type (Team / Personal), team (team privates),
-player, note.
+practice court, the default), type (Player / Team / Coach reps: a player
+private is the default), team (team privates), player, note.
 """
 
 from __future__ import annotations
@@ -24,7 +24,11 @@ from openpyxl.utils import get_column_letter
 from .config import DAYS, PRACTICE_COURT, PRIVATE_MINUTES, SLOT_TIMES, court_name, court_short
 from .data import blank, parse_courts, to_date
 
-TYPES = ["Team", "Personal"]
+# The three kinds of private (Nov 2026): a player private (the default), a team private, and a
+# coach's personal reps (the coach's own training). "Personal" in older sheets meant a player private.
+PLAYER, TEAM, REPS = "Player", "Team", "Coach reps"
+TYPES = [PLAYER, TEAM, REPS]
+TYPE_LABELS = {PLAYER: "Player private", TEAM: "Team private", REPS: "Coach's personal reps"}
 
 
 def parse_start(value) -> int:
@@ -53,8 +57,15 @@ def clock(minutes: int) -> str:
 
 
 def private_type(value) -> str:
-    """'Team' or 'Personal' from a cell (anything starting with 't' is a team private)."""
-    return "Team" if str(value or "").strip().lower().startswith("t") else "Personal"
+    """'Player', 'Team' or 'Coach reps' from a cell: anything starting with 't' is a team private,
+    anything mentioning reps (or starting with 'coach') is a coach's personal reps, and everything
+    else (blank, 'Player', the old 'Personal') is a player private."""
+    t = str(value or "").strip().lower()
+    if t.startswith("t"):
+        return TEAM
+    if "rep" in t or t.startswith("coach"):
+        return REPS
+    return PLAYER
 
 
 def rows(df: pd.DataFrame | None, year: int) -> tuple[list[dict], list[str]]:
@@ -79,7 +90,10 @@ def rows(df: pd.DataFrame | None, year: int) -> tuple[list[dict], list[str]]:
             continue
         team = "" if blank(r.get("team")) else str(r["team"]).strip()
         player = "" if blank(r.get("player")) else str(r["player"]).strip()
-        what = (f"Team · {team}" if kind == "Team" else "Personal") + (f" · {player}" if player else "")
+        if kind != TEAM:
+            team = ""
+        what = (f"Team · {team}" if kind == TEAM else "Coach's reps" if kind == REPS else "Player") \
+            + (f" · {player}" if player and kind != REPS else "")
         out.append({
             "row": i, "coach": str(r["coach"]).strip(), "date": d, "day": DAYS[d.weekday()],
             "start": start, "end": start + PRIVATE_MINUTES, "time": clock(start),
@@ -159,16 +173,16 @@ def to_excel(privs: list[dict], coaches: list[str], problems: dict[int, list[str
     summary = wb.active
     summary.title = "Coaches"
     every = sorted(set(coaches) | {p["coach"] for p in privs}, key=str.lower)
-    summary.append(["Coach", "Team privates", "Personal privates", "Total", "Hours"])
+    summary.append(["Coach", "Player privates", "Team privates", "Coach's reps", "Total", "Hours"])
     for c in every:
         mine = [p for p in privs if p["coach"] == c]
-        n_team = sum(p["type"] == "Team" for p in mine)
-        summary.append([c, n_team, len(mine) - n_team, len(mine), len(mine) * PRIVATE_MINUTES / 60])
-    summary.append(["Total", sum(p["type"] == "Team" for p in privs), sum(p["type"] != "Team" for p in privs),
-                    len(privs), len(privs) * PRIVATE_MINUTES / 60])
+        summary.append([c, *(sum(p["type"] == k for p in mine) for k in TYPES), len(mine),
+                        len(mine) * PRIVATE_MINUTES / 60])
+    summary.append(["Total", *(sum(p["type"] == k for p in privs) for k in TYPES), len(privs),
+                    len(privs) * PRIVATE_MINUTES / 60])
     for cell in summary[summary.max_row]:
         cell.font = Font(bold=True)
-    _style(summary, [24, 14, 17, 9, 9])
+    _style(summary, [24, 15, 14, 14, 9, 9])
 
     cols = ["Coach", "Date", "Day", "Start", "End", "Court", "Type", "Team", "Player", "Note", "Conflict"]
     allsh = wb.create_sheet("All privates")
@@ -178,7 +192,7 @@ def to_excel(privs: list[dict], coaches: list[str], problems: dict[int, list[str
         if p["type"] == "Team":
             for cell in allsh[allsh.max_row]:
                 cell.fill = _TEAM
-    _style(allsh, [20, 12, 6, 10, 10, 15, 10, 14, 18, 24, 40])
+    _style(allsh, [20, 12, 6, 10, 10, 15, 20, 14, 18, 24, 40])
 
     used = {"Coaches", "All privates"}
     for c in every:
@@ -197,9 +211,8 @@ def to_excel(privs: list[dict], coaches: list[str], problems: dict[int, list[str
                 for cell in sh[sh.max_row]:
                     cell.fill = _TEAM
         sh.append([])
-        sh.append([f"{len(mine)} private{'s' if len(mine) != 1 else ''} · "
-                   f"{sum(p['type'] == 'Team' for p in mine)} team, {sum(p['type'] != 'Team' for p in mine)} personal"])
-        _style(sh, [12, 6, 10, 10, 15, 10, 14, 18, 24, 40])
+        sh.append([f"{len(mine)} private{'s' if len(mine) != 1 else ''} · " + type_counts(mine)])
+        _style(sh, [12, 6, 10, 10, 15, 20, 14, 18, 24, 40])
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -207,7 +220,14 @@ def to_excel(privs: list[dict], coaches: list[str], problems: dict[int, list[str
 
 def _line(p: dict, problems: dict) -> list:
     return [p["coach"], p["date"].strftime("%m/%d/%Y"), p["day"], p["time"], p["end_label"], court_name(p["court"]),
-            p["type"], p["team"], p["player"], p["note"], "; ".join(problems.get(p["row"], []))]
+            TYPE_LABELS[p["type"]], p["team"], p["player"], p["note"], "; ".join(problems.get(p["row"], []))]
+
+
+def type_counts(privs: list[dict]) -> str:
+    """'3 player, 1 team, 2 coach's reps' (only the kinds there are, or 'none')."""
+    names = {PLAYER: "player", TEAM: "team", REPS: "coach's reps"}
+    parts = [f"{n} {names[k]}" for k in TYPES if (n := sum(p["type"] == k for p in privs))]
+    return ", ".join(parts) or "none"
 
 
 def _style(sh, widths):

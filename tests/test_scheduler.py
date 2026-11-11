@@ -2510,3 +2510,19 @@ def test_late_block_on_a_regular_weekday_is_refused():
     inp = _with_overrides(_inp(teams), [{"team": "15-D0", "action": "Add", "date": "11/11/2026", "time": "5PM"}])
     with pytest.raises(ValueError, match="regular weekday"):
         solve(inp, *NOV, time_limit_s=10)
+
+
+def test_three_kinds_of_private():
+    """Player private (the default), team private and coach's personal reps (Nov 2026)."""
+    from scheduler import privates as pv
+    df = pd.DataFrame([{"coach": "Ann", "date": "11/10/2026", "time": "4:00 PM", "type": t, "team": "16-Ann",
+                        "player": "Jo"} for t in ("", "Personal", "Player", "Team", "Coach reps", "reps")])
+    privs, problems = pv.rows(df, 2026)
+    assert not problems
+    assert [p["type"] for p in privs] == ["Player", "Player", "Player", "Team", "Coach reps", "Coach reps"]
+    assert [p["team"] for p in privs] == ["", "", "", "16-Ann", "", ""]   # only team privates keep a team
+    assert pv.type_counts(privs) == "3 player, 1 team, 2 coach's reps"
+    from openpyxl import load_workbook
+    import io
+    wb = load_workbook(io.BytesIO(pv.to_excel(privs, ["Ann"])))
+    assert [c.value for c in wb["Coaches"][2]][:5] == ["Ann", 3, 1, 2, 6]

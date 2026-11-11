@@ -57,9 +57,10 @@ def render():
             a_day = _day.assignments if _day is not None else None
             free = pv.free_courts(p_date, p_start, a_day, privs, ALL_COURTS)
             c1, c2, c3 = st.columns([1, 1, 2])
-            p_team_private = c1.toggle("Team private", key="pv_is_team",
-                                       help="On: a private for one of the club's teams. "
-                                            "Off: a personal (non-team) private.")
+            p_kind = c1.radio("Type", pv.TYPES, format_func=pv.TYPE_LABELS.get, key="pv_type",
+                              help="Player private (the default): one or more players. Team private: for one of "
+                                   "the club's teams. Coach's personal reps: the coach's own training.")
+            p_team_private = p_kind == pv.TEAM
             court_opts = [PRACTICE_COURT] + [c for c in COURTS]
             p_court = c2.selectbox("Court", court_opts, key="pv_court",
                                    format_func=lambda c: court_name(c) + ("" if c in free else " (taken)"))
@@ -69,13 +70,14 @@ def render():
                 p_team = c3.selectbox("Team", my_teams + [t for t in all_teams if t not in my_teams], key="pv_team")
             else:
                 p_team = ""
-                c3.caption("Personal private (not for a team).")
+                c3.caption("The coach's own reps (no players)." if p_kind == pv.REPS
+                           else "A private for one or more players (not a whole team).")
             c1, c2 = st.columns(2)
-            p_player = c1.text_input("Player(s) (optional)", key="pv_player")
+            p_player = "" if p_kind == pv.REPS else c1.text_input("Player(s) (optional)", key="pv_player")
             p_note = c2.text_input("Note (optional)", key="pv_note")
             trial = {"row": -1, "coach": p_coach or "", "date": p_date, "day": DAYS[p_date.weekday()], "start": p_start,
                      "end": p_start + 60, "time": p_time, "end_label": pv.clock(p_start + 60), "court": p_court,
-                     "type": "Team" if p_team_private else "Personal", "team": p_team, "player": p_player,
+                     "type": p_kind, "team": p_team, "player": p_player,
                      "note": p_note, "what": ""}
             clash = pv.conflicts(privs + [trial], a_day, closures).get(-1, []) if p_coach else []
             if clash:
@@ -84,7 +86,7 @@ def render():
                 row = {"coach": p_coach, "date": f"{p_date:%m/%d/%Y}", "time": p_time, "court": court_short(p_court),
                        "type": trial["type"], "team": p_team, "player": p_player.strip(), "note": p_note.strip()}
                 submit_request("private", p_team,
-                               f"{trial['type']} private for {p_coach}: {p_date:%a %b %-d} {p_time}, "
+                               f"{pv.TYPE_LABELS[p_kind]} for {p_coach}: {p_date:%a %b %-d} {p_time}, "
                                f"{court_name(p_court)}"
                                + (f" ({p_team})" if p_team else ""), {"private": row},
                                ("; ".join(clash) + ". " if clash else "") + p_note.strip())
@@ -92,7 +94,7 @@ def render():
                 row = {"coach": p_coach, "date": f"{p_date:%m/%d/%Y}", "time": p_time, "court": court_short(p_court),
                        "type": trial["type"], "team": p_team, "player": p_player.strip(), "note": p_note.strip()}
                 inp.privates = pd.concat([inp.privates, pd.DataFrame([row])], ignore_index=True)
-                st.session_state.flash = (f"Booked a {trial['type'].lower()} private: {p_coach}, {p_date:%a %b %-d} "
+                st.session_state.flash = (f"Booked {pv.TYPE_LABELS[p_kind].lower()}: {p_coach}, {p_date:%a %b %-d} "
                                           f"{p_time}, {court_name(p_court)}"
                                           + (" (flagged: " + "; ".join(clash) + ")" if clash else "") + ".")
                 st.rerun()
@@ -106,7 +108,8 @@ def render():
         flags = pv.conflicts(privs, a_now, closures)
         c1, c2, c3 = st.columns([2, 1, 1])
         who = c1.multiselect("Only show these coaches", sorted({p["coach"] for p in privs}), key="pv_filter")
-        kind = c2.radio("Type", ["All", "Team", "Personal"], horizontal=True, key="pv_kind")
+        kind = c2.selectbox("Type", ["All"] + pv.TYPES, key="pv_kind",
+                            format_func=lambda k: pv.TYPE_LABELS.get(k, k))
         only_flag = c3.toggle("Only conflicts", key="pv_only_flag", disabled=not flags)
         shown = [p for p in privs if (not who or p["coach"] in who) and (kind == "All" or p["type"] == kind)
                  and (not only_flag or p["row"] in flags)]
@@ -115,7 +118,8 @@ def render():
                        "schedule or another private (see the Conflict column).")
         st.dataframe(pd.DataFrame([{
             "Coach": p["coach"], "Date": f"{p['date']:%a %b %-d}", "Time": f"{p['time']}–{p['end_label']}",
-            "Court": court_name(p["court"]), "Type": p["type"], "Team": p["team"], "Player": p["player"],
+            "Court": court_name(p["court"]), "Type": pv.TYPE_LABELS[p["type"]], "Team": p["team"],
+            "Player": p["player"],
             "Note": p["note"], "Conflict": "; ".join(flags.get(p["row"], []))} for p in shown]),
             hide_index=True, width="stretch")
         lab = {p["row"]: f"{p['coach']} · {p['date']:%a %b %-d} {p['time']} · {court_name(p['court'])}" for p in shown}
@@ -125,10 +129,9 @@ def render():
             inp.privates = inp.privates.reset_index(drop=True).drop(index=drop).reset_index(drop=True)
             st.session_state.flash = f"Removed {plural(len(drop), 'private')}."
             st.rerun()
-        n_team = sum(p["type"] == "Team" for p in privs)
-        st.caption(f"{plural(len(privs), 'private')} booked · {n_team} team, {len(privs) - n_team} personal")
+        st.caption(f"{plural(len(privs), 'private')} booked · {pv.type_counts(privs)}")
     st.download_button("Download every coach's privates (Excel)",
                        lambda: pv.to_excel(privs, coach_opts, pv.conflicts(privs, a_now, closures)),
                        f"privates_{start:%Y%m%d}.xlsx",
-                       help="A Coaches sheet with every coach and their team / personal private counts, one list of "
+                       help="A Coaches sheet with every coach and their player / team / coach's reps counts, one list of "
                             "all privates, and a sheet per coach.")
