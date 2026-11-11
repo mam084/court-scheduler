@@ -179,3 +179,30 @@ def test_practices_only_leaves_programs_and_tournaments_alone():
         assert gcal.plan(only, g, S, E, sorted({e.calendar_id for e in only})).delete
     gcal.apply(p, g)
     assert {cid: set(ev) for cid, ev in g.cals.items()} == before
+
+
+def test_boys_practices_go_on_the_seaside_calendar_and_move_off_sdvbc():
+    """Boys teams go on the Seaside club calendar even when their club column says SDVBC (or is
+    blank); a sync after the fix moves events put on SDVBC by mistake over to Seaside (Nov 2026)."""
+    inp, r, data, _ = _club()
+    for t in data.teams:                        # every team typed as SDVBC, like the bug
+        t.club = "SDVBC"
+    pr = r.assignments[r.assignments["kind"] == "Practice"].assign(club="SDVBC")
+    links = {("Club", "SDVBC"): "sdvbc", ("Club", "Seaside"): "seaside"}
+    evs, _ = gcal.desired_events(pr, None, [], data.teams, links, S, E)
+    boys = {t.name for t in data.teams if gcal.team_is_boys(t.club, t.name)}
+    assert boys and len(boys) < len(data.teams)
+    assert {e.calendar_id for e in evs if e.summary.split(" practice")[0] in boys} == {"seaside"}
+    assert {e.calendar_id for e in evs if e.summary.split(" practice")[0] not in boys} == {"sdvbc"}
+    # Events already on SDVBC for boys teams (the old way) come off it on the next sync.
+    g = FakeGoogle()
+    wrong = [gcal.Event("sdvbc", "Club: SDVBC", f"Club: SDVBC|practice|x|{n}", f"{n} practice", "",
+                        evs[0].start, evs[0].end) for n in sorted(boys)[:2]]
+    for e in wrong:
+        g.create("sdvbc", e.body())
+    p = gcal.plan(evs, g, S, E, calendars=["sdvbc", "seaside"])
+    assert {d[1] for d in p.delete} == {e.event_id for e in wrong}
+    assert any(e.calendar_id == "seaside" for e in p.create)
+    # Both club rows are always offered for linking.
+    rows = gcal.link_rows([], [], [], None)
+    assert list(rows["name"][:2]) == ["SDVBC", "Seaside"]

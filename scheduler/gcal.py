@@ -33,7 +33,12 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
-from .config import SLOT_TIMES, SLOTS, court_name, is_boys_club
+from .config import SLOT_TIMES, SLOTS, court_name, is_boys_club, team_is_boys
+
+# The two club calendars (Nov 2026): boys (Seaside) teams go on the Seaside calendar and girls (SDVBC)
+# teams on the SDVBC one, decided by the team's side (its club, or a Black / Green name), not by
+# whatever is typed in its club column.
+GIRLS_CLUB, BOYS_CLUB = "SDVBC", "Seaside"
 
 TZ = "America/Los_Angeles"
 TAG = "court_scheduler"
@@ -93,6 +98,7 @@ def link_rows(teams, clubs, programs, current: pd.DataFrame | None) -> pd.DataFr
     """One row per team, club and program (plus any linked before), with
     the calendar id filled in where it's known."""
     known = links_from(current)
+    clubs = [GIRLS_CLUB, BOYS_CLUB] + [c for c in clubs if _side(c) is None]
     rows = [("Club", c) for c in clubs] + [("Team", t) for t in teams] + [("Program", p) for p in programs]
     rows += [k for k in known if k not in rows]
     return pd.DataFrame([{"kind": k, "name": n, "calendar_id": known.get((k, n), "")} for k, n in rows],
@@ -100,6 +106,28 @@ def link_rows(teams, clubs, programs, current: pd.DataFrame | None) -> pd.DataFr
 
 
 # ------------------------------------------------------- what to send --
+
+def _side(club: str):
+    """True for a boys club name, False for a girls one, None for neither."""
+    low = str(club or "").lower()
+    if is_boys_club(low):
+        return True
+    if "sdvbc" in low or "girl" in low:
+        return False
+    return None
+
+
+def club_calendar(links: dict, boys: bool) -> str:
+    """The linked club calendar for a side: 'Seaside' (or another linked boys club row) for boys,
+    'SDVBC' (or another linked girls club row) for girls; the canonical name if none is linked."""
+    want = BOYS_CLUB if boys else GIRLS_CLUB
+    if ("Club", want) in links:
+        return want
+    for kind, name in links:
+        if kind == "Club" and _side(name) is boys:
+            return name
+    return want
+
 
 def _dt(d: date, hm: tuple[int, int]) -> datetime:
     return datetime(d.year, d.month, d.day, hm[0], hm[1])
@@ -122,6 +150,13 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
     missing: set[str] = set()
     club_of = {t.name: t.club for t in teams}
     programs_side = programs_side or {}
+
+    def club_for(name, club=""):
+        return club_calendar(links, team_is_boys(club or club_of.get(name, ""), name))
+
+    g_id, b_id = links.get(("Club", club_calendar(links, False))), links.get(("Club", club_calendar(links, True)))
+    if g_id and g_id == b_id:
+        missing.add("the SDVBC and Seaside club rows are linked to the same calendar (check Calendar links)")
 
     def put(kind, name, key, summary, desc, s, e, all_day=False):
         cid = links.get((kind, name))
@@ -147,9 +182,8 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
                 desc += f"\nShared court: {paired}"
             key = f"practice|{r.date}|{r.slot}|{r.name}"
             put("Team", r.name, key, f"{r.name} practice · {ct}", desc, _dt(r.date, s0), _dt(r.date, s1))
-            club = getattr(r, "club", "") or club_of.get(r.name, "")
-            if club:
-                put("Club", club, key, f"{r.name} practice · {ct}", desc, _dt(r.date, s0), _dt(r.date, s1))
+            put("Club", club_for(r.name, getattr(r, "club", "") or ""), key, f"{r.name} practice · {ct}", desc,
+                _dt(r.date, s0), _dt(r.date, s1))
 
     # Locals programs: one event per session, listing its courts.
     if local_rows is not None and len(local_rows):
@@ -164,7 +198,6 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
                 f"{SLOTS[slot]} · {ct}" + (f"\nCoaches: {coaches}" if coaches else ""), _dt(d, s0), _dt(d, s1))
 
     # Tournaments: all-day events.
-    clubs = sorted({t.club for t in teams if t.club})
     for tn in tournaments or []:
         if tn.end < start or tn.start > end:
             continue
@@ -175,16 +208,15 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             desc = "Teams: " + ", ".join(tn.teams) + "\nNo practice for these teams on tournament days."
             for team in tn.teams:
                 put("Team", team, key, title, desc, s, e, True)
-            for club in sorted({club_of.get(n, "") for n in tn.teams} - {""}):
+            for club in sorted({club_for(n) for n in tn.teams}):
                 put("Club", club, key, title, desc, s, e, True)
         else:
             title = f"{tn.name} (local tournament, until 7 PM)"
             desc = f"Hosted here until 7 PM on {_courts(tn.courts)}." + (
                 f"\nWorking it: {', '.join(tn.coaches)}" if tn.coaches else "")
             side = programs_side.get(getattr(tn, "program", ""), "")
-            for club in clubs:
-                if not side or (side == "Boys") == is_boys_club(club):
-                    put("Club", club, key, title, desc, s, e, True)
+            for boys in ([side == "Boys"] if side else [False, True]):
+                put("Club", club_calendar(links, boys), key, title, desc, s, e, True)
             if getattr(tn, "program", ""):
                 put("Program", tn.program, key, title, desc, s, e, True)
     return out, sorted(missing)
