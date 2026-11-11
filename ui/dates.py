@@ -117,10 +117,33 @@ def set_day(d: date):
     st.session_state[VIEW_DAY] = d
 
 
+def tidy_overlaps():
+    """Dates scheduled twice: an unpublished run lying inside published dates (e.g. Auto-schedule
+    pressed while the published dates had dropped off the calendar) is taken off, so the published
+    dates and their versions are what's left. Admins only."""
+    from ui.session import switch_period
+    if not S.CAN or st.session_state.get("resolve") or st.session_state.get("rebuild_queue"):
+        return
+    rs = runs()
+    pub = [(k, s_, e_) for k, s_, e_ in rs if is_published(k)]
+    gone = [(k, s_, e_) for k, s_, e_ in rs if not is_published(k)
+            and any(ps <= s_ and e_ <= pe for pk, ps, pe in pub if pk != k)]
+    for k, s_, e_ in gone:
+        if k == active_key():
+            switch_period(next(pk for pk, ps, pe in pub if ps <= s_ and e_ <= pe))
+        st.session_state.periods.pop(k, None)
+        st.session_state.periods_dirty.discard(k)
+        st.session_state.periods_deleted.add(k)
+        st.session_state._force_save = True
+        st.session_state.flash = (f"{range_label(s_, e_)} was scheduled twice, so the unpublished copy was taken "
+                                  "off and the published dates kept.")
+
+
 def follow():
     """Make the run holding the view day the one being worked on. Called each page run, before the
     schedule is built; skipped while a rebuild is on its way (a change being applied to its dates)."""
     from ui.session import switch_period
+    tidy_overlaps()
     d = view_day()
     if st.session_state.get("resolve") or st.session_state.get("rebuild_queue"):
         return
@@ -226,13 +249,18 @@ def window(a: date, b: date, with_preview: bool = True) -> tuple[ScheduleResult 
     (with_preview) the programs on dates not scheduled yet. Returns (result, days not scheduled yet);
     result is None when there's nothing to show."""
     frames, wk, pcs, covered = [], set(), [], set()
-    for s_, e_, asg, wd, pc in _built_parts():
+    # Each day shows one run's bookings even if two runs overlap: published dates first.
+    pub = {(s_, e_) for k, s_, e_ in runs() if is_published(k)}
+    for s_, e_, asg, wd, pc in sorted(_built_parts(), key=lambda p_: (p_[0], p_[1]) not in pub):
         lo, hi = max(a, s_), min(b, e_)
         if lo > hi:
             continue
-        covered.update(_days(lo, hi))
+        mine = {d for d in _days(lo, hi) if d not in covered}
+        if not mine:
+            continue
+        covered.update(mine)
         if len(asg):
-            frames.append(asg[asg["date"].map(lambda d, lo=lo, hi=hi: lo <= d <= hi)])
+            frames.append(asg[asg["date"].isin(mine)])
         wk.update(d for d in wd if lo <= d <= hi)
         if pc is not None and len(pc) and "week_of" in pc.columns:
             pcs.append(pc[pc["week_of"].map(lambda w, lo=lo, hi=hi: week_start(lo) <= w <= hi)])

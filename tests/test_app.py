@@ -1503,3 +1503,34 @@ def test_published_dates_with_no_build_come_back(db):
     assert r is not None and r.ok
     a = r.assignments[r.assignments["kind"] == "Practice"]
     assert set(zip(a["name"], a["date"].map(str), a["slot"])) == want
+
+
+def test_unpublished_copy_inside_published_dates_is_taken_off(db):
+    """Auto-schedule pressed while published dates had dropped off the calendar left a second,
+    unpublished run inside them: everything showed twice. The copy is taken off; the published
+    dates and their versions stay, and nothing shows twice."""
+    from datetime import date as _d
+
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.storage import period_key
+    pid = _save(db, "Twice", 6)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Publish").run()
+    next(b for b in at.button if "Publish this schedule" in b.label).click().run()
+    rec = db.get(pid)
+    payload = dict(rec["payload"])
+    inner = {"start": "2026-11-01", "end": "2026-11-14", "settings": {}, "result": payload["result"], "published": []}
+    payload["periods"] = dict(payload.get("periods") or {}, **{period_key(_d(2026, 11, 1), _d(2026, 11, 14)): inner})
+    db.save(pid, rec["name"], payload)
+    at2 = AppTest.from_file("../app.py", default_timeout=180)
+    at2.query_params["project"] = pid
+    at2.run()
+    assert not at2.exception, at2.exception
+    assert at2.session_state["range_start"] == _d(2026, 11, 1) and at2.session_state["range_end"] == _d(2026, 11, 30)
+    assert at2.session_state["published"]
+    stored = db.get(pid)["payload"]
+    assert period_key(_d(2026, 11, 1), _d(2026, 11, 14)) not in (stored.get("periods") or {})
+    assert stored["published"]
