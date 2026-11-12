@@ -383,7 +383,7 @@ def _calendars():
         evs, missing = gcal.desired_events(pr_, loc_, cleaned.tournaments if extras else [], cleaned.teams, links,
                                            start, end,
                                            test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
-                                           side_)
+                                           side_, {lp.name: lp.full_name for lp in cleaned.locals if lp.full_name})
         if missing and not only_:
             st.caption(f"No calendar linked (skipped): {', '.join(missing[:12])}"
                        + (f" and {len(missing) - 12} more" if len(missing) > 12 else ""))
@@ -425,6 +425,85 @@ def _calendars():
                         st.rerun()
             elif not plan_.errors:
                 st.success("Google Calendar already matches this version.")
+    _program_runs(client)
+
+
+def _program_runs(client):
+    """Programs over their whole run (Nov 2026): a spring league from late December to March goes on its
+    calendar in one go, without scheduling those months. Only the picked programs' own calendars are
+    read or changed, from the program's first day to its last; team and club calendars aren't touched."""
+    inp, cleaned, store, VIEWER = S.inp, S.cleaned, S.store, S.VIEWER
+    links = gcal.links_from(inp.calendars)
+    full = {lp.name: lp.full_name for lp in cleaned.locals if lp.full_name}
+    progs = sorted({lp.name for lp in cleaned.locals if ("Program", lp.name) in links})
+    st.markdown("**Programs over their whole run**")
+    st.caption("Sends a program's sessions from its start date to its end date (from **Programs**), even past "
+               "the dates you've scheduled: a spring league from December to March goes on in one go. Only the "
+               "program's own calendar is changed. Cancelled sessions, closures and the big holidays are left "
+               "off. Titles use the program's full name.")
+    if not progs:
+        st.caption("Link a program's calendar under **Calendar links** first.")
+        return
+    pick = st.multiselect("Programs", progs, key="cal_prog_pick", placeholder="Pick one or more programs",
+                          format_func=lambda n: f"{n} ({full[n]})" if n in full else n)
+    test_mode = st.toggle("Test mode", value=True, key="cal_prog_test",
+                          help="Send everything to one test calendar instead. Nothing real is touched.")
+    test_cal = st.text_input("Test calendar ID", key="cal_prog_test_id",
+                             placeholder="ID of a throwaway calendar shared with the app") if test_mode else ""
+    span = gcal.program_span(cleaned.locals, set(pick)) if pick else None
+    if pick and span is None:
+        st.warning("Those programs don't have start and end dates yet.")
+    if not pick or span is None:
+        return
+    p0, p1 = span
+    no_full = [n for n in pick if n not in full]
+    if no_full:
+        st.caption(f"No full name yet (its shorthand is used): {', '.join(no_full)}.")
+    plinks = {k: v for k, v in links.items() if k == ("Program", k[1]) and k[1] in pick}
+    rows = gcal.program_sessions(cleaned.locals, cleaned.closures, p0, p1, set(pick))
+    tourns = [tn for tn in cleaned.tournaments if getattr(tn, "program", "") in pick]
+    evs, _ = gcal.desired_events(None, rows, tourns, cleaned.teams, plinks, p0, p1,
+                                 test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
+                                 {}, full)
+    evs = [e for e in evs if e.target.startswith("Program:")]
+    cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else set(plinks.values()))
+    ready = client is not None and (not test_mode or bool(test_cal.strip())) and bool(evs)
+    sig_ = ("progs", tuple(pick), test_mode, test_cal.strip(), p0, p1, len(evs))
+    if st.button(f"Preview {p0:%b %-d, %Y} – {p1:%b %-d, %Y} ({plural(len(evs), 'event')})", disabled=not ready,
+                 key="cal_prog_preview"):
+        with st.spinner("Reading the calendars…"):
+            st.session_state.cal_prog_plan = (sig_, gcal.plan(evs, client, p0, p1, cals))
+    held = st.session_state.get("cal_prog_plan")
+    if not (held and held[0] == sig_):
+        return
+    plan_ = held[1]
+    for err in plan_.errors:
+        st.error(err)
+    c = st.columns(4)
+    c[0].metric("Add", len(plan_.create))
+    c[1].metric("Update", len(plan_.update))
+    c[2].metric("Remove", len(plan_.delete))
+    c[3].metric("Already right", plan_.unchanged)
+    if not plan_.n_changes:
+        if not plan_.errors:
+            st.success("Those program calendars already match.")
+        return
+    st.dataframe(plan_.table().rename(columns=str.title), hide_index=True, width="stretch",
+                 height=min(400, 38 + 35 * plan_.n_changes))
+    where = "the test calendar" if test_mode else plural(len(cals), "program calendar")
+    if st.button(f"Sync {plural(plan_.n_changes, 'change')} to {where}", type="primary", key="cal_prog_go"):
+        bar = st.progress(0.0)
+        n, errs = gcal.apply(plan_, client, progress=bar.progress)
+        store.log(VIEWER.log_name, "Google Calendar",
+                  f"{'test mode, ' if test_mode else ''}programs {', '.join(pick)} ({p0:%b %-d}–{p1:%b %-d}): "
+                  f"{len(plan_.create)} added, {len(plan_.update)} updated, {len(plan_.delete)} removed"
+                  + (f", {len(errs)} failed" if errs else ""), st.session_state.project_id)
+        st.session_state.pop("cal_prog_plan", None)
+        if errs:
+            st.error(f"{plural(len(errs), 'change')} failed:\n" + "\n".join(f"- {e}" for e in errs[:10]))
+        st.session_state.flash = f"Synced {plural(n, 'change')} to {where}."
+        if not errs:
+            st.rerun()
 
 
 def render():

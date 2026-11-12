@@ -59,6 +59,8 @@ def program_defaults(row: dict | None) -> dict:
     on = str(row.get("on_site", "")).strip().lower()
     return {
         "name": str(row.get("program", "")), "side": side,
+        "full_name": "" if str(row.get("full_name", "")).strip().lower() in ("", "nan", "none")
+        else str(row.get("full_name", "")).strip(),
         "on_site": on in ("", "yes", "y", "true", "1", "nan", "none"),
         "holidays": str(row.get("holidays", "")).strip().lower() in ("yes", "y", "true", "1"),
         "days": [d for d in parse_days(row.get("days")) if d in DAYS],
@@ -133,9 +135,14 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
     known_coaches = cleaned.coaches if cleaned else []
     with st.form(key, clear_on_submit=key == "add_program"):
         c1, c2 = st.columns([2, 1])
-        name = c1.text_input("Program name", value=dv["name"], placeholder="e.g. G 14 League or JumpStart")
+        name = c1.text_input("Program name", value=dv["name"], placeholder="e.g. G 14 League or JumpStart",
+                             help="The shorthand on the printed court sheets and the app's calendars.")
         side = c2.radio("Side", SIDES, index=SIDES.index(dv["side"]), horizontal=True,
                         help="Girls programs show in blue, boys in green.")
+        full_name = st.text_input("Full name (Google Calendar)", value=dv.get("full_name", ""),
+                                  placeholder="e.g. Girls 14U Spring League",
+                                  help="What families see on the program's Google Calendar. Blank: the program "
+                                       "name above.")
         on_site = True  # every program on the calendar uses our courts
         c1, c2, c3 = st.columns([2, 1, 1])
         days = c1.multiselect("Days", DAYS, default=dv["days"], placeholder="e.g. Tue, Thu")
@@ -181,7 +188,7 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         for i, lab in enumerate(submit_labels):
             if cols[i].form_submit_button(lab, type="primary" if i == 0 else "secondary", width="stretch"):
                 clicked = lab
-    return clicked, dict(name=name, side=side, on_site=on_site, holidays=holidays, days=days, p_start=p_start,
+    return clicked, dict(name=name, full_name=full_name, side=side, on_site=on_site, holidays=holidays, days=days, p_start=p_start,
                          p_end=p_end, times=times, courts=courts, coaches_sel=coaches_sel, coaches_new=coaches_new,
                          tourns=tourns)
 
@@ -201,6 +208,7 @@ def program_row(v: dict) -> tuple[list[str], dict]:
         problems.append("The end date is before the start date.")
     row = {
         "program": v["name"].strip(), "side": "" if v["side"] == "Other" else v["side"],
+        "full_name": v.get("full_name", "").strip(),
         "days": ", ".join(d for d in DAYS if d in v["days"]),
         "time": ", ".join(sorted(v["times"], key=SLOT_KEYS.index)),
         "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(v["courts"])) or "TBD",
@@ -397,7 +405,7 @@ def render():
                        "courts every week; pick one under **Edit a program** to set them.")
         # Show the side the colors actually use (guessed from the name when blank).
         view["side"] = [program_side(s, n) or "Other" for s, n in zip(view["side"], view["program"])]
-        st.dataframe(view.rename(columns={"program": "Program", "side": "Side", "days": "Days", "time": "Time",
+        st.dataframe(view.rename(columns={"program": "Program", "full_name": "Full name", "side": "Side", "days": "Days", "time": "Time",
                                           "courts": "Courts", "coaches": "Coaches",
                                           "dates": "Dates", "skip": "Cancelled"}),
                      hide_index=True, width="stretch")

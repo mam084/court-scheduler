@@ -133,8 +133,41 @@ def _dt(d: date, hm: tuple[int, int]) -> datetime:
     return datetime(d.year, d.month, d.day, hm[0], hm[1])
 
 
+def cap(text: str) -> str:
+    """Every word starts with a capital, the rest left as typed ('14 black' -> '14 Black', 'court TBA'
+    -> 'Court TBA', 'SDVBC' stays): event titles on the Google Calendars (Nov 2026)."""
+    return " ".join(w[:1].upper() + w[1:] for w in str(text).split(" "))
+
+
+def program_sessions(locals_: list, closures, start: date, end: date, names=None) -> pd.DataFrame:
+    """Every session of the given programs (all of them if names is None) from start to end, one row
+    per court, like the schedule's Local rows: for sending a program over its whole run, not just
+    the dates being scheduled (Nov 2026). Closed days and skipped sessions (cancelled ones, the big
+    holidays unless it runs on them) are left out. A program with no courts yet gets one row with
+    no court ('Courts TBA')."""
+    rows = []
+    d = start
+    while d <= end:
+        if d not in (closures or {}):
+            for lp in locals_:
+                if (names is None or lp.name in names) and lp.on_site and lp.runs_on(d):
+                    for c in (lp.courts or [None]):
+                        rows.append({"date": d, "slot": lp.slot, "name": lp.name, "court": c,
+                                     "coach": "; ".join(lp.coaches)})
+        d += timedelta(days=1)
+    return pd.DataFrame(rows, columns=["date", "slot", "name", "court", "coach"])
+
+
+def program_span(locals_: list, names) -> tuple[date, date] | None:
+    """First and last day the given programs run (None if none of them has dates)."""
+    days = [x for lp in locals_ if lp.name in names for a, b in lp.ranges for x in (a, b)]
+    return (min(days), max(days)) if days else None
+
+
 def _courts(courts) -> str:
     nums = sorted({int(c) for c in courts if pd.notna(c)})
+    if not nums:
+        return "Courts TBA"
     if len(nums) == 1:
         return court_name(nums[0])
     from .views import courts_label
@@ -143,7 +176,8 @@ def _courts(courts) -> str:
 
 def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournaments: list, teams: list,
                    links: dict, start: date, end: date, test_calendar: str = "", location: str = "",
-                   programs_side: dict | None = None) -> tuple[list[Event], list[str]]:
+                   programs_side: dict | None = None, full_names: dict | None = None
+                   ) -> tuple[list[Event], list[str]]:
     """Every event the schedule should put on the linked calendars, and a
     note for each team / club / program that has events but no calendar."""
     out: list[Event] = []
@@ -158,7 +192,10 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
     if g_id and g_id == b_id:
         missing.add("the SDVBC and Seaside club rows are linked to the same calendar (check Calendar links)")
 
+    full_names = full_names or {}
+
     def put(kind, name, key, summary, desc, s, e, all_day=False):
+        summary = cap(summary)
         cid = links.get((kind, name))
         if not cid:
             missing.add(f"{kind}: {name}")
@@ -174,15 +211,15 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             if not (start <= r.date <= end) or r.slot not in SLOT_TIMES:
                 continue
             (s0, s1) = SLOT_TIMES[r.slot]
-            ct = court_name(int(r.court)) if pd.notna(r.court) else "court TBA"
+            ct = court_name(int(r.court)) if pd.notna(r.court) else "Court TBA"
             coaches = ", ".join(c.strip() for c in str(getattr(r, "coach", "") or "").split(";") if c.strip())
             desc = f"{SLOTS[r.slot]} · {ct}" + (f"\nCoaches: {coaches}" if coaches else "")
             paired = getattr(r, "paired", "")
             if isinstance(paired, str) and paired:
                 desc += f"\nShared court: {paired}"
             key = f"practice|{r.date}|{r.slot}|{r.name}"
-            put("Team", r.name, key, f"{r.name} practice · {ct}", desc, _dt(r.date, s0), _dt(r.date, s1))
-            put("Club", club_for(r.name, getattr(r, "club", "") or ""), key, f"{r.name} practice · {ct}", desc,
+            put("Team", r.name, key, f"{r.name} · {ct}", desc, _dt(r.date, s0), _dt(r.date, s1))
+            put("Club", club_for(r.name, getattr(r, "club", "") or ""), key, f"{r.name} · {ct}", desc,
                 _dt(r.date, s0), _dt(r.date, s1))
 
     # Locals programs: one event per session, listing its courts.
@@ -194,7 +231,7 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             (s0, s1) = SLOT_TIMES[slot]
             ct = _courts(g["court"])
             coaches = ", ".join(c.strip() for c in str(g["coach"].iloc[0] or "").split(";") if c.strip())
-            put("Program", name, f"program|{d}|{slot}|{name}", f"{name} · {ct}",
+            put("Program", name, f"program|{d}|{slot}|{name}", f"{full_names.get(name) or name} · {ct}",
                 f"{SLOTS[slot]} · {ct}" + (f"\nCoaches: {coaches}" if coaches else ""), _dt(d, s0), _dt(d, s1))
 
     # Tournaments: all-day events.
@@ -204,14 +241,14 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
         s, e = tn.start, tn.end + timedelta(days=1)   # all-day end is exclusive
         key = f"tournament|{tn.start}|{tn.name}"
         if tn.kind == "travel":
-            title = f"{tn.name} (travel tournament)"
+            title = f"{tn.name} (Travel Tournament)"
             desc = "Teams: " + ", ".join(tn.teams) + "\nNo practice for these teams on tournament days."
             for team in tn.teams:
                 put("Team", team, key, title, desc, s, e, True)
             for club in sorted({club_for(n) for n in tn.teams}):
                 put("Club", club, key, title, desc, s, e, True)
         else:
-            title = f"{tn.name} (local tournament, until 7 PM)"
+            title = f"{tn.name} (Local Tournament, Until 7 PM)"
             desc = f"Hosted here until 7 PM on {_courts(tn.courts)}." + (
                 f"\nWorking it: {', '.join(tn.coaches)}" if tn.coaches else "")
             side = programs_side.get(getattr(tn, "program", ""), "")
