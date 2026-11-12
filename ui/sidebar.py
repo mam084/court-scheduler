@@ -155,7 +155,22 @@ def _auto_schedule() -> bool:
                              "open days. Dates already scheduled inside them are rebuilt, keeping practices "
                              "where they are unless something has to move. Weeks that are all open days "
                              "(school breaks) get no practices; coaches add the ones they want.")
+    if pressed and hit is not None and dates.is_published(hit[0]) and a <= hit[2] and b >= hit[1] \
+            and not st.session_state.get("_replan_ok"):
+        st.session_state._replan_ask = True
+        pressed = False
+    if st.session_state.get("_replan_ask"):
+        st.warning("These dates are published, so they're locked: practices only change by hand. Rebuilding "
+                   "re-plans them and can move practices coaches already have.")
+        if st.button("Re-plan published dates anyway", key="as_replan", width="stretch"):
+            st.session_state._replan_ok = True
+            st.session_state.pop("_replan_ask", None)
+            pressed = True
+        elif st.button("Cancel", key="as_replan_no", width="stretch"):
+            st.session_state.pop("_replan_ask", None)
+            st.rerun()
     if pressed:
+        st.session_state.pop("_replan_ok", None)
         problem = schedule_dates(a, b)
         if problem:
             st.error(problem)

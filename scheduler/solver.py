@@ -119,6 +119,7 @@ def solve(
     previous: pd.DataFrame | None = None,
     previous_pattern: pd.DataFrame | None = None,
     restore: pd.DataFrame | None = None,
+    locked_free: set | None = None,
 ) -> ScheduleResult:
     """previous: an earlier schedule's assignments (e.g. the published one).
     Practices stay where they were unless something needs them to move.
@@ -349,7 +350,7 @@ def solve(
         raise ValueError("These manual changes can't all happen:\n- " + "\n- ".join(problems))
 
     restored, restore_notes = _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on,
-                                            coach_tourn, rules_for, away, extras)
+                                            coach_tourn, rules_for, away, extras, strict=locked_free is not None)
 
     # ---------------------------------------------- decision variables --
     # Teams whose 1st-choice wishlist asks for 3:45: no 3:45 cost for them.
@@ -390,6 +391,8 @@ def solve(
                     y[t, d, s] = m.NewBoolVar(f"y_{t}_{d}_{s}")
                     m.Add(y[t, d, s] == 1)
                 else:
+                    if locked_free is not None and team.name not in locked_free:
+                        continue  # published dates are locked: only the teams a hand change touched get new spots
                     if off_day or not team.allowed(s) or not courts_on(d, s) or week_start(d) in break_weeks \
                             or week_start(d) in hand_weeks or s in day_extra.get(d, ()):
                         continue
@@ -1349,8 +1352,10 @@ def solve(
 
 
 def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, courts_on, coach_busy, rules_for, away,
-                  extras=None):
+                  extras=None, strict=False):
     """Adds a published version's practices to `pinned` (in place).
+    strict (published dates locked): a practice is never dropped just because the team has more
+    practices that week than usual; only when it truly can't happen (closed, no court, coach elsewhere).
 
     Hand-placed practices win. A practice that can't happen now is dropped
     with a note; one that can but breaks a rule (a no-date, the team's age
@@ -1409,8 +1414,8 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
             drop(name, d, s, "that time isn't open")
         elif (t, d, s) in team_days:
             drop(name, d, s, "the team already has a practice placed by hand then")
-        elif (per_week[t, week_start(d)]
-              >= max(usual(t, d), in_version[name, week_start(d)])):
+        elif not strict and (per_week[t, week_start(d)]
+                             >= max(usual(t, d), in_version[name, week_start(d)])):
             drop(name, d, s, f"the team already has {per_week[t, week_start(d)]} practices placed that week")
         elif count[d, s] >= len(courts_on(d, s)):
             drop(name, d, s, "every court is taken then")

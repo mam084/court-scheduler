@@ -2603,3 +2603,34 @@ def test_program_runs_on_holidays_only_when_ticked():
         days = {d for lp in lps for d in (date(2026, 12, 28) + timedelta(i) for i in range(4)) if lp.runs_on(d)}
         assert date(2026, 12, 30) in days
         assert (date(2026, 12, 31) in days) == ticked
+
+
+def test_locked_published_dates_never_move():
+    """Published dates are locked: a rebuild for any reason (here a coach's new no-date and a
+    team's practice removed by hand) leaves every other practice exactly where it was, and no
+    untouched team gets a new practice."""
+    from ui.build import _held, _touched
+    inp = simulate(6, 4, 4, 2026, 11, 7)
+    r1 = solve(inp, *NOV, time_limit_s=20)
+    p1 = r1.assignments[r1.assignments["kind"] == "Practice"]
+    key = ["name", "date", "slot", "court"]
+    before = set(map(tuple, p1[key].values))
+    # A head coach marks a published practice's day unavailable: it stays (locked).
+    first = p1.iloc[0]
+    inp.availability = pd.concat([inp.availability, pd.DataFrame([{
+        "who": first["name"], "type": "no", "days": "", "dates": f"{first['date']:%m/%d/%Y}", "times": "",
+        "note": ""}])], ignore_index=True)
+    r2 = solve(inp, *NOV, time_limit_s=20, previous=p1, restore=_held(r1.assignments, {}), locked_free=set())
+    assert r2.ok
+    after = set(map(tuple, r2.assignments[r2.assignments["kind"] == "Practice"][key].values))
+    assert after == before
+    # A team's practice removed by hand (no makeup): only that one goes; nobody else moves or gains.
+    gone = p1.iloc[3]
+    hold = {"detail": {"rows": [{"team": gone["name"], "action": "Cancel", "date": f"{gone['date']:%m/%d/%Y}",
+                                 "time": gone["slot"]}]}}
+    inp.overrides = pd.DataFrame([dict(hold["detail"]["rows"][0], days="", court="", note="")])
+    r3 = solve(inp, *NOV, time_limit_s=20, previous=p1, restore=_held(r2.assignments, hold),
+               locked_free=_touched(hold))
+    after3 = set(map(tuple, r3.assignments[r3.assignments["kind"] == "Practice"][key].values))
+    assert before - after3 == {tuple(gone[key])}
+    assert after3 <= before

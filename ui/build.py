@@ -41,6 +41,11 @@ def _held(assignments: pd.DataFrame, req: dict) -> pd.DataFrame:
     return p[keep]
 
 
+def _touched(req: dict | None) -> set:
+    """Teams a hand change touches (they alone may get a new practice on locked, published dates)."""
+    return {str(r["team"]) for r in ((req or {}).get("detail") or {}).get("rows") or [] if r.get("team")}
+
+
 def run():
     """Load these dates' inputs and settings, run the solver if Auto-schedule (or a change) asked
     for it, and record the result."""
@@ -125,14 +130,23 @@ def run():
                     elif seed is not None:  # new dates: start from what was there (and the usual week before)
                         prev, prev_pat = seed
                 holding = st.session_state.get("holding")
-                if (restore is None and holding is not None and built
-                        and (st.session_state.get("approving") is not None or published)):
-                    # A coach's request, or a hand edit once these dates are published: every other
-                    # practice stays exactly where it is (same time, same court), so nobody's pushed out.
+                locked_free = None
+                _was_ok = built and st.session_state.result.ok
+                if restore is None and _was_ok and published and not S.run_pressed:
+                    # Published dates are locked (Nov 12, 2026): whatever triggered this rebuild (a hand
+                    # edit, a request, a program or preference change), every practice stays exactly where
+                    # it is. Only what a hand change itself touches moves, and only its teams can get a new
+                    # practice. Re-planning them takes pressing Rebuild these dates.
+                    restore = _held(st.session_state.result.assignments, holding or {})
+                    locked_free = _touched(holding)
+                elif (restore is None and holding is not None and built
+                        and st.session_state.get("approving") is not None):
+                    # A coach's request on unpublished dates: every other practice stays where it is.
                     restore = _held(st.session_state.result.assignments, holding)
                 _old_result = st.session_state.get("result") if built else None
                 st.session_state.result = solve(inp, start, end, time_limit_s=time_limit, makeup_closures=makeup,
-                                                previous=prev, previous_pattern=prev_pat, restore=restore)
+                                                previous=prev, previous_pattern=prev_pat, restore=restore,
+                                                locked_free=locked_free)
                 if restore_ver is not None and not st.session_state.result.ok:
                     # The version can't come back exactly with today's inputs. Rather than leave no
                     # schedule at all, rebuild as close to it as possible.

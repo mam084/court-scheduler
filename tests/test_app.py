@@ -116,8 +116,9 @@ def test_every_section_renders_and_publish_flow(db):
     assert not at.exception
     assert at.session_state["nav"] == "Publish"
     assert len(db.get(pid)["payload"]["published"]) == 1
-    # Rebuild: keeps the published schedule, nothing changed.
+    # Rebuild: published dates are locked, so it asks first; then keeps the published schedule.
     at.sidebar.button(key="as_go").click().run()
+    at.sidebar.button(key="as_replan").click().run()
     assert not at.exception
     assert at.session_state["result"].metrics["moved_from_previous"] == 0
     assert any("No changes" in s.value for s in at.success)
@@ -1534,3 +1535,24 @@ def test_unpublished_copy_inside_published_dates_is_taken_off(db):
     stored = db.get(pid)["payload"]
     assert period_key(_d(2026, 11, 1), _d(2026, 11, 14)) not in (stored.get("periods") or {})
     assert stored["published"]
+
+
+def test_rebuilding_published_dates_asks_first(db):
+    """Published dates are locked: Rebuild these dates asks before re-planning them."""
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Locked", 6)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Publish").run()
+    next(b for b in at.button if "Publish this schedule" in b.label).click().run()
+    a = at.session_state["result"].assignments
+    before = set(map(tuple, a[a["kind"] == "Practice"][["name", "date", "slot", "court"]].values))
+    at.button(key="as_go").click().run()
+    assert not at.exception, at.exception
+    assert any("locked" in w.value for w in at.warning)
+    a2 = at.session_state["result"].assignments
+    assert set(map(tuple, a2[a2["kind"] == "Practice"][["name", "date", "slot", "court"]].values)) == before
+    at.button(key="as_replan").click().run()
+    assert not at.exception, at.exception
+    assert not any("locked" in w.value for w in at.warning)
