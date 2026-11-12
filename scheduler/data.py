@@ -87,7 +87,7 @@ COLUMNS = {
     "Availability": ["who", "type", "days", "dates", "times", "note"],
     "Wishlist": ["team", "choice", "days", "times", "note"],
     "Locals": ["program", "side", "days", "time", "courts", "coaches", "on_site", "dates", "skip", "holidays",
-               "full_name"],
+               "short"],
     "Coaches": ["coach", "email", "phone", "note"],
     "Overrides": ["team", "action", "date", "days", "time", "court", "note"],
     "Weekends": ["date", "open", "courts", "group", "required", "note"],
@@ -878,7 +878,7 @@ class LocalProgram:
     side: str = ""  # "Girls", "Boys" or ""
     skip: set = field(default_factory=set)  # single dates it doesn't run (cancelled sessions)
     on_holidays: bool = False  # runs on the big holidays too (programs normally don't)
-    full_name: str = ""  # its full name for Google Calendar; `name` is the shorthand the printouts use
+    short: str = ""  # shorthand for the printed sheets (Nov 2026); `name` (its full name) is used everywhere else
 
     def runs_on(self, d: date) -> bool:
         if DAYS[d.weekday()] != self.day or d in self.skip:
@@ -1286,7 +1286,7 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                     locals_.append(LocalProgram(name, day, slot, courts, staff, on_site, ranges,
                                                 program_side(r.get("side"), name), skip,
                                                 yes(r.get("holidays")),
-                                                "" if blank(r.get("full_name")) else str(r["full_name"]).strip()))
+                                                "" if blank(r.get("short")) else str(r["short"]).strip()))
             if on_site and not courts:
                 warnings.append(f"Locals '{name}': courts not set yet, so it isn't blocking any courts "
                                 f"(its coaches are still blocked)")

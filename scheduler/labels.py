@@ -69,16 +69,28 @@ def label_map(teams) -> dict[str, str]:
     return out
 
 
+# Programs' shorthand for the printouts (Nov 2026): {program name: shorthand}. The app fills it in
+# from the Programs list each run; a program without one prints its full name.
+PROGRAM_SHORT: dict[str, str] = {}
+
+
+def set_program_shorts(locals_) -> None:
+    PROGRAM_SHORT.clear()
+    PROGRAM_SHORT.update({lp.name: lp.short for lp in locals_ or [] if getattr(lp, "short", "")})
+
+
 def with_labels(df: pd.DataFrame) -> pd.DataFrame:
-    """A copy of a bookings table with a `label` column: the short label for practices,
-    the name as is for everything else (locals, privates)."""
+    """A copy of a bookings table with a `label` column: the short label for practices, a
+    program's shorthand for its sessions, the name as is for everything else (privates)."""
     if df is None or not len(df) or "name" not in df.columns:
         return df
     df = df.copy()
     is_p = df["kind"] == "Practice" if "kind" in df.columns else pd.Series(True, index=df.index)
     clubs = df["club"] if "club" in df.columns else pd.Series(None, index=df.index)
     lm = label_map(zip(df.loc[is_p, "name"], clubs[is_p]))
-    df["label"] = [lm.get(n, n) if p else n for n, p in zip(df["name"], is_p)]
+    is_l = df["kind"] == "Local" if "kind" in df.columns else pd.Series(False, index=df.index)
+    df["label"] = [lm.get(n, n) if p else PROGRAM_SHORT.get(n, n) if lo else n
+                   for n, p, lo in zip(df["name"], is_p, is_l)]
     return df
 
 

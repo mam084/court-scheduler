@@ -219,21 +219,38 @@ def test_titles_capitalized_without_the_word_practice():
     assert gcal.cap("14 black · court TBA") == "14 Black · Court TBA" and gcal.cap("SDVBC 14-CA") == "SDVBC 14-CA"
 
 
-def test_program_over_its_whole_run_uses_its_full_name():
-    """A spring program from late December to March goes on its calendar in one go, under its full
+def test_program_over_its_whole_run():
+    """A spring program from late December to March goes on its calendar in one go, under its (full)
     name, without the club's big holidays or its cancelled sessions (Nov 2026)."""
     from scheduler.data import LocalProgram
-    lp = LocalProgram("G14 SL", "Tue", "5:30", [1, 2], ["Ann"], True, [(date(2026, 12, 22), date(2027, 3, 9))],
-                      "Girls", {date(2027, 1, 5)}, False, "Girls 14U Spring League")
+    lp = LocalProgram("Girls 14U Spring League", "Tue", "5:30", [1, 2], ["Ann"], True,
+                      [(date(2026, 12, 22), date(2027, 3, 9))], "Girls", {date(2027, 1, 5)}, False, "G14 SL")
     other = LocalProgram("JS", "Tue", "3:30", [3], [], True, [(date(2026, 12, 1), date(2027, 3, 1))])
     rows = gcal.program_sessions([lp, other], {date(2027, 2, 16): "closed"}, date(2026, 12, 22),
-                                 date(2027, 3, 9), {"G14 SL"})
+                                 date(2027, 3, 9), {"Girls 14U Spring League"})
     days = sorted(set(rows["date"]))
     assert days[0] == date(2026, 12, 22) and days[-1] == date(2027, 3, 9)
-    assert date(2027, 1, 5) not in days and date(2027, 2, 16) not in days and set(rows["name"]) == {"G14 SL"}
-    assert gcal.program_span([lp, other], {"G14 SL"}) == (date(2026, 12, 22), date(2027, 3, 9))
-    links = {("Program", "G14 SL"): "g14"}
-    evs, _ = gcal.desired_events(None, rows, [], [], links, date(2026, 12, 22), date(2027, 3, 9),
-                                 full_names={"G14 SL": "Girls 14U Spring League"})
+    assert date(2027, 1, 5) not in days and date(2027, 2, 16) not in days and set(rows["name"]) == {"Girls 14U Spring League"}
+    assert gcal.program_span([lp, other], {"Girls 14U Spring League"}) == (date(2026, 12, 22), date(2027, 3, 9))
+    links = {("Program", "Girls 14U Spring League"): "g14"}
+    evs, _ = gcal.desired_events(None, rows, [], [], links, date(2026, 12, 22), date(2027, 3, 9))
     assert len(evs) == len(days) and all(e.calendar_id == "g14" for e in evs)
     assert evs[0].summary == "Girls 14U Spring League · Courts 1-2"
+
+
+def test_program_shorthand_only_on_printouts():
+    """A program's shorthand is what the printouts write; its full name everywhere else (Nov 2026)."""
+    from scheduler import labels
+    from scheduler.data import LocalProgram
+    from scheduler.paper import paper_weeks_html
+    lp = LocalProgram("Girls 14U Spring League", "Tue", "5:30", [1], [], True, [(S, E)], short="G14 SL")
+    labels.set_program_shorts([lp])
+    try:
+        a = pd.DataFrame([{"date": date(2026, 11, 3), "slot": "5:30", "court": 1, "kind": "Local",
+                           "name": "Girls 14U Spring League", "club": "", "coach": ""}])
+        html_ = paper_weeks_html(a, date(2026, 11, 1), date(2026, 11, 7))
+        assert "G14 SL" in html_ and "Girls 14U Spring League" not in html_
+        evs, _ = gcal.desired_events(None, a, [], [], {("Program", "Girls 14U Spring League"): "g"}, S, E)
+        assert evs[0].summary.startswith("Girls 14U Spring League ·")
+    finally:
+        labels.set_program_shorts([])

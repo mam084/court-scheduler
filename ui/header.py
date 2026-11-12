@@ -5,6 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from scheduler.labels import set_program_shorts
+
 from scheduler import privates as pv
 from scheduler.data import program_coach_conflicts, tournament_conflicts
 from scheduler.views import range_label, short_list_text
@@ -97,6 +99,7 @@ def render():
     try:
         cleaned = cleaned_inputs(inp, start, end)
         closures = cleaned.closures
+        set_program_shorts(cleaned.locals)  # programs' shorthand, for the printouts
     except ValueError as e:
         st.error(str(e))
         cleaned, closures = None, {}

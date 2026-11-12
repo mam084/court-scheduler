@@ -176,8 +176,7 @@ def _courts(courts) -> str:
 
 def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournaments: list, teams: list,
                    links: dict, start: date, end: date, test_calendar: str = "", location: str = "",
-                   programs_side: dict | None = None, full_names: dict | None = None
-                   ) -> tuple[list[Event], list[str]]:
+                   programs_side: dict | None = None) -> tuple[list[Event], list[str]]:
     """Every event the schedule should put on the linked calendars, and a
     note for each team / club / program that has events but no calendar."""
     out: list[Event] = []
@@ -191,8 +190,6 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
     g_id, b_id = links.get(("Club", club_calendar(links, False))), links.get(("Club", club_calendar(links, True)))
     if g_id and g_id == b_id:
         missing.add("the SDVBC and Seaside club rows are linked to the same calendar (check Calendar links)")
-
-    full_names = full_names or {}
 
     def put(kind, name, key, summary, desc, s, e, all_day=False):
         summary = cap(summary)
@@ -231,7 +228,7 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             (s0, s1) = SLOT_TIMES[slot]
             ct = _courts(g["court"])
             coaches = ", ".join(c.strip() for c in str(g["coach"].iloc[0] or "").split(";") if c.strip())
-            put("Program", name, f"program|{d}|{slot}|{name}", f"{full_names.get(name) or name} · {ct}",
+            put("Program", name, f"program|{d}|{slot}|{name}", f"{name} · {ct}",
                 f"{SLOTS[slot]} · {ct}" + (f"\nCoaches: {coaches}" if coaches else ""), _dt(d, s0), _dt(d, s1))
 
     # Tournaments: all-day events.

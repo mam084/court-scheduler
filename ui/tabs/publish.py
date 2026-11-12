@@ -383,7 +383,7 @@ def _calendars():
         evs, missing = gcal.desired_events(pr_, loc_, cleaned.tournaments if extras else [], cleaned.teams, links,
                                            start, end,
                                            test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
-                                           side_, {lp.name: lp.full_name for lp in cleaned.locals if lp.full_name})
+                                           side_)
         if missing and not only_:
             st.caption(f"No calendar linked (skipped): {', '.join(missing[:12])}"
                        + (f" and {len(missing) - 12} more" if len(missing) > 12 else ""))
@@ -434,18 +434,16 @@ def _program_runs(client):
     read or changed, from the program's first day to its last; team and club calendars aren't touched."""
     inp, cleaned, store, VIEWER = S.inp, S.cleaned, S.store, S.VIEWER
     links = gcal.links_from(inp.calendars)
-    full = {lp.name: lp.full_name for lp in cleaned.locals if lp.full_name}
     progs = sorted({lp.name for lp in cleaned.locals if ("Program", lp.name) in links})
     st.markdown("**Programs over their whole run**")
     st.caption("Sends a program's sessions from its start date to its end date (from **Programs**), even past "
                "the dates you've scheduled: a spring league from December to March goes on in one go. Only the "
                "program's own calendar is changed. Cancelled sessions, closures and the big holidays are left "
-               "off. Titles use the program's full name.")
+               "off.")
     if not progs:
         st.caption("Link a program's calendar under **Calendar links** first.")
         return
-    pick = st.multiselect("Programs", progs, key="cal_prog_pick", placeholder="Pick one or more programs",
-                          format_func=lambda n: f"{n} ({full[n]})" if n in full else n)
+    pick = st.multiselect("Programs", progs, key="cal_prog_pick", placeholder="Pick one or more programs")
     test_mode = st.toggle("Test mode", value=True, key="cal_prog_test",
                           help="Send everything to one test calendar instead. Nothing real is touched.")
     test_cal = st.text_input("Test calendar ID", key="cal_prog_test_id",
@@ -456,15 +454,12 @@ def _program_runs(client):
     if not pick or span is None:
         return
     p0, p1 = span
-    no_full = [n for n in pick if n not in full]
-    if no_full:
-        st.caption(f"No full name yet (its shorthand is used): {', '.join(no_full)}.")
     plinks = {k: v for k, v in links.items() if k == ("Program", k[1]) and k[1] in pick}
     rows = gcal.program_sessions(cleaned.locals, cleaned.closures, p0, p1, set(pick))
     tourns = [tn for tn in cleaned.tournaments if getattr(tn, "program", "") in pick]
     evs, _ = gcal.desired_events(None, rows, tourns, cleaned.teams, plinks, p0, p1,
                                  test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
-                                 {}, full)
+                                 {})
     evs = [e for e in evs if e.target.startswith("Program:")]
     cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else set(plinks.values()))
     ready = client is not None and (not test_mode or bool(test_cal.strip())) and bool(evs)
