@@ -52,4 +52,9 @@ except Exception:  # noqa: BLE001
 if DARK:  # the court grid, calendar and counts follow the app's theme (⋮ → Settings)
     st.markdown(DARK_CSS, unsafe_allow_html=True)
 
-main.run()
+try:
+    main.run()
+except Exception as _e:  # a crash: tell the app admins (Access → Activity, and email), then show it as usual
+    from ui.common import report
+    report("Page crashed", _e)
+    raise

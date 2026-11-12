@@ -139,6 +139,10 @@ def decided(req: dict, status: str, note: str = "") -> str:
     st.session_state.pop("_n_pending", None)  # the waiting count changes
     if not store.decide_request(req["id"], status, VIEWER.person.email if VIEWER.person else "", note):
         return "Someone else already decided that request."
+    if status == "approved":  # its teams' Google Calendars update once it's saved (if automatic updates are on)
+        rows = (req.get("detail") or {}).get("rows") or []
+        teams = {str(r["team"]) for r in rows if r.get("team")} | ({str(req["team"])} if req.get("team") else set())
+        st.session_state.setdefault("cal_sync_teams", set()).update(teams)
     store.log(VIEWER.log_name, "Request " + ("approved" if status == "approved" else "declined"),
               f"{req['who']}: {req['summary']}" + (f" ({note})" if note else ""), MAIN_ID)
     word = "Approved" if status == "approved" else "Declined"
@@ -206,6 +210,19 @@ def g_session():
         return gsvc.session(store, GCFG, SECRETS) if GCFG else None
     except Exception:  # noqa: BLE001  (token no longer valid: shown in Access)
         return None
+
+
+def report(where: str, err) -> None:
+    """Something went wrong: log it (Access → Activity) and email the app admins (at most hourly per problem).
+    Never raises."""
+    try:
+        from scheduler import problems
+        viewer = getattr(S, "VIEWER", None)
+        problems.record(S.store, where, err, who=getattr(viewer, "log_name", "") or "",
+                        page=str(getattr(S, "VIEW", "") or ""), secrets=getattr(S, "SECRETS", None),
+                        send=lambda to, subject, text: send_mail(to, (subject, text, None)))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def send_mail(to: list[str], msg: tuple[str, str, str], reply_to: str | None = None) -> str | None:

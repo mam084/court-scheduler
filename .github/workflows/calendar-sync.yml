@@ -1,0 +1,39 @@
+# Every evening around 5 PM Pacific: bring the club's Google Calendars in line
+# with the schedule on published dates (scheduler/autosync.py). Does nothing
+# unless "Update Google Calendar automatically" is on in Publish → Google Calendar.
+# Setup (the secrets it needs): docs/SETUP_AUTOSYNC.md
+name: Evening calendar update
+
+on:
+  schedule:
+    # GitHub runs on UTC, so both fire and the script runs once, at or after 5 PM Pacific:
+    - cron: "0 0 * * *"   # 4 PM PST / 5 PM PDT
+    - cron: "0 1 * * *"   # 5 PM PST / 6 PM PDT
+  workflow_dispatch:      # Actions tab → Evening calendar update → Run workflow: runs right away
+
+concurrency:
+  group: calendar-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Update the calendars
+        run: python -m scheduler.autosync ${{ github.event_name == 'workflow_dispatch' && '--now' || '' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          COOKIE_SECRET: ${{ secrets.COOKIE_SECRET }}
+          TOKEN_KEY: ${{ secrets.TOKEN_KEY }}
+          AUTH_REDIRECT_URI: ${{ secrets.AUTH_REDIRECT_URI }}
+          CLUB_ADDRESS: ${{ secrets.CLUB_ADDRESS }}
+          ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}

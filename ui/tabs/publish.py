@@ -12,7 +12,7 @@ from scheduler.data import COLUMNS
 from scheduler.storage import MAIN_ID
 from scheduler.views import range_label
 from ui import dates
-from ui.common import g_conn, g_session, plural, secret, send_mail
+from ui.common import g_conn, g_session, plural, report, secret, send_mail
 from ui.state import S
 
 
@@ -348,6 +348,8 @@ def _calendars():
                     checks.append({"Calendar for": f"{kind}: {name}", "Google calendar": str(e), "OK": "✗"})
             st.dataframe(pd.DataFrame(checks), hide_index=True, width="stretch")
 
+    _automatic(client)
+
     if not published:
         st.caption("Publish the schedule first; only published versions go to Google Calendar.")
     else:
@@ -419,6 +421,7 @@ def _calendars():
                               + (f", {len(errs)} failed" if errs else ""), st.session_state.project_id)
                     st.session_state.pop("cal_plan", None)
                     if errs:
+                        report("Google Calendar sync", "; ".join(errs[:5]))
                         st.error(f"{plural(len(errs), 'change')} failed:\n" + "\n".join(f"- {e}" for e in errs[:10]))
                     st.session_state.flash = f"Synced {plural(n, 'change')} to {where}."
                     if not errs:
@@ -498,6 +501,54 @@ def _program_runs(client):
             st.error(f"{plural(len(errs), 'change')} failed:\n" + "\n".join(f"- {e}" for e in errs[:10]))
         st.session_state.flash = f"Synced {plural(n, 'change')} to {where}."
         if not errs:
+            st.rerun()
+
+
+def _automatic(client):
+    """Automatic updates: every evening, and right after a request is approved."""
+    from scheduler import autosync
+    store, VIEWER, SECRETS = S.store, S.VIEWER, S.SECRETS
+    opts = autosync.settings(store)
+    with st.container(border=True):
+        st.markdown("**Automatic updates**")
+        st.caption("Keeps the linked calendars matching the schedule on **published** dates, including hand edits "
+                   "and approved requests made since publishing: every evening around 5 PM, and for a team "
+                   "as soon as one of its coach's requests is approved. Unpublished dates are never sent, and "
+                   "only events this app made are changed. Try a manual sync below (test mode first) before "
+                   "turning this on.")
+        c1, c2 = st.columns(2)
+        on = c1.toggle("Update Google Calendar automatically", value=opts["on"], key="auto_cal_on")
+        extras = c2.toggle("Include programs and tournaments", value=opts["extras"], key="auto_cal_extras",
+                           help="Off: only team practices go to team and club calendars.")
+        if (on, extras) != (opts["on"], opts["extras"]):
+            autosync.save_settings(store, on, extras)
+            store.log(VIEWER.log_name, "Google Calendar",
+                      f"automatic updates {'on' if on else 'off'}" + (" (with programs and tournaments)"
+                                                                      if on and extras else ""))
+            st.session_state.flash = f"Automatic Google Calendar updates are {'on' if on else 'off'}."
+            st.rerun()
+        last = autosync.last_run(store)
+        if last:
+            when = pd.Timestamp(last["at"]).tz_convert("America/Los_Angeles").strftime("%a %b %-d, %-I:%M %p")
+            for_ = f" for {', '.join(last['teams'])}" if last.get("teams") else ""
+            st.caption(f"Last update: {when} ({last.get('who', '')}{for_}): {last.get('summary', '')}.")
+            for err in last.get("errors") or []:
+                st.caption(f"⚠️ {err}")
+        else:
+            st.caption("No automatic update has run yet. The evening update runs from GitHub "
+                       "(setup: docs/SETUP_AUTOSYNC.md).")
+        if st.button("Update every calendar now", disabled=client is None, key="auto_cal_now",
+                     help="Sends the schedule on all published dates to every linked calendar, now, "
+                          "whether or not automatic updates are on."):
+            try:
+                with st.spinner("Updating the calendars…"):
+                    out = autosync.sync(store, SECRETS, who=VIEWER.log_name, force=True)
+                st.session_state.flash = f"Google Calendar: {out.summary()}."
+                if out.errors:
+                    report("Updating Google Calendar (Update now)", "; ".join(out.errors[:5]))
+            except Exception as e:  # noqa: BLE001
+                report("Updating Google Calendar (Update now)", e)
+                st.session_state.flash = f"Google Calendar wasn't updated: {e}"
             st.rerun()
 
 

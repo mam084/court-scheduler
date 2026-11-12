@@ -331,3 +331,33 @@ def autosave():
                 st.session_state.save_conflict = True
                 st.rerun()
             st.toast(f"Couldn't save: {e}", icon="⚠️")
+            from ui.common import report
+            report("Saving the schedule", e)
+    _calendar_after_approval(_sig)
+
+
+def _calendar_after_approval(sig):
+    """An approved request is saved: update its teams' Google Calendars (when automatic updates are on).
+    Only published dates are ever sent, so a request on unpublished dates changes nothing there."""
+    teams = st.session_state.get("cal_sync_teams")
+    if not teams or not S.CAN or st.session_state.get("save_conflict") or sig != st.session_state.get("_save_sig"):
+        return
+    st.session_state.pop("cal_sync_teams", None)
+    from scheduler import autosync
+    store = S.store
+    try:
+        if not autosync.settings(store)["on"]:
+            return
+        with st.spinner("Updating Google Calendar…"):
+            out = autosync.sync(store, S.SECRETS, teams=set(teams), who=S.VIEWER.log_name or "App")
+    except Exception as e:  # noqa: BLE001
+        from ui.common import report
+        st.toast(f"Google Calendar wasn't updated: {e}", icon="⚠️")
+        report("Updating Google Calendar after an approval", e)
+        return
+    if out.errors:
+        from ui.common import report
+        st.toast(f"Google Calendar: {out.summary()}", icon="⚠️")
+        report("Updating Google Calendar after an approval", "; ".join(out.errors[:5]))
+    elif out.changes:
+        st.toast(f"Google Calendar updated for {', '.join(sorted(teams))}: {out.summary()}.", icon="📅")
