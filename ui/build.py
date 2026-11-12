@@ -145,7 +145,16 @@ def run():
                 if not st.session_state.result.ok and _old_result is not None and _old_result.ok and not S.run_pressed:
                     # A change or restore that can't be built never wipes out the schedule that was there.
                     st.session_state.result = _old_result
-                    st.error("That couldn't be scheduled, so nothing changed. The schedule is as it was.")
+                    _bk = st.session_state.pop("overrides_backup", None)
+                    if _bk is not None:  # take the change back out too, so a later rebuild doesn't pull it in
+                        inp.overrides = _bk
+                    if st.session_state.pop("approving", None) is not None:
+                        st.session_state.pop("approving_note", None)
+                        st.session_state.pop("flash", None)
+                        st.error("That request can't fit without moving other practices, so it wasn't applied. "
+                                 "It's still waiting; decline it with a note (e.g. another time that's open).")
+                    else:
+                        st.error("That couldn't be scheduled, so nothing changed. The schedule is as it was.")
                 if restore_ver is not None:
                     st.session_state.base_version = restore_ver["id"]
                 st.session_state.pop("pending_rebuild", None)
