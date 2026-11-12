@@ -1556,3 +1556,34 @@ def test_rebuilding_published_dates_asks_first(db):
     at.button(key="as_replan").click().run()
     assert not at.exception, at.exception
     assert not any("locked" in w.value for w in at.warning)
+
+
+def test_update_schedule_that_cant_build_keeps_the_schedule(db):
+    """Staged hand edits that can't all happen: Update schedule takes them back out and the schedule
+    stays (it used to wipe the whole calendar)."""
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Keep", 6)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Publish").run()
+    next(b for b in at.button if "Publish this schedule" in b.label).click().run()
+    res = at.session_state["result"]
+    a = res.assignments
+    p = a[a["kind"] == "Practice"]
+    team = p.iloc[0]["name"]
+    days = sorted(set(p["date"]))[:3]
+    before_ov = at.session_state["inp"].overrides.copy() if "inp" in at.session_state else None
+    bad = [{"team": team, "action": "Add", "date": f"{d:%m/%d/%Y}", "days": "", "time": "7:20", "court": "",
+            "note": ""} for d in days]  # 3 by hand in a week: too many
+    inp = at.session_state["inp"]
+    inp.overrides = pd.concat([inp.overrides, pd.DataFrame(bad)], ignore_index=True)
+    at.session_state["staged"] = {"rows": bad, "pins": [], "what": ["test"], "backup": before_ov,
+                                  "base_result": res}
+    at.run()
+    at.button(key="upd_go").click().run()
+    assert not at.exception, at.exception
+    r = at.session_state["result"]
+    assert r is not None and r.ok
+    assert len(r.assignments) == len(a)
+    assert len(at.session_state["inp"].overrides) == len(before_ov)

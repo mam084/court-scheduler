@@ -123,8 +123,10 @@ def _stage(rows: list[dict], replace_pin: tuple | None, message: str) -> bool:
                           court=court, on_pattern=False, pinned=True, extra=act.startswith("extra"), paired=""))
         a2 = pd.concat([st.session_state.result.assignments, pd.DataFrame([added[-1]])], ignore_index=True)
         st.session_state.result = replace(st.session_state.result, assignments=a2)
-    st.session_state.pop("overrides_backup", None)
     staged = st.session_state.setdefault("staged", {"rows": [], "pins": [], "what": []})
+    # The inputs from before the first staged edit: if Update schedule can't build, they come back.
+    staged.setdefault("backup", st.session_state.pop("overrides_backup", None))
+    staged.setdefault("base_result", r)  # the schedule from before the first staged edit
     staged["rows"] += rows
     if replace_pin:
         staged["pins"].append([replace_pin[0], replace_pin[1].isoformat(), replace_pin[2]])
@@ -138,6 +140,10 @@ def update_schedule():
     """Rebuild around the hand edits made since the last build (Update schedule). Once these dates are
     published, every other practice stays exactly where it is."""
     staged = st.session_state.pop("staged", None) or {"rows": [], "pins": []}
+    if staged.get("backup") is not None:
+        st.session_state.overrides_backup = staged["backup"]
+    if staged.get("base_result") is not None:
+        st.session_state.staged_base = staged["base_result"]
     st.session_state.holding = {"detail": {"rows": staged["rows"], "replace_pins": staged["pins"]}}
     st.session_state.resolve = True
     st.session_state.flash = "Updated the schedule."

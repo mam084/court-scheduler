@@ -2634,3 +2634,45 @@ def test_locked_published_dates_never_move():
     after3 = set(map(tuple, r3.assignments[r3.assignments["kind"] == "Practice"][key].values))
     assert before - after3 == {tuple(gone[key])}
     assert after3 <= before
+
+
+def test_makeup_week_allows_three_practices_placed_by_hand():
+    """In a makeup week a team has 3 practices, so 3 placed by hand is fine (not 'too many')."""
+    teams = [{"team": f"13-T{i}", "age": 13} for i in range(4)]
+    inp = _inp(teams)
+    rows = [{"team": "13-T0", "action": "Makeup", "date": "11/03/2026"}]
+    rows += [{"team": "13-T0", "action": "Add", "date": f"11/{d:02d}/2026", "time": "5:30"} for d in (2, 4, 6)]
+    rows += [{"team": "13-T1", "action": "Add", "date": f"11/{d:02d}/2026", "time": "5:30"} for d in (2, 4)]
+    rows += [{"team": "13-T2", "action": "Add", "date": "11/06/2026", "time": "5:30"}]
+    inp.overrides = pd.DataFrame([dict(r, days="", court="", note="") | {"time": r.get("time", "")} for r in rows])
+    r = solve(inp, *NOV, time_limit_s=10)
+    assert r.ok
+    p = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["name"] == "13-T0")]
+    assert {date(2026, 11, d) for d in (2, 4, 6)} <= set(p["date"])
+
+
+def test_restore_skips_a_practice_moved_by_hand():
+    """A move (Tue -> Mon) made after publishing: restoring keeps the move and the team's other
+    practices; the Tuesday isn't brought back (which used to push out its Wednesday instead)."""
+    from scheduler.changes import practices_of, snapshot
+    inp = simulate(6, 4, 4, 2026, 11, 7)
+    old = practices_of(snapshot(solve(inp, *NOV, time_limit_s=20), "v1"))
+    team = old.iloc[0]["name"]
+    wk = old[(old["name"] == team)]
+    wk = wk[wk["date"].map(week_start) == week_start(wk.iloc[0]["date"])].sort_values("date")
+    moved = wk.iloc[0]
+    others = {(r.date, r.slot) for r in wk.iloc[1:].itertuples()}
+    ws = week_start(moved["date"])
+    new_d = next(ws + timedelta(i) for i in range(1, 6)
+                 if ws + timedelta(i) not in set(wk["date"]) and NOV[0] <= ws + timedelta(i) <= NOV[1])
+    inp.overrides = pd.DataFrame([
+        {"team": team, "action": "Remove", "date": f"{moved['date']:%m/%d/%Y}", "days": "", "time": moved["slot"],
+         "court": "", "note": ""},
+        {"team": team, "action": "Add", "date": f"{new_d:%m/%d/%Y}", "days": "", "time": "5:30", "court": "",
+         "note": ""}])
+    r = solve(inp, *NOV, time_limit_s=20, previous=old, restore=old)
+    assert r.ok
+    got = r.assignments[(r.assignments["kind"] == "Practice") & (r.assignments["name"] == team)]
+    got = {(d, s) for d, s in zip(got["date"], got["slot"]) if week_start(d) == ws}
+    assert (new_d, "5:30") in got and (moved["date"], moved["slot"]) not in got
+    assert others <= got

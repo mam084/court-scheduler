@@ -162,6 +162,8 @@ def run():
                     _bk = st.session_state.pop("overrides_backup", None)
                     if _bk is not None:  # take the change back out too, so a later rebuild doesn't pull it in
                         inp.overrides = _bk
+                        if st.session_state.get("staged_base") is not None:
+                            st.session_state.result = st.session_state.staged_base
                     if st.session_state.pop("approving", None) is not None:
                         st.session_state.pop("approving_note", None)
                         st.session_state.pop("flash", None)
@@ -196,17 +198,22 @@ def run():
                 backup = st.session_state.pop("overrides_backup", None)
                 if backup is not None:  # a manual change that can't work: undo it, keep the schedule
                     inp.overrides = backup
+                    if st.session_state.get("staged_base") is not None:  # staged edits come off too
+                        st.session_state.result = st.session_state.staged_base
                     st.session_state.pop("flash", None)  # its "done" message no longer applies
                     _appr = st.session_state.pop("approving", None)
                     st.session_state.pop("approving_note", None)
                     st.error(f"That change wasn't applied. {e}"
                              + (" The request is still waiting; decline it with a note, or change something "
                                 "else first." if _appr else ""))
+                elif built and st.session_state.result is not None and st.session_state.result.ok:
+                    st.error(f"That couldn't be scheduled, so the schedule stays as it was. {e}")
                 else:
                     st.session_state.result = None
                     st.error(str(e))
             else:
                 st.session_state.pop("overrides_backup", None)
+        st.session_state.pop("staged_base", None)
         if not st.session_state.get("rebuild_queue"):
             st.session_state.pop("holding", None)
         # Auto-schedule pressed and it built: start the page again so everything (the sidebar's dates

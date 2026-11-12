@@ -343,9 +343,10 @@ def solve(
         else:
             per_week[t, week_start(d)] += 1
     for (t, ws), n in per_week.items():
-        if n > teams[t].per_week:
+        allowed = teams[t].per_week + data.makeups.get((teams[t].name, ws), 0)  # a makeup week has one more
+        if n > allowed:
             problems.append(f"{teams[t].name}: {n} practices placed by hand in the week of {ws:%b %-d} (it has "
-                            f"{teams[t].per_week} a week); add the others as extra practices instead")
+                            f"{allowed} that week); add the others as extra practices instead")
     if problems:
         raise ValueError("These manual changes can't all happen:\n- " + "\n- ".join(problems))
 
@@ -1414,6 +1415,8 @@ def _restore_pins(restore, pinned, teams, idx, data, start, end, slots_on, court
             drop(name, d, s, "that time isn't open")
         elif (t, d, s) in team_days:
             drop(name, d, s, "the team already has a practice placed by hand then")
+        elif any(rr.kind == "no" and rr.manual and rr.matches(d, s) for rr in rules_for[name]):
+            drop(name, d, s, "it was removed or moved by hand")
         elif not strict and (per_week[t, week_start(d)]
                              >= max(usual(t, d), in_version[name, week_start(d)])):
             drop(name, d, s, f"the team already has {per_week[t, week_start(d)]} practices placed that week")
