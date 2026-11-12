@@ -229,6 +229,8 @@ def render():
             st.session_state.flash = f"Removed {plural(len(gone), 'person', 'people')}."
             st.rerun()
 
+    _backups(store, VIEWER)
+
     st.subheader("Activity")
     st.caption("Every role change, coach preference, request and decision, newest first. Nobody can approve "
                "their own request.")
@@ -244,3 +246,35 @@ def render():
         st.dataframe(lg[["at", "who", "action", "detail", "project"]].rename(columns={
             "at": "When", "who": "Who", "action": "What", "detail": "Details", "project": "Schedule"}),
             hide_index=True, width="stretch", height=min(500, 38 + 35 * len(lg)))
+
+
+def _backups(store, VIEWER):
+    """Automatic copies of the schedule, and putting one back."""
+    from scheduler.storage import BACKUP_KEEP_DAYS, BACKUP_KEEP_RECENT, MAIN_ID
+    from ui.session import open_project
+
+    st.subheader("Backups")
+    st.caption(f"The app keeps a copy of the whole schedule (teams, programs, no-dates, every scheduled and "
+               f"published date) at most every 10 minutes while it's being changed: the newest "
+               f"{BACKUP_KEEP_RECENT}, plus the last copy of each day for {BACKUP_KEEP_DAYS} days. If a change "
+               f"or a bug messes the schedule up, put an earlier copy back here.")
+    bk = store.backups(MAIN_ID)
+    if not bk:
+        st.caption("No backups yet. The first one is made the next time the schedule changes.")
+        return
+    labels = {b["id"]: pd.Timestamp(b["saved_at"]).tz_convert("America/Los_Angeles").strftime("%a %b %-d, %-I:%M %p")
+              for b in bk}
+    with st.expander(f"Restore a backup ({plural(len(bk), 'copy', 'copies')})"):
+        pick = st.selectbox("The schedule as it was on", list(labels), format_func=labels.get, key="bk_pick")
+        sure = st.checkbox("Replace the current schedule with this copy. (The current one is backed up first, "
+                           "so this can be undone.)", key="bk_sure")
+        if st.button("Restore this copy", type="primary", disabled=not sure, key="bk_go"):
+            if store.restore_backup(MAIN_ID, pick):
+                store.log(VIEWER.log_name, "Restored backup", f"Schedule as of {labels[pick]}", MAIN_ID)
+                for k in ("bk_sure", "save_conflict"):
+                    st.session_state.pop(k, None)
+                open_project()
+                st.session_state.flash = f"Restored the schedule as of {labels[pick]}."
+            else:
+                st.session_state.flash = "That backup couldn't be found."
+            st.rerun()

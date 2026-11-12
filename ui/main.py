@@ -49,6 +49,7 @@ def run():
     state.begin()
     setup.run()
     session.ensure_open()
+    session.conflict_banner()
     sidebar.render()
     build.run()
     header.render()

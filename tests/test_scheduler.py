@@ -2373,7 +2373,7 @@ def test_paper_print_local_tournament_blocks_and_last_session():
     h = paper_weeks_html(r.assignments, s, e, data.closures, r.tournaments, "T", [], r.practice_counts, False,
                          r.weekend_dates, data.locals)
     # Nov 2026: the tournament blocks out its times on each of its courts (1-7), not big on Court 1.
-    from scheduler.paper import ONLY_MARK   # it's the only one, so it carries a circled 1 and ONLY
+    from scheduler.paper import ONLY_MARK  # it's the only one, so it carries a circled 1 and ONLY
     assert h.count('<div class="tnb"') == 7 and h.count(f"<b>Boys Local Tourney{ONLY_MARK}</b>") == 7
     assert "tnbig" not in h
     n_last = len(r.assignments[(r.assignments["name"] == lp.name) & (r.assignments["date"] == date(2026, 12, 3))]
@@ -2522,8 +2522,9 @@ def test_three_kinds_of_private():
     assert [p["type"] for p in privs] == ["Player", "Player", "Player", "Team", "Coach reps", "Coach reps"]
     assert [p["team"] for p in privs] == ["", "", "", "16-Ann", "", ""]   # only team privates keep a team
     assert pv.type_counts(privs) == "3 player, 1 team, 2 coach's reps"
-    from openpyxl import load_workbook
     import io
+
+    from openpyxl import load_workbook
     wb = load_workbook(io.BytesIO(pv.to_excel(privs, ["Ann"])))
     assert [c.value for c in wb["Coaches"][2]][:5] == ["Ann", 3, 1, 2, 6]
 
@@ -2676,3 +2677,18 @@ def test_restore_skips_a_practice_moved_by_hand():
     got = {(d, s) for d, s in zip(got["date"], got["slot"]) if week_start(d) == ws}
     assert (new_d, "5:30") in got and (moved["date"], moved["slot"]) not in got
     assert others <= got
+
+
+def test_club_today_is_pacific_not_server_utc(monkeypatch):
+    """At 5 PM Pacific the server (UTC) is already on tomorrow; the club's today isn't."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from scheduler import clock
+    monkeypatch.delenv("COURT_TODAY", raising=False)
+    five_pm = datetime(2026, 11, 12, 17, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    monkeypatch.setattr(clock, "now", lambda: five_pm)
+    assert five_pm.astimezone(ZoneInfo("UTC")).date().day == 13
+    assert clock.today().day == 12
+    monkeypatch.setenv("COURT_TODAY", "2026-01-02")
+    assert str(clock.today()) == "2026-01-02"

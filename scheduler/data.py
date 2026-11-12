@@ -59,6 +59,7 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
+from . import clock
 from .config import (
     ALL_COURTS,
     AM_BLOCKS,
@@ -70,10 +71,10 @@ from .config import (
     PRACTICES_PER_WEEK,
     PROGRAM_KEYS,
     SLOT_KEYS,
+    WEEKDAY_DAYTIME,
     WEEKDAY_KEYS,
     WEEKDAYS,
     WEEKEND,
-    WEEKDAY_DAYTIME,
     WEEKEND_KEYS,
     blocked_by_local_tournament,
     default_priority,
@@ -741,7 +742,7 @@ def to_date(value, year: int | None = None) -> date:
         return pd.Timestamp(value).date()
     s = re.sub(r"\s+00:00:00$", "", str(value).strip())
     try:
-        return _one_date(s, year if year is not None else date.today().year)
+        return _one_date(s, year if year is not None else clock.today().year)
     except ValueError:
         return pd.to_datetime(s).date()
 
@@ -1196,7 +1197,7 @@ def _parse_open(value) -> list[str]:
 def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None) -> CleanInput:
     """Validate and normalise. Raises ValueError listing every problem the
     solver can't work around; softer issues come back as warnings."""
-    start = start or inp.start or date.today()
+    start = start or inp.start or clock.today()
     end = end or inp.end or start
     if end.year == start.year:
         year = start.year

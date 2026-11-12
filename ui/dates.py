@@ -18,7 +18,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from scheduler import ScheduleInput, solve
+from scheduler import ScheduleInput, clock, solve
 from scheduler.data import empty
 from scheduler.solver import ScheduleResult, week_start
 from scheduler.storage import _frame_in, period_bookings, period_key
@@ -79,7 +79,7 @@ def season() -> tuple[date, date] | None:
 def initial_day() -> date:
     """Where the calendar opens: today if it's scheduled, else the next scheduled dates
     (or the last ones, if they're all past), else the dates on top."""
-    today = date.today()
+    today = clock.today()
     rs = runs()
     if any(s_ <= today <= e_ for _, s_, e_ in rs):
         return today
@@ -342,7 +342,7 @@ def _picker(prefix: str, back, fwd, title: str):
     st.session_state[pk] = view_day()
     c1.date_input("Go to", key=pk, format="MM/DD/YYYY", on_change=_picked, args=(pk,))
     c2.button("▶", key=f"{prefix}_next", on_click=fwd[0], args=fwd[1], help=fwd[2], width="stretch")
-    c3.button("Today", key=f"{prefix}_today", on_click=set_day, args=(date.today(),), width="stretch")
+    c3.button("Today", key=f"{prefix}_today", on_click=set_day, args=(clock.today(),), width="stretch")
     c4.markdown(f"#### {title}")
 
 

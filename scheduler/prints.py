@@ -14,6 +14,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
+from . import clock
 from .config import SLOT_KEYS, WEEK_ORDER, court_short, team_is_boys, week_start
 from .labels import label_map, label_of, short_label, with_labels
 from .views import PRINT_BUTTON, _text, courts_label
@@ -411,7 +412,7 @@ def flags_print_html(flags: list[dict], resolved: dict, start: date, end: date,
     open_ = [f for f in flags if f["id"] not in resolved]
     done = [f for f in flags if f["id"] in resolved]
     out = [f'<section class="pp-page"><div class="pp-head"><h1>{html.escape(title)}</h1>'
-           f'<span class="pp-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y} · printed {date.today():%-m/%-d/%Y}'
+           f'<span class="pp-sub">{start:%b %-d, %Y} – {end:%b %-d, %Y} · printed {clock.today():%-m/%-d/%Y}'
            f'</span></div>']
     if not flags:
         out.append('<div class="pf-none">No coverage flags for these dates.</div>')
@@ -710,7 +711,7 @@ def changes_print_html(ch: pd.DataFrame, title: str, subtitle: str, labels: dict
 
     from .changes import changes_by_day, changes_by_week
     out = [f'<div class="pp-head"><h1>{e(title)}</h1><span class="pp-sub">{e(subtitle)} · printed '
-           f'{date.today():%-m/%-d/%Y}</span></div>']
+           f'{clock.today():%-m/%-d/%Y}</span></div>']
     if ch is None or ch.empty:
         out.append('<div class="pc-none">No changes.</div>')
     else:

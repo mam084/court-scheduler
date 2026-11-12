@@ -8,6 +8,7 @@ from html import escape as html_escape
 import pandas as pd
 import streamlit as st
 
+from scheduler import clock
 from scheduler.data import blank
 from scheduler.storage import MAIN_ID
 from ui.common import plural
@@ -26,7 +27,7 @@ def coverage_flags() -> list[dict]:
     start, end, t_conflicts, p_conflicts = S.start, S.end, S.t_conflicts, S.p_conflicts
     out = []
     for c in t_conflicts:
-        if c["end"] < date.today() and not (c["start"] <= end and c["end"] >= start):
+        if c["end"] < clock.today() and not (c["start"] <= end and c["end"] >= start):
             continue  # over and done, and not in the dates being looked at
         if c["kind"] == "two_travel":
             text = (f"**{c['coach']}** has two travel tournaments: **{c['travel']}** "
@@ -96,7 +97,7 @@ def resolve_flag(fid: str, note: str):
     """Mark a flag sorted out, with how it's covered; saved with the club's data."""
     store, ME, VIEWER, inp = S.store, S.ME, S.VIEWER, S.inp
     row = {"flag": fid, "note": note.strip(), "who": VIEWER.log_name if ME is not None else "",
-           "at": f"{date.today():%m/%d/%Y}"}
+           "at": f"{clock.today():%m/%d/%Y}"}
     inp.resolved = pd.concat([inp.resolved[inp.resolved["flag"] != fid], pd.DataFrame([row])], ignore_index=True)
     if ME is not None:
         store.log(VIEWER.log_name, "Flag resolved", f"{fid}" + (f" · {note.strip()}" if note.strip() else ""),

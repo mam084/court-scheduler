@@ -8,12 +8,63 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from scheduler import ScheduleInput
+from scheduler import ScheduleInput, clock
 from scheduler.solver import week_start
-from scheduler.storage import MAIN_ID, all_periods, ensure_main, make_payload, period_key, read_period
+from scheduler.storage import MAIN_ID, StaleSave, all_periods, ensure_main, make_payload, period_key, read_period
 from scheduler.views import range_label
 from ui.common import inputs_fingerprint, next_month, payload_hash
 from ui.state import S
+
+
+# ------------------------------------------------- two admins at once --
+# The whole schedule is one saved record. Each page remembers a fingerprint of
+# the club's tables and of every run of dates as it last read or saved them.
+# Before saving over a newer copy, it checks that the parts it would write
+# (the tables, the dates on screen, dates it changed) are still what it read;
+# if another admin changed one of them, the save stops instead of quietly
+# undoing their change.
+def _fp(x) -> str:
+    """A fingerprint that's the same before and after a trip through the database."""
+    return payload_hash({"x": json.loads(json.dumps(x, default=str))})
+
+
+def _bases(payload: dict) -> dict:
+    return {"inputs": _fp(payload.get("inputs")),
+            "periods": {k: _fp(v) for k, v in all_periods(payload).items()}}
+
+
+def _conflicts(db_payload: dict) -> bool:
+    """Did someone else change what this page is about to save over?"""
+    base = st.session_state.get("_base")
+    if base is None:
+        return False
+    if _fp(db_payload.get("inputs")) != base["inputs"]:
+        return True
+    theirs = all_periods(db_payload)
+    touched = {period_key(st.session_state.range_start, st.session_state.range_end)}
+    touched |= set(st.session_state.get("periods_dirty", set())) | set(st.session_state.get("periods_deleted", set()))
+    return any(_fp(theirs.get(k)) != base["periods"].get(k, _fp(None)) for k in touched)
+
+
+def conflict_banner():
+    """Shown after a save was stopped because another admin changed the schedule meanwhile."""
+    if not st.session_state.get("save_conflict"):
+        return
+    st.error("**Your last change wasn't saved.** Someone else changed the schedule while you had it open, "
+             "and saving would have undone their change. Get the latest schedule, then redo your change.")
+    c1, c2, _ = st.columns([2, 2, 3])
+    if c1.button("Get the latest schedule", type="primary", key="conflict_reload", width="stretch"):
+        st.session_state.pop("save_conflict", None)
+        open_project()
+        st.session_state.flash = "Loaded the latest schedule. Redo your change if it's still needed."
+        st.rerun()
+    if c2.button("Save mine over theirs", key="conflict_force", width="stretch",
+                 help="Replaces the whole schedule with what's on this page. Their change is lost "
+                      "(it's kept in the backups on the Access tab)."):
+        st.session_state.pop("save_conflict", None)
+        st.session_state._overwrite = True
+        st.session_state._force_save = True
+        st.rerun()
 
 
 def _load_into_session(rec: dict, key: str | None = None):
@@ -36,6 +87,7 @@ def _load_into_session(rec: dict, key: str | None = None):
         dismissed=list(settings.get("dismissed") or []),
         periods=periods_, periods_dirty=set(), periods_deleted=set(),
         _db_stamp=str(rec["updated_at"]),
+        _base=_bases(payload),
         last_saved=payload_hash(make_payload(inp_, s_, e_, settings, result_, published_, periods=periods_)),
     )
     st.session_state.pop("_save_sig", None)
@@ -45,7 +97,7 @@ def _load_into_session(rec: dict, key: str | None = None):
 def open_project(pid: str = MAIN_ID, key: str | None = None) -> bool:
     """(Re)opens the club's schedule, at the period being viewed unless `key` says otherwise."""
     store = S.store
-    rec = ensure_main(store, next_month(date.today()))
+    rec = ensure_main(store, next_month(clock.today()))
     if key is None and st.session_state.get("range_start"):
         key = period_key(st.session_state.range_start, st.session_state.range_end)
     _load_into_session(rec, key)
@@ -118,6 +170,8 @@ def refresh_periods():
     for k, ent in fresh.items():
         if k != cur and k not in dirty and k not in st.session_state.get("periods_deleted", set()):
             st.session_state.periods[k] = ent
+            if "_base" in st.session_state:  # this page now has their copy of those dates
+                st.session_state._base["periods"][k] = _fp(ent)
     for k in [k for k in st.session_state.periods if k not in fresh and k not in dirty]:
         st.session_state.periods.pop(k, None)
 
@@ -240,28 +294,40 @@ def autosave():
     _sig = (id(st.session_state.get("result")), len(st.session_state.get("published", [])),
             tuple(v["id"] for v in st.session_state.get("published", [])), json.dumps(_settings), str(start), str(end),
             inputs_fingerprint(inp), tuple(sorted(st.session_state.get("periods", {}))))
-    if CAN and (_sig != st.session_state.get("_save_sig") or st.session_state.pop("_force_save", False)):
+    if (CAN and not st.session_state.get("save_conflict")
+            and (_sig != st.session_state.get("_save_sig") or st.session_state.pop("_force_save", False))):
+        overwrite = st.session_state.pop("_overwrite", False)
         try:
             # The other dates are only re-read from the database when someone else
             # saved since this page last did (otherwise this page already has them).
             stamp = store.updated_at(MAIN_ID)
             if stamp is not None and str(stamp) == st.session_state.get("_db_stamp"):
                 others = periods_for_save(None)
+                expect = None if stamp is None else str(stamp)
             else:
                 _db = store.get(MAIN_ID)
+                if _db and not overwrite and _conflicts(_db["payload"]):
+                    raise StaleSave(MAIN_ID)
                 others = periods_for_save(_db["payload"] if _db else None)
+                expect = str(_db["updated_at"]) if _db else None
             _payload = make_payload(inp, start, end, _settings, st.session_state.get("result"),
                                     st.session_state.get("published", []), periods=others)
             _h = payload_hash(_payload)
             if _h == st.session_state.get("last_saved"):
                 st.session_state._save_sig = _sig
             else:
-                store.save(MAIN_ID, st.session_state.project_name, _payload)
+                store.save(MAIN_ID, st.session_state.project_name, _payload, expect=None if overwrite else expect)
                 st.session_state._db_stamp = str(store.updated_at(MAIN_ID))
+                st.session_state._base = _bases(_payload)
                 st.session_state.last_saved = _h
                 st.session_state._save_sig = _sig
                 st.session_state.periods_dirty = set()
                 st.session_state.periods_deleted = set()
                 st.session_state.periods = {k: v for k, v in (_payload.get("periods") or {}).items()}
         except Exception as e:  # noqa: BLE001  (not marked saved, so the next click tries again)
+            # By name: the app reloads its code when it changes, so the class may be an older copy.
+            if type(e).__name__ == StaleSave.__name__:
+                # Not saved: say so at the top of the page (rerun so the banner shows now).
+                st.session_state.save_conflict = True
+                st.rerun()
             st.toast(f"Couldn't save: {e}", icon="⚠️")

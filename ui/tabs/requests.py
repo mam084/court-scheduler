@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+from scheduler import clock
 from scheduler import google as gsvc
 from scheduler import privates as pv
 from scheduler.config import ALL_COURTS, DAYS, SLOTS, court_name, court_short
@@ -128,7 +129,7 @@ def _review_private(req: dict) -> tuple[bool, dict]:
     another private, a closure). A taken court can be swapped for one that's open then. Returns
     (can approve, the request with the court it goes on)."""
     row = dict((req.get("detail") or {}).get("private") or {})
-    year = S.start.year if S.start else date.today().year
+    year = S.start.year if S.start else clock.today().year
     got, bad = pv.rows(pd.DataFrame([row]), year)
     if not got:
         st.caption("Couldn't read this private's date or time" + (f" ({bad[0]})" if bad else "") + ".")

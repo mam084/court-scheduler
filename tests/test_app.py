@@ -648,8 +648,9 @@ def test_coach_opens_on_the_published_dates_covering_today(db, monkeypatch):
     dates an admin happens to be working on."""
     from datetime import timedelta
 
+    from scheduler import clock
     from scheduler.storage import current_period, make_payload, read_payload
-    today = date.today()
+    today = clock.today()
     pid = _save(db, "Main", 32)
     rec = db.get(pid)
     inp, s_, e_, settings, r = read_payload(rec["payload"])
@@ -1036,9 +1037,11 @@ def test_hand_edits_on_published_dates_move_nobody_else(db):
     assert not at.exception, at.exception
     a = at.session_state["result"].assignments
     pr = a[a["kind"] == "Practice"]
-    team = pr["name"].iloc[0]
-    others = {(r.name, r.date, r.slot, int(r.court)) for r in pr.itertuples() if r.name != team}
     day = date(2026, 11, 4)
+    # A team not already practicing then (the solver doesn't always place teams the same way).
+    busy = set(pr[(pr["date"] == day) & (pr["slot"] == "5:30")]["name"])
+    team = next(t for t in pr["name"] if t not in busy)
+    others = {(r.name, r.date, r.slot, int(r.court)) for r in pr.itertuples() if r.name != team}
     taken = pr[(pr["date"] == day) & (pr["slot"] == "5:30") & (pr["name"] != team)]
     at.radio(key="nav").set_value("Edit practices").run()
     at.selectbox(key="ed_team").set_value(team).run()
@@ -1587,3 +1590,107 @@ def test_update_schedule_that_cant_build_keeps_the_schedule(db):
     assert r is not None and r.ok
     assert len(r.assignments) == len(a)
     assert len(at.session_state["inp"].overrides) == len(before_ov)
+
+
+def _move_first_practice(at):
+    """Move the team's first practice to another time (a change that saves)."""
+    at.radio(key="nav").set_value("Edit practices").run()
+    team = at.selectbox(key="ed_team").value
+    at.radio(key="ed_mode").set_value("Move a practice").run()
+    a = at.session_state["result"].assignments
+    first = a[(a["kind"] == "Practice") & (a["name"] == team)].sort_values("date").iloc[0]
+    d, old_slot = first["date"], first["slot"]
+    new_slot = next(s for s in ("5:30", "7:20", "3:45") if s != old_slot
+                    and not ((a["name"] == team) & (a["date"] == d) & (a["slot"] == s)).any())
+    at.selectbox(key=f"ed_ns_{team}_{d}_{old_slot}").set_value(new_slot).run()
+    next(b for b in at.button if b.label == "Move it").click().run()
+
+
+def test_a_second_admin_doesnt_undo_the_firsts_change(db):
+    """Two admins have the schedule open. The other one changes the club's tables; this page's next
+    save is stopped (their change stays) until it gets the latest schedule."""
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.storage import MAIN_ID
+    _save(db, "Main", 56)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    assert not at.exception, at.exception
+    # The other admin changes a team (its assistant coach).
+    rec = db.get(MAIN_ID)
+    payload = rec["payload"]
+    payload["inputs"]["Teams"][0]["assistants"] = "Changed"
+    db.save(MAIN_ID, rec["name"], payload)
+
+    _move_first_practice(at)
+    assert not at.exception, at.exception
+    assert at.session_state["save_conflict"]
+    assert any("wasn't saved" in e.value for e in at.error)
+    assert db.get(MAIN_ID)["payload"]["inputs"]["Teams"][0]["assistants"] == "Changed"
+
+    next(b for b in at.button if b.label == "Get the latest schedule").click().run()
+    assert not at.exception, at.exception
+    assert "save_conflict" not in at.session_state
+    _move_first_practice(at)
+    assert "save_conflict" not in at.session_state
+    assert db.get(MAIN_ID)["payload"]["inputs"]["Teams"][0]["assistants"] == "Changed"
+
+
+def test_other_admins_other_dates_dont_block_a_save(db):
+    """Another admin working on different dates isn't a conflict: both changes are kept."""
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.storage import MAIN_ID
+    _save(db, "Main", 56)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.run()
+    rec = db.get(MAIN_ID)
+    payload = rec["payload"]
+    payload.setdefault("periods", {})["2027-01-04_2027-01-15"] = {
+        "start": "2027-01-04", "end": "2027-01-15", "settings": {}, "result": None, "published": []}
+    db.save(MAIN_ID, rec["name"], payload)
+    before = at.session_state["result"].assignments
+    _move_first_practice(at)
+    assert not at.exception, at.exception
+    assert "save_conflict" not in at.session_state
+    saved = db.get(MAIN_ID)["payload"]
+    assert "2027-01-04_2027-01-15" in saved["periods"]
+    assert saved["result"] is not None and len(saved["result"]["assignments"]) == len(before)
+
+
+def test_backups_and_restore(db):
+    """Saving keeps a copy of the schedule from before; restoring brings it back and is itself undoable."""
+    from scheduler.storage import MAIN_ID
+    _save(db, "Main", 56)
+    first = db.get(MAIN_ID)
+    p2 = dict(first["payload"], settings={"time_limit": 99})
+    db.save(MAIN_ID, "Main", p2, expect=str(first["updated_at"]))
+    with pytest.raises(Exception, match="main") as e:   # by name: other tests reload the scheduler package
+        db.save(MAIN_ID, "Main", first["payload"], expect=str(first["updated_at"]))
+    assert type(e.value).__name__ == "StaleSave"
+    bk = db.backups(MAIN_ID)
+    assert len(bk) == 1 and db.backup_payload(bk[0]["id"]) == first["payload"]
+    assert db.restore_backup(MAIN_ID, bk[0]["id"])
+    assert db.get(MAIN_ID)["payload"] == first["payload"]
+    assert len(db.backups(MAIN_ID)) == 2                 # the schedule it replaced was kept too
+
+
+def test_old_backups_thin_out(db, monkeypatch):
+    """The newest copies are kept, then one per day."""
+    from datetime import UTC, datetime, timedelta
+
+    storage = db.save.__func__.__globals__   # the module db's Store came from (other tests reload it)
+    bt = storage["backups"]
+    monkeypatch.setitem(storage, "BACKUP_KEEP_RECENT", 3)
+    t0 = datetime(2026, 11, 1, 18, tzinfo=UTC)
+    with db.engine.begin() as c:
+        for i in range(12):   # 4 copies a day for 3 days
+            c.execute(bt.insert().values(project="main", saved_at=t0 + timedelta(hours=2 * i + (i // 4) * 16),
+                                         name="M", payload=storage["_pack"]("{}")))
+    db.save("main", "M", {"v": 0})
+    rec = db.get("main")
+    with db.engine.begin() as c:
+        c.execute(storage["projects"].update().values(updated_at=datetime.now(UTC) - timedelta(hours=1)))
+    db.save("main", "M", {"v": 1})   # makes a 13th copy and thins out
+    left = db.backups("main")
+    assert rec is not None and 3 < len(left) < 13

@@ -15,10 +15,12 @@ Where it's stored
 
 from __future__ import annotations
 
+import base64
+import gzip
 import json
 import os
 import secrets as _secrets
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -39,6 +41,7 @@ from sqlalchemy import (
     update,
 )
 
+from . import clock
 from .data import ScheduleInput, clean
 from .solver import ScheduleResult
 
@@ -99,6 +102,31 @@ requests_t = Table(
     Column("decided_at", DateTime(timezone=True), nullable=True),
     Column("decision_note", Text, nullable=False, default=""),
 )
+# Automatic copies of the schedule from before a save (gzip + base64), so a bad
+# change or a bug can be undone from the Access tab. See Store.save.
+backups = Table(
+    "court_scheduler_backups", _meta,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("project", String(32), nullable=False),
+    Column("saved_at", DateTime(timezone=True), nullable=False),  # when this copy was the live schedule
+    Column("name", String(200), nullable=False, default=""),
+    Column("payload", Text, nullable=False),                     # gzip + base64 of the JSON
+)
+BACKUP_EVERY = timedelta(minutes=10)  # at most one copy per 10 minutes of saving...
+BACKUP_KEEP_RECENT = 30               # ...keep the newest 30 copies...
+BACKUP_KEEP_DAYS = 45                 # ...plus the last copy of each day for 45 days
+
+
+class StaleSave(Exception):
+    """Someone else saved the schedule after this page last read it."""
+
+
+def _pack(body: str) -> str:
+    return base64.b64encode(gzip.compress(body.encode())).decode()
+
+
+def _unpack(packed: str) -> str:
+    return gzip.decompress(base64.b64decode(packed)).decode()
 
 
 def _normalize_url(url: str) -> str:
@@ -132,7 +160,7 @@ class Store:
         it, while this app (connecting as the table's owner) still can."""
         if not self.permanent:
             return
-        for tbl in (projects, users, activity, settings_kv, requests_t):
+        for tbl in (projects, users, activity, settings_kv, requests_t, backups):
             try:
                 with self.engine.begin() as c:
                     c.execute(text(f"ALTER TABLE {tbl.name} ENABLE ROW LEVEL SECURITY"))
@@ -177,17 +205,81 @@ class Store:
         with self.engine.connect() as c:
             return c.execute(select(projects.c.updated_at).where(projects.c.id == pid)).scalar()
 
-    def save(self, pid: str, name: str, payload: dict) -> None:
+    def save(self, pid: str, name: str, payload: dict, expect: str | None = None) -> None:
+        """Save a schedule. With `expect` (the updated_at this page last read, as a string), the save
+        is refused with StaleSave if someone else saved since, instead of overwriting their change.
+        Before overwriting, the old copy is kept as a backup (see BACKUP_*)."""
         self._ensure()
         body = json.dumps(payload, default=str)
         now = datetime.now(UTC)
         with self.engine.begin() as c:
-            exists = c.execute(select(projects.c.id).where(projects.c.id == pid)).first()
-            if exists:
+            q = select(projects.c.updated_at, projects.c.name, projects.c.payload).where(projects.c.id == pid)
+            if self.permanent:
+                q = q.with_for_update()  # two saves at once: the second waits, then sees the first
+            old = c.execute(q).first()
+            if old is not None:
+                if expect is not None and str(old.updated_at) != str(expect):
+                    raise StaleSave(pid)
+                if old.payload != body:
+                    self._backup(c, pid, old.name, old.payload, old.updated_at, now)
                 c.execute(update(projects).where(projects.c.id == pid)
                           .values(name=name, payload=body, updated_at=now))
             else:
                 c.execute(insert(projects).values(id=pid, name=name, payload=body, updated_at=now))
+
+    # ---------------------------------------------------------- backups --
+    def _backup(self, c, pid: str, name: str, body: str, was_at, now: datetime) -> None:
+        """Keep the schedule as it was before this save (at most one copy per BACKUP_EVERY), then
+        thin out old copies. A backup that fails never stops the save."""
+        try:
+            last = c.execute(select(backups.c.saved_at).where(backups.c.project == pid)
+                             .order_by(backups.c.id.desc()).limit(1)).scalar()
+            if last is not None and _aware(was_at) - _aware(last) < BACKUP_EVERY:
+                return
+            c.execute(insert(backups).values(project=pid, saved_at=was_at, name=name, payload=_pack(body)))
+            rows = c.execute(select(backups.c.id, backups.c.saved_at).where(backups.c.project == pid)
+                             .order_by(backups.c.id.desc())).all()
+            keep, days = set(), set()
+            for i, r in enumerate(rows):
+                day = _aware(r.saved_at).astimezone(clock.now().tzinfo).date()
+                last_of_day = day not in days and _aware(now) - _aware(r.saved_at) <= timedelta(days=BACKUP_KEEP_DAYS)
+                if i < BACKUP_KEEP_RECENT or last_of_day:
+                    keep.add(r.id)
+                days.add(day)
+            gone = [r.id for r in rows if r.id not in keep]
+            if gone:
+                c.execute(delete(backups).where(backups.c.id.in_(gone)))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def backups(self, pid: str) -> list[dict]:
+        """Saved copies of a schedule, newest first (without their contents)."""
+        with self.engine.connect() as c:
+            rows = c.execute(select(backups.c.id, backups.c.saved_at, backups.c.name)
+                             .where(backups.c.project == pid).order_by(backups.c.id.desc())).all()
+        return [{"id": r.id, "saved_at": _aware(r.saved_at), "name": r.name} for r in rows]
+
+    def backup_payload(self, bid: int) -> dict | None:
+        """A saved copy's schedule."""
+        with self.engine.connect() as c:
+            r = c.execute(select(backups.c.payload).where(backups.c.id == bid)).scalar()
+        return json.loads(_unpack(r)) if r else None
+
+    def restore_backup(self, pid: str, bid: int) -> bool:
+        """Put a saved copy back as the live schedule. The schedule being replaced is backed up
+        first (whatever the 10-minute rule says), so a restore can itself be undone."""
+        payload = self.backup_payload(bid)
+        if payload is None:
+            return False
+        rec = self.get(pid)
+        if rec is not None:
+            with self.engine.begin() as c:
+                c.execute(insert(backups).values(project=pid, saved_at=_aware(rec["updated_at"]), name=rec["name"],
+                                                 payload=_pack(json.dumps(rec["payload"], default=str))))
+        with self.engine.begin() as c:
+            c.execute(update(projects).where(projects.c.id == pid)
+                      .values(payload=json.dumps(payload, default=str), updated_at=datetime.now(UTC)))
+        return True
 
     def rename(self, pid: str, name: str) -> None:
         with self.engine.begin() as c:
@@ -340,6 +432,13 @@ class Store:
         return n
 
 
+def _aware(t) -> datetime:
+    """SQLite hands back times without a time zone; they were saved in UTC."""
+    if isinstance(t, str):
+        t = datetime.fromisoformat(t)
+    return t if t.tzinfo else t.replace(tzinfo=UTC)
+
+
 def new_id() -> str:
     """A random, URL-safe id."""
     return _secrets.token_urlsafe(9)  # unguessable, URL-safe
@@ -488,7 +587,7 @@ def ensure_main(store: Store, default: tuple[date, date] | None = None) -> dict:
         payload = dict(best[0]["payload"])
         payload.pop("periods", None)
     else:
-        s_, e_ = default or (date.today(), date.today())
+        s_, e_ = default or (clock.today(), clock.today())
         payload = make_payload(ScheduleInput.from_records({}), s_, e_, {"time_limit": 60, "makeup": True}, None)
     store.save(MAIN_ID, MAIN_NAME, payload)
     return store.get(MAIN_ID)
