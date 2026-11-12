@@ -2589,3 +2589,17 @@ def test_undoing_an_extra_on_published_dates_moves_nothing_else():
     b, a = set(map(tuple, before[key].values)), set(map(tuple, after[key].values))
     assert {x[:3] for x in b - a} == {(team, day, "5:30")}
     assert a <= b
+
+
+def test_program_runs_on_holidays_only_when_ticked():
+    """Programs skip the big holidays (New Year's Eve here) unless 'Runs on holidays' is ticked."""
+    from scheduler.data import clean
+    camp = {"program": "Winter Camp", "side": "Girls", "days": "Mon, Tue, Wed, Thu", "time": "9AM",
+            "courts": "1-2", "coaches": "", "dates": "12/28/2026-12/31/2026"}
+    for ticked in (False, True):
+        inp = _inp([{"team": "16-A", "age": 16}], locals_=[dict(camp, holidays="Yes" if ticked else "")])
+        inp.holidays_open = True
+        lps = clean(inp, date(2026, 12, 27), date(2027, 1, 2)).locals
+        days = {d for lp in lps for d in (date(2026, 12, 28) + timedelta(i) for i in range(4)) if lp.runs_on(d)}
+        assert date(2026, 12, 30) in days
+        assert (date(2026, 12, 31) in days) == ticked

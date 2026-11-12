@@ -37,7 +37,7 @@ def program_defaults(row: dict | None) -> dict:
     """Form values for a new program (row=None) or an existing Locals row."""
     start, cleaned = S.start, S.cleaned
     if row is None:
-        return {"name": "", "side": "Girls", "on_site": True, "days": [],
+        return {"name": "", "side": "Girls", "on_site": True, "days": [], "holidays": False,
                 "p_start": None, "p_end": None, "times": [], "courts": [], "coaches_sel": [], "coaches_new": "",
                 "tourns": []}
     yr = start.year
@@ -60,6 +60,7 @@ def program_defaults(row: dict | None) -> dict:
     return {
         "name": str(row.get("program", "")), "side": side,
         "on_site": on in ("", "yes", "y", "true", "1", "nan", "none"),
+        "holidays": str(row.get("holidays", "")).strip().lower() in ("yes", "y", "true", "1"),
         "days": [d for d in parse_days(row.get("days")) if d in DAYS],
         "p_start": min(a for a, _ in ranges) if ranges else None,
         "p_end": max(b for _, b in ranges) if ranges else None,
@@ -141,6 +142,10 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         p_start = c2.date_input("Start date", value=dv["p_start"], format="MM/DD/YYYY",
                                 help="The first day it runs. Every program needs a start and an end date.")
         p_end = c3.date_input("End date", value=dv["p_end"], format="MM/DD/YYYY", help="The last day it runs.")
+        holidays = st.checkbox("Runs on holidays", value=dv.get("holidays", False),
+                               help="Programs normally skip the big holidays (Thanksgiving, Christmas Eve and Day, "
+                                    "New Year's Eve and Day, July 4), which become open days. Tick this for a "
+                                    "camp or clinic that should run on them.")
         c1, c2 = st.columns(2)
         times = c1.multiselect("Time", SLOT_CHOICES, default=dv["times"], format_func=slot_label,
                                help="Pick every time it uses, on any day: 3:45 and 5:30 for a 3:45–7:20 program, "
@@ -176,7 +181,7 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         for i, lab in enumerate(submit_labels):
             if cols[i].form_submit_button(lab, type="primary" if i == 0 else "secondary", width="stretch"):
                 clicked = lab
-    return clicked, dict(name=name, side=side, on_site=on_site, days=days, p_start=p_start,
+    return clicked, dict(name=name, side=side, on_site=on_site, holidays=holidays, days=days, p_start=p_start,
                          p_end=p_end, times=times, courts=courts, coaches_sel=coaches_sel, coaches_new=coaches_new,
                          tourns=tourns)
 
@@ -201,6 +206,7 @@ def program_row(v: dict) -> tuple[list[str], dict]:
         "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(v["courts"])) or "TBD",
         "coaches": "; ".join(dict.fromkeys(v["coaches_sel"] + parse_names(v["coaches_new"]))),
         "on_site": "Yes" if v["on_site"] else "No",
+        "holidays": "Yes" if v.get("holidays") else "",
         "dates": (f"{v['p_start']:%m/%d/%Y}-{v['p_end']:%m/%d/%Y}" if v["p_start"] and v["p_end"] else ""),
     }
     return problems, row
@@ -342,7 +348,8 @@ def render():
                 row = {c: base.get(c, "") for c in COLUMNS["Locals"]}
                 row.update({"days": DAYS[a_day.weekday()], "time": ", ".join(sorted(a_times, key=SLOT_KEYS.index)),
                             "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(a_courts)) or "TBD",
-                            "dates": f"{a_day:%m/%d/%Y}", "skip": ""})
+                            "dates": f"{a_day:%m/%d/%Y}", "skip": "",
+                            "holidays": "Yes"})  # a session added for a day runs that day, holiday or not
                 if try_locals(pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True), "add that session"):
                     st.session_state.flash = done_msg(f"Added a {one_prog} session on {a_day:%a %b %-d}")
                     st.rerun()
