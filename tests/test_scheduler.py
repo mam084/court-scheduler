@@ -2692,3 +2692,25 @@ def test_club_today_is_pacific_not_server_utc(monkeypatch):
     assert clock.today().day == 12
     monkeypatch.setenv("COURT_TODAY", "2026-01-02")
     assert str(clock.today()) == "2026-01-02"
+
+
+def test_coach_in_two_places_at_once_is_found_from_the_schedule():
+    """A coach heading one team and assisting another at the same time (e.g. after a hand move)."""
+    from datetime import date
+
+    import pandas as pd
+
+    from scheduler.coach_load import two_places
+    d = date(2026, 12, 8)
+    a = pd.DataFrame([
+        {"kind": "Practice", "name": "14-Cierra", "date": d, "slot": "5:30", "slot_label": "5:30", "court": 3,
+         "coach": "Cierra"},
+        {"kind": "Practice", "name": "16-Edgar", "date": d, "slot": "5:30", "slot_label": "5:30", "court": 4,
+         "coach": "Edgar; Cierra"},
+        {"kind": "Practice", "name": "16-Edgar", "date": d, "slot": "5:30", "slot_label": "5:30", "court": 5,
+         "coach": "Edgar; Cierra"},     # a second court for the same practice isn't a clash
+        {"kind": "Practice", "name": "12-Ann", "date": d, "slot": "7:20", "slot_label": "7:20", "court": 3,
+         "coach": "Ann; Cierra"},       # a different time isn't either
+    ])
+    out = two_places(a)
+    assert [(x["coach"], [n for n, _ in x["what"]]) for x in out] == [("Cierra", ["14-Cierra", "16-Edgar"])]

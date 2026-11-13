@@ -5,10 +5,10 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from scheduler.labels import set_program_shorts
-
 from scheduler import privates as pv
+from scheduler.coach_load import two_places
 from scheduler.data import program_coach_conflicts, tournament_conflicts
+from scheduler.labels import set_program_shorts
 from scheduler.views import range_label, short_list_text
 from ui.common import cleaned_inputs, mine, plural, tournament_note
 from ui.flags import compute, flags_panel
@@ -206,6 +206,17 @@ def render():
                                  "who marked a no-date:**",
                                  [f"**{r.team}** · {r.issue.split(': ', 1)[-1]}: {r.detail}"
                                   for r in asst.itertuples()]))
+        # A coach on two things at once (two teams, or a team and a program they work), live from the
+        # schedule, so hand edits and imported weeks count too. A coach sees only their own.
+        clash = two_places(result.assignments)
+        if COACH_VIEW:
+            clash = [x for x in clash if MY_COACH and x["coach"] == MY_COACH]
+        if clash:
+            alerts.append(_alert(st.warning, "twoplaces", lambda n: f"**{plural(n, 'time')} a coach is "
+                                 "scheduled in two places at once:**",
+                                 [f"**{x['coach']}** · {x['date']:%a %b %-d}: "
+                                  + " and ".join(f"{nm} ({sl})" for nm, sl in x["what"]) for x in clash],
+                                 "" if COACH_VIEW else "Move one, or find someone to cover it."))
         if result.warnings and CAN:
             alerts.append(_alert(st.warning, "input", lambda n: f"**{plural(n, 'note')} about the input:**",
                                  list(result.warnings)))

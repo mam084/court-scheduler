@@ -20,7 +20,7 @@ from datetime import timedelta
 
 import pandas as pd
 
-from .config import SLOT_KEYS, SLOT_TIMES, back_to_back, court_short, week_start
+from .config import SLOT_KEYS, SLOT_TIMES, back_to_back, court_short, slots_overlap, week_start
 
 LATE = {"7:20", "7PM"}
 POINTS = {"High": 3, "Medium": 2, "Low": 1}
@@ -52,6 +52,30 @@ def sessions(assignments: pd.DataFrame) -> pd.DataFrame:
         out["o"] = out["slot"].map(lambda s: SLOT_KEYS.index(s) if s in SLOT_KEYS else 99)
         out = out.sort_values(["coach", "date", "o"]).drop(columns="o").reset_index(drop=True)
     return out
+
+
+def two_places(assignments: pd.DataFrame) -> list[dict]:
+    """Every coach (head or assistant) on two practices at once, or a practice and a program they work,
+    from the schedule as it is now (hand edits, imports and approved requests included):
+    [{coach, date, what: [(name, slot_label), ...]}], by date. Two programs at once are left out: those
+    are the Programs tab's coverage flags."""
+    ses = sessions(assignments)
+    if not len(ses):
+        return []
+    label = {}
+    if "slot_label" in assignments:
+        label = dict(zip(zip(assignments["name"], assignments["date"], assignments["slot"]),
+                         assignments["slot_label"]))
+    out = []
+    for (c, d), day in ses.groupby(["coach", "date"]):
+        rows = list(day.itertuples())
+        for i, a_ in enumerate(rows):
+            for b_ in rows[i + 1:]:
+                if "Practice" in (a_.kind, b_.kind) and a_.name != b_.name and slots_overlap(a_.slot, b_.slot):
+                    out.append({"coach": c, "date": d, "what": [
+                        (a_.name, label.get((a_.name, d, a_.slot), a_.slot)),
+                        (b_.name, label.get((b_.name, d, b_.slot), b_.slot))]})
+    return sorted(out, key=lambda x: (x["date"], x["coach"]))
 
 
 def _ct(cs) -> str:
