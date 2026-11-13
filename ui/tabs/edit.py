@@ -13,6 +13,7 @@ from scheduler.config import (
     PRACTICES_PER_WEEK,
     SLOT_KEYS,
     SLOTS,
+    WEEKDAY_DAYTIME,
     WEEKDAY_KEYS,
     WEEKDAYS,
     WEEKEND_KEYS,
@@ -29,8 +30,51 @@ TEAM_SLOT_CHOICES = WEEKDAY_KEYS + WEEKEND_KEYS
 
 
 def team_slot_label(k: str) -> str:
-    """A practice time for pickers, marking weekend blocks."""
-    return SLOTS[k] + (" (weekend)" if k in WEEKEND_KEYS else "")
+    """A practice time for pickers, marking daytime blocks on a regular weekday."""
+    return SLOTS[k]
+
+
+def _open_day(d):
+    """The open day (2-hour blocks) on date d, or None for a regular day."""
+    from ui.common import cleaned_inputs
+    cleaned = S.cleaned
+    if cleaned is None or not (S.start <= d <= S.end):
+        try:
+            cleaned = cleaned_inputs(S.inp, d, d)
+        except ValueError:
+            return None
+    return cleaned.weekends.get(d) if cleaned is not None else None
+
+
+def slot_choices(d) -> list[str]:
+    """The practice times that exist on date d: an open day's 2-hour blocks (weekends, school breaks),
+    or a regular weekday's 3:45 / 5:30 / 7:20 plus the daytime blocks a practice can be added at by
+    hand (a day off school). Nov 2026: coaches were picking 5:30 on open days."""
+    wk = _open_day(d)
+    if wk is not None:
+        return [k for k in WEEKEND_KEYS if k in wk.blocks] or list(WEEKEND_KEYS)
+    if d.weekday() >= 5:
+        return list(WEEKEND_KEYS)
+    return WEEKDAY_KEYS + WEEKDAY_DAYTIME
+
+
+def slot_label_on(d):
+    """Labels for slot_choices(d): daytime blocks on a regular weekday say so."""
+    regular = _open_day(d) is None and d.weekday() < 5
+    return lambda k: SLOTS[k] + (" (daytime, a day off school)" if regular and k in WEEKDAY_DAYTIME else "")
+
+
+def time_pick(label: str, d, key: str, current: str | None = None) -> str:
+    """A practice time for date d, offering only the times that day has, and saying so on an open day."""
+    choices = slot_choices(d)
+    wk = _open_day(d)
+    if wk is not None:
+        st.caption(f"**{d:%a %b %-d} is an open day**: practices are in 2-hour blocks "
+                   f"({', '.join(SLOTS[k] for k in choices)}), not the usual 3:45 / 5:30 / 7:20.")
+    if st.session_state.get(key) not in (None, *choices):
+        st.session_state.pop(key)  # a time from the date picked before, which this day doesn't have
+    default = current if current in choices else ("5:30" if "5:30" in choices else choices[0])
+    return st.selectbox(label, choices, format_func=slot_label_on(d), index=choices.index(default), key=key)
 
 
 
@@ -263,10 +307,7 @@ def render():
                         nd = st.date_input("New date", value=old["date"], format="MM/DD/YYYY", key=f"ed_nd_{pk}")
                         _not_scheduled(nd)
                         _tourney_warn(e_team, nd)
-                        ns = st.selectbox("New time", TEAM_SLOT_CHOICES, format_func=team_slot_label,
-                                          index=(TEAM_SLOT_CHOICES.index(old["slot"])
-                                                 if old["slot"] in TEAM_SLOT_CHOICES else 0),
-                                          key=f"ed_ns_{pk}")
+                        ns = time_pick("New time", nd, f"ed_ns_{pk}", old["slot"])
                         nc = court_pick(nd, ns, f"ed_nc_{pk}", e_team, (old["date"], old["slot"]))
                         same = nd == old["date"] and ns == old["slot"]
                         same_court = same and (nc == "Any" or str(nc) == str(old["court"]))
@@ -302,9 +343,7 @@ def render():
                     rk = f"rq_{e_team}_{od}_{old['slot']}"
                     if mode.startswith("Ask to move"):
                         nd = st.date_input("New date", value=od, format="MM/DD/YYYY", key=f"{rk}_nd")
-                        ns = st.selectbox("New time", TEAM_SLOT_CHOICES, format_func=team_slot_label,
-                                          index=TEAM_SLOT_CHOICES.index(old["slot"]) if old["slot"] in TEAM_SLOT_CHOICES
-                                          else 0, key=f"{rk}_ns")
+                        ns = time_pick("New time", nd, f"{rk}_ns", old["slot"])
                         _tourney_warn(e_team, nd)
                         dup = already_on(tp, nd, ns, skip=(od, old["slot"]))
                         if dup:
@@ -344,8 +383,7 @@ def render():
                                             "replace_pin": [e_team, od.isoformat(), old["slot"]]}, why)
             elif mode.startswith("Ask for an extra"):
                 ad = st.date_input("Date", value=start, format="MM/DD/YYYY", key=f"rq_x_d_{e_team}")
-                as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1,
-                                   key=f"rq_x_t_{e_team}")
+                as_ = time_pick("Time", ad, f"rq_x_t_{e_team}")
                 _tourney_warn(e_team, ad)
                 dup = already_on(tp, ad, as_)
                 if dup:
@@ -417,7 +455,7 @@ def render():
                 ad = st.date_input("Date", value=start, format="MM/DD/YYYY", key="ed_ad")
                 _not_scheduled(ad)
                 _tourney_warn(e_team, ad)
-                as_ = st.selectbox("Time", TEAM_SLOT_CHOICES, format_func=team_slot_label, index=1, key="ed_as")
+                as_ = time_pick("Time", ad, "ed_as")
                 dup_a = already_on(tp, ad, as_)
                 if dup_a:
                     st.error(f"{e_team} already practices then ({dup_a}). Pick another date or time.")

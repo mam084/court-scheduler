@@ -635,7 +635,14 @@ def test_open_days_form_opens_a_break_in_blocks(db):
     at.radio(key="nav").set_value("Edit practices").run()
     at.selectbox(key="ed_team").set_value(team).run()
     at.radio(key="ed_mode").set_value("Add a practice").run()
+    at.date_input(key="ed_ad").set_value(date(2026, 11, 3)).run()           # a regular Tuesday
+    assert "5:30–7:20" in at.selectbox(key="ed_as").options
+    at.selectbox(key="ed_as").set_value("7:20").run()
     at.date_input(key="ed_ad").set_value(date(2026, 11, 24)).run()
+    # An open day offers only its 2-hour blocks, and says so (no 3:45 / 5:30 / 7:20 to pick by mistake).
+    opts = at.selectbox(key="ed_as").options
+    assert not any(o.startswith(("3:45", "5:30", "7:20")) for o in opts) and "11 AM–1 PM" in opts
+    assert any("is an open day" in c.value for c in at.caption)
     at.selectbox(key="ed_as").set_value("11AM").run()
     next(b for b in at.button if b.label == "Add it").click().run()
     assert not at.exception, at.exception
