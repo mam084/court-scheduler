@@ -107,7 +107,7 @@ def court_pick(d, slot: str, key: str, team: str, moving: tuple | None = None, o
                           "Pick a court if it matters. Once dates are published a hand edit only uses open courts, "
                           "so nothing already there gets pushed out.")
     if free is not None and not only_open:
-        st.caption("Open then: " + (", ".join(f"Court {x}" for x in free) if free else "no courts"))
+        st.caption("Open then: " + (", ".join(f"Court {x}" for x in sorted(free)) if free else "no courts"))
     return c
 
 
@@ -122,7 +122,7 @@ def already_on(tp: pd.DataFrame, d, slot: str, skip: tuple | None = None) -> str
 
 def _placed(d, slot: str, court, team: str, moving: tuple | None = None):
     """The court a hand-placed practice goes on. On published dates nobody else moves for it: it
-    goes on the court picked if that's open (or the first open one for 'Any'), and stops with a
+    goes on the court picked if that's open (for 'Any', the best open court for its age: court_order), and stops with a
     message if the court picked is taken or nothing is open. Unpublished dates: as picked."""
     hit = dates.run_at(d)
     if hit is None or not dates.is_published(hit[0]):

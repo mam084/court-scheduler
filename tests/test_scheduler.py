@@ -2714,3 +2714,19 @@ def test_coach_in_two_places_at_once_is_found_from_the_schedule():
     ])
     out = two_places(a)
     assert [(x["coach"], [n for n, _ in x["what"]]) for x in out] == [("Cierra", ["14-Cierra", "16-Edgar"])]
+
+
+def test_any_open_court_goes_by_age(monkeypatch):
+    """'Any open court' on a hand-placed practice: 17s/18s take 1 then 7, 14s-16s 6 down to 3,
+    12s/13s 3 up to 6, and Court 2 only when everything else is taken."""
+    from types import SimpleNamespace
+
+    from ui import edits
+    from ui.state import _PageState as S
+    teams = [SimpleNamespace(name=n, age=a) for n, a in (("18 Black", 18), ("15-Olivia", 15), ("12-Ann", 12))]
+    monkeypatch.setattr(S, "__getattr__", lambda self, k: SimpleNamespace(teams=teams) if k == "cleaned"
+                        else (_ for _ in ()).throw(AttributeError(k)))
+    assert edits.court_order("18 Black")[:2] == [1, 7]
+    assert edits.court_order("15-Olivia")[:4] == [6, 5, 4, 3]
+    assert edits.court_order("12-Ann")[:4] == [3, 4, 5, 6]
+    assert all(edits.court_order(t)[-1] == 2 for t in ("18 Black", "15-Olivia", "12-Ann", "Unknown"))

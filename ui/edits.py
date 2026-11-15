@@ -198,7 +198,41 @@ def open_courts(d: date, slot: str, team: str = "", moving: tuple | None = None)
     mine_ = _team_court(team, *moving) if moving and team and moving[0] == d and moving[1] == slot else None
     if mine_ is not None and used.get(mine_) == team:
         used.pop(mine_)
-    return [c for c in COURTS if c not in used]
+    return [c for c in court_order(team) if c in COURTS and c not in used]
+
+
+# Which court "Any open court" gives a practice placed by hand, by age (Nov 15, 2026): 17s/18s get
+# Courts 1 and 7, 14s-16s Courts 6 down to 3, 12s/13s the lower courts (3 up to 6); Court 2 only
+# when every other court is taken.
+COURTS_BY_AGE = [
+    (17, [1, 7, 6, 5, 4, 3, 2]),
+    (14, [6, 5, 4, 3, 7, 1, 2]),
+    (0, [3, 4, 5, 6, 7, 1, 2]),
+]
+
+
+def court_order(team: str = "") -> list[int]:
+    """Courts in the order a hand-placed practice of `team` should get them (see COURTS_BY_AGE)."""
+    age = _team_age(team)
+    for lo, order in COURTS_BY_AGE:
+        if age is not None and age >= lo:
+            return order
+    return [1, 7, 3, 6, 5, 4, 2]  # no age known: the club's court ranks
+
+
+def _team_age(team: str) -> int | None:
+    if not team:
+        return None
+    cleaned = getattr(S, "cleaned", None)
+    for t in (cleaned.teams if cleaned is not None else []):
+        if t.name == team:
+            return int(t.age)
+    inp = getattr(S, "inp", None)
+    try:
+        hit = inp.teams[inp.teams["team"] == team]["age"]
+        return int(hit.iloc[0]) if len(hit) else None
+    except (AttributeError, KeyError, ValueError, TypeError):
+        return None
 
 
 def _team_court(team: str, d: date, slot: str) -> int | None:

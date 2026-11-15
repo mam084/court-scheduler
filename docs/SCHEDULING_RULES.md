@@ -3,7 +3,7 @@
 The one up-to-date list of the club's scheduling rules, as the app runs them now.
 Earlier decisions that were later changed are left out; see "Changed along the way"
 at the bottom for the reversals people may still remember.
-Last checked against the code: **Nov 12, 2026**.
+Last checked against the code: **Nov 15, 2026**.
 
 When the club changes a rule, update this file in the same commit as the code.
 The numbers live in `scheduler/config.py` (`WEIGHTS`, court ranks) and the hard
@@ -148,6 +148,18 @@ Court ranks, best first: **1 → 7 → 3 → 6 → 5 → 4 → 2.**
 - Then rank within the age group (16-1 above 16-2).
 - At the same rank, boys above girls (14-1 boys above 14-1 girls).
 - Teams can be moved above or below any other team on that tab.
+
+**Practices placed by hand or by an approved request with "Any open court"** don't go through
+the court step above. They take the first open court in this order:
+
+| Teams | Courts, first choice first |
+|-------|----------------------------|
+| 17s/18s | 1, 7, then 6, 5, 4, 3, then 2 |
+| 14s–16s | 6, 5, 4, 3, then 7, 1, then 2 |
+| 12s/13s | 3, 4, 5, 6, then 7, 1, then 2 |
+
+Court 2 is used only when every other court is taken. The order is set in
+`COURTS_BY_AGE` in `ui/edits.py`.
 
 The practice court is never used for team practices; it's for locals programs
 and privates.
