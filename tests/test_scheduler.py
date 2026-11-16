@@ -2730,3 +2730,19 @@ def test_any_open_court_goes_by_age(monkeypatch):
     assert edits.court_order("15-Olivia")[:4] == [6, 5, 4, 3]
     assert edits.court_order("12-Ann")[:4] == [3, 4, 5, 6]
     assert all(edits.court_order(t)[-1] == 2 for t in ("18 Black", "15-Olivia", "12-Ann", "Unknown"))
+
+
+def test_court_view_shows_same_named_local_tournaments_as_one():
+    from datetime import date
+
+    import pandas as pd
+
+    from scheduler.data import Tournament
+    from scheduler.views import court_grid_html
+    d = date(2026, 11, 21)   # a Saturday
+    a = Tournament("Winter Classic", "local", d, d, [], [1, 2], ["Ann"], program="Girls 12s", side="Girls")
+    b = Tournament("Winter Classic", "local", d, d, [], [5, 6], ["Bo"], program="Boys 14s", side="Boys")
+    out = court_grid_html(pd.DataFrame(columns=["day", "slot", "court", "name", "kind"]), {"Sat": d}, {},
+                          tournaments=[a, b])
+    assert out.count("cs-chip cs-tourn") == 1             # one tournament under the day's name...
+    assert "Ct 1-2, 5-6" in out or "Ct 1, 2, 5, 6" in out  # ...on both programs' courts

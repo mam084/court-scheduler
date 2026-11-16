@@ -1128,6 +1128,37 @@ def _team_level(name: str, value, age: int | None = None) -> tuple[int | None, s
     return None, None
 
 
+
+def _same_name(a: str, b: str) -> bool:
+    return " ".join(str(a).lower().split()) == " ".join(str(b).lower().split())
+
+
+def merge_local_tournaments(tournaments: list) -> list:
+    """Local tournaments with the same name (ignoring case and spacing) on overlapping days become one:
+    the days of both, every court and coach, and `programs` listing each program running it. Travel
+    tournaments are left as they are."""
+    from dataclasses import replace
+    out: list = []
+    for tn in tournaments:
+        if tn.kind != "local":
+            out.append(tn)
+            continue
+        hit = next((i for i, o in enumerate(out) if o.kind == "local" and _same_name(o.name, tn.name)
+                    and o.start <= tn.end and tn.start <= o.end), None)
+        if hit is None:
+            out.append(replace(tn, courts=list(tn.courts), coaches=list(tn.coaches)))
+            out[-1].programs = [tn.program] if getattr(tn, "program", "") else []
+            continue
+        o = out[hit]
+        progs = list(dict.fromkeys(o.programs + ([tn.program] if getattr(tn, "program", "") else [])))
+        out[hit] = replace(o, start=min(o.start, tn.start), end=max(o.end, tn.end),
+                           courts=sorted(set(o.courts) | set(tn.courts)),
+                           coaches=list(dict.fromkeys(list(o.coaches) + list(tn.coaches))),
+                           side=o.side if o.side == tn.side else "")
+        out[hit].programs = progs
+    return out
+
+
 @dataclass
 class Pin:
     """A practice placed by hand: always scheduled, on this court if given."""

@@ -29,6 +29,7 @@ from .config import (
     slots_overlap,
     week_start,
 )
+from .data import merge_local_tournaments
 
 # Age group -> (background, text).
 AGE_COLORS = {
@@ -382,7 +383,8 @@ def court_grid_html(
         d = (day_dates or {}).get(wd)
         return wd not in WEEKDAYS or bool(open_wk and d in open_wk)
 
-    tournaments = tournaments or []
+    # Same-named local tournaments on the same days (two programs hosting one) show as one (Nov 2026).
+    tournaments = merge_local_tournaments(tournaments or [])
     blocked, partial, on_day = {}, {}, {}
     for wd in cols:
         d = (day_dates or {}).get(wd)

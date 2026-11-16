@@ -34,6 +34,7 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 
 from .config import SLOT_TIMES, SLOTS, court_name, is_boys_club, team_is_boys
+from .data import merge_local_tournaments
 
 # The two club calendars (Nov 2026): boys (Seaside) teams go on the Seaside calendar and girls (SDVBC)
 # teams on the SDVBC one, decided by the team's side (its club, or a Black / Green name), not by
@@ -184,35 +185,6 @@ def _courts(courts) -> str:
         return court_name(nums[0])
     from .views import courts_label
     return "Courts " + courts_label(nums)
-
-
-def _same_name(a: str, b: str) -> bool:
-    return " ".join(str(a).lower().split()) == " ".join(str(b).lower().split())
-
-
-def merge_local_tournaments(tournaments: list) -> list:
-    """Local tournaments with the same name (ignoring case and spacing) on overlapping days become one:
-    the days of both, every court and coach, and `programs` listing each program running it. Travel
-    tournaments are left as they are."""
-    from dataclasses import replace
-    out: list = []
-    for tn in tournaments:
-        if tn.kind != "local":
-            out.append(tn)
-            continue
-        hit = next((i for i, o in enumerate(out) if o.kind == "local" and _same_name(o.name, tn.name)
-                    and o.start <= tn.end and tn.start <= o.end), None)
-        if hit is None:
-            out.append(replace(tn, courts=list(tn.courts), coaches=list(tn.coaches)))
-            out[-1].programs = [tn.program] if getattr(tn, "program", "") else []
-            continue
-        o = out[hit]
-        progs = list(dict.fromkeys(o.programs + ([tn.program] if getattr(tn, "program", "") else [])))
-        out[hit] = replace(o, start=min(o.start, tn.start), end=max(o.end, tn.end),
-                           courts=sorted(set(o.courts) | set(tn.courts)),
-                           coaches=list(dict.fromkeys(list(o.coaches) + list(tn.coaches))))
-        out[hit].programs = progs
-    return out
 
 
 def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournaments: list, teams: list,
