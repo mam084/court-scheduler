@@ -186,6 +186,35 @@ def _courts(courts) -> str:
     return "Courts " + courts_label(nums)
 
 
+def _same_name(a: str, b: str) -> bool:
+    return " ".join(str(a).lower().split()) == " ".join(str(b).lower().split())
+
+
+def merge_local_tournaments(tournaments: list) -> list:
+    """Local tournaments with the same name (ignoring case and spacing) on overlapping days become one:
+    the days of both, every court and coach, and `programs` listing each program running it. Travel
+    tournaments are left as they are."""
+    from dataclasses import replace
+    out: list = []
+    for tn in tournaments:
+        if tn.kind != "local":
+            out.append(tn)
+            continue
+        hit = next((i for i, o in enumerate(out) if o.kind == "local" and _same_name(o.name, tn.name)
+                    and o.start <= tn.end and tn.start <= o.end), None)
+        if hit is None:
+            out.append(replace(tn, courts=list(tn.courts), coaches=list(tn.coaches)))
+            out[-1].programs = [tn.program] if getattr(tn, "program", "") else []
+            continue
+        o = out[hit]
+        progs = list(dict.fromkeys(o.programs + ([tn.program] if getattr(tn, "program", "") else [])))
+        out[hit] = replace(o, start=min(o.start, tn.start), end=max(o.end, tn.end),
+                           courts=sorted(set(o.courts) | set(tn.courts)),
+                           coaches=list(dict.fromkeys(list(o.coaches) + list(tn.coaches))))
+        out[hit].programs = progs
+    return out
+
+
 def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournaments: list, teams: list,
                    links: dict, start: date, end: date, test_calendar: str = "", location: str = "",
                    programs_side: dict | None = None) -> tuple[list[Event], list[str]]:
@@ -243,8 +272,9 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             put("Program", name, f"program|{d}|{slot}|{name}", f"{name} · {ct}",
                 f"{SLOTS[slot]} · {ct}" + (f"\nCoaches: {coaches}" if coaches else ""), _dt(d, s0), _dt(d, s1))
 
-    # Tournaments: all-day events.
-    for tn in tournaments or []:
+    # Tournaments: all-day events. Local tournaments with the same name on overlapping days (two programs
+    # hosting one event) become one event (Nov 2026), on each of their programs' calendars.
+    for tn in merge_local_tournaments(tournaments or []):
         if tn.end < start or tn.start > end:
             continue
         s, e = tn.start, tn.end + timedelta(days=1)   # all-day end is exclusive
@@ -260,11 +290,15 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             title = f"{tn.name} (Local Tournament, Until 7 PM)"
             desc = f"Hosted here until 7 PM on {_courts(tn.courts)}." + (
                 f"\nWorking it: {', '.join(tn.coaches)}" if tn.coaches else "")
-            side = programs_side.get(getattr(tn, "program", ""), "")
-            for boys in ([side == "Boys"] if side else [False, True]):
+            progs = [p_ for p_ in getattr(tn, "programs", None) or [getattr(tn, "program", "")] if p_]
+            sides = {programs_side.get(p_, "") for p_ in progs} or {""}
+            boys_ = set()
+            for side in sides:
+                boys_ |= {side == "Boys"} if side else {False, True}
+            for boys in sorted(boys_):
                 put("Club", club_calendar(links, boys), key, title, desc, s, e, True)
-            if getattr(tn, "program", ""):
-                put("Program", tn.program, key, title, desc, s, e, True)
+            for p_ in progs:
+                put("Program", p_, key, title, desc, s, e, True)
     return out, sorted(missing)
 
 

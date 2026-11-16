@@ -293,3 +293,20 @@ def test_programs_link_by_their_printout_shorthand():
     assert any(e.calendar_id == "prog-bjs" for e in evs)
     rows = gcal.link_rows([], [], ["BJS"], None)
     assert ("Program", "BJS") in set(zip(rows["kind"], rows["name"]))
+
+
+def test_same_named_local_tournaments_on_a_day_are_one_event():
+    from scheduler.data import Tournament
+    d = date(2026, 11, 21)
+    a = Tournament("Winter Classic", "local", d, d, [], [1, 2], ["Ann"], program="Girls 12s", side="Girls")
+    b = Tournament("winter  classic", "local", d, d, [], [5, 6], ["Bo"], program="Boys 14s", side="Boys")
+    c = Tournament("Winter Classic", "local", date(2026, 12, 5), date(2026, 12, 5), [], [1], [], program="Girls 12s")
+    links = {("Club", gcal.GIRLS_CLUB): "girls", ("Club", gcal.BOYS_CLUB): "boys",
+             ("Program", "Girls 12s"): "g12", ("Program", "Boys 14s"): "b14"}
+    evs, _ = gcal.desired_events(None, None, [a, b, c], [], links, S, date(2026, 12, 31),
+                                 programs_side={"Girls 12s": "Girls", "Boys 14s": "Boys"})
+    nov = [e for e in evs if e.start == d]
+    assert sorted(e.calendar_id for e in nov) == ["b14", "boys", "g12", "girls"]  # one event per calendar
+    assert len({e.summary for e in nov}) == 1 and all("Courts 1" in e.description for e in nov)
+    assert all("5" in e.description and "Ann" in e.description and "Bo" in e.description for e in nov)
+    assert len([e for e in evs if e.start == date(2026, 12, 5)]) == 2               # another day stays its own
