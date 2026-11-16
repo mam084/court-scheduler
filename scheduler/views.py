@@ -46,9 +46,12 @@ DEFAULT_COLOR = ("#E6E9FF", "#2E3A9E")
 # so they never look like open court.
 LOCAL_COLORS = ("#FAEBCB", "#7A5410")
 OTHER_STRIPE = "#E0B45A"
-SIDE_COLORS = {"Girls": ("#DCE7FF", "#1E3A8A"), "Boys": ("#DDF3E2", "#1E5B2A")}
+SIDE_COLORS = {"Girls": ("#DCE7FF", "#1E3A8A"), "Boys": ("#DDF3E2", "#1E5B2A"),
+               # girls and boys together (Jump Start's 3:30, Nov 2026): half blue, half green
+               "Both": ("linear-gradient(135deg, #DCE7FF 50%, #DDF3E2 50%)", "#1F2A44")}
 # Club -> stripe color (matches the club sheet: red/pink girls, green boys).
 CLUB_STRIPES = ["#2563EB", "#2E7D32", "#D7263D", "#F29E4C", "#6A4C93"]  # girls blue, boys green
+SIDE_STRIPES = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1], "Both": CLUB_STRIPES[0]}
 
 CSS = """
 <style>
@@ -201,7 +204,7 @@ def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str
     is_local = r["kind"] == "Local"
     bg, fg = _colors(r)
     if is_local:
-        stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(r.get("side") or "", OTHER_STRIPE)
+        stripe = SIDE_STRIPES.get(r.get("side") or "", OTHER_STRIPE)
     else:
         stripe = stripes.get(r.get("club"), "#9AA3B2")
     cls = ["cs-chip"]
@@ -302,7 +305,7 @@ def _tourn_style(tn) -> str:
     if tn.kind != "local":
         return ""
     bg, fg = SIDE_COLORS.get(getattr(tn, "side", "") or "", LOCAL_COLORS)
-    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(getattr(tn, "side", "") or "", OTHER_STRIPE)
+    stripe = SIDE_STRIPES.get(getattr(tn, "side", "") or "", OTHER_STRIPE)
     return f' style="background:{bg};color:{fg};border-left-color:{stripe}"'
 
 
@@ -327,12 +330,12 @@ def _tourn_block(tns: list, weekend: bool = False) -> str:
     sides = {getattr(tn, "side", "") or "" for tn in tns}
     side = sides.pop() if len(sides) == 1 else ""
     bg, fg = SIDE_COLORS.get(side, LOCAL_COLORS)
-    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(side, OTHER_STRIPE)
+    stripe = SIDE_STRIPES.get(side, OTHER_STRIPE)
     head = f"Local tournament{'s' if len(tns) > 1 else ''} · until 7 PM"
     names = "".join(f'<div class="cs-tb-name">{html.escape(tn.label())}</div>' for tn in tns)
     title = "; ".join(f"{tn.name} (until 7 PM)" for tn in tns)
     return (f'<div class="cs-tblock{" cs-tblock-wk" if weekend else ""}" '
-            f'style="background-color:{bg};color:{fg};border-left-color:{stripe}" title="{html.escape(title)}">'
+            f'style="background:{bg};color:{fg};border-left-color:{stripe}" title="{html.escape(title)}">'
             f'<div class="cs-tb-head">{head}</div>{names}</div>')
 
 
@@ -559,7 +562,7 @@ def legend_html(ages, stripes: dict, show_moved: bool = False) -> str:
                          f'{html.escape(club)}</div>')
     items.append('<span class="cs-lbl">Programs</span>')
     for side, (bg, fg) in SIDE_COLORS.items():
-        col = CLUB_STRIPES[0] if side == "Girls" else CLUB_STRIPES[1]
+        col = CLUB_STRIPES[1] if side == "Boys" else CLUB_STRIPES[0]
         items.append(f'<div class="cs-chip cs-local" style="background:{bg};color:{fg};border-left-color:{col}">'
                      f'{side}</div>')
     bg, fg = LOCAL_COLORS

@@ -159,7 +159,10 @@ WEEKEND_SLOTS = {
 PROGRAM_SLOTS = {
     "3:30": "3:30–4:30",
     "4:30": "4:30–5:30",
+    "7:20s": "7:20–8:30",   # Jump Start Volley Up's Friday games (Nov 2026): takes its courts at 7:20
 }
+# Ways the program-only times can be written (the Locals 'time' column).
+PROGRAM_SLOT_ALIASES = {"7:20s": "7:20s", "7:20-8:30": "7:20s", "7:20–8:30": "7:20s", "720-830": "7:20s"}
 SLOT_OVERLAPS = {"3:30": {"3:45"}, "4:30": {"3:45"}}
 
 
@@ -175,7 +178,8 @@ def slots_overlap(a: str, b: str) -> bool:
 
 
 SLOTS = {"3:30": PROGRAM_SLOTS["3:30"], "3:45": WEEKDAY_SLOTS["3:45"], "4:30": PROGRAM_SLOTS["4:30"],
-         "5:30": WEEKDAY_SLOTS["5:30"], "7:20": WEEKDAY_SLOTS["7:20"], **WEEKEND_SLOTS}
+         "5:30": WEEKDAY_SLOTS["5:30"], "7:20": WEEKDAY_SLOTS["7:20"], "7:20s": PROGRAM_SLOTS["7:20s"],
+         **WEEKEND_SLOTS}
 SLOT_KEYS = list(SLOTS)  # display order within a day (put in time order below, once SLOT_TIMES exists)
 WEEKDAY_KEYS = list(WEEKDAY_SLOTS)        # team practice slots
 PROGRAM_KEYS = list(PROGRAM_SLOTS)
@@ -195,6 +199,7 @@ SLOT_TIMES = {
     "3:45": ((15, 45), (17, 30)),
     "5:30": ((17, 30), (19, 20)),
     "7:20": ((19, 20), (21, 10)),
+    "7:20s": ((19, 20), (20, 30)),
     "9AM": ((9, 0), (11, 0)),
     "11AM": ((11, 0), (13, 0)),
     "1PM": ((13, 0), (15, 0)),

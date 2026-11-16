@@ -70,6 +70,7 @@ from .config import (
     PRACTICE_COURT,
     PRACTICES_PER_WEEK,
     PROGRAM_KEYS,
+    PROGRAM_SLOT_ALIASES,
     SLOT_KEYS,
     WEEKDAY_DAYTIME,
     WEEKDAY_KEYS,
@@ -88,7 +89,7 @@ COLUMNS = {
     "Availability": ["who", "type", "days", "dates", "times", "note"],
     "Wishlist": ["team", "choice", "days", "times", "note"],
     "Locals": ["program", "side", "days", "time", "courts", "coaches", "on_site", "dates", "skip", "holidays",
-               "short"],
+               "short", "sessions", "tag", "meeting"],
     "Coaches": ["coach", "email", "phone", "note"],
     "Overrides": ["team", "action", "date", "days", "time", "court", "note"],
     "Weekends": ["date", "open", "courts", "group", "required", "note"],
@@ -586,6 +587,10 @@ def parse_times(value) -> set[str] | None:
         return None
     out: set[str] = set()
     for tok in parse_list(value, r"[;,/]|\s+or\s+|\s+and\s+"):
+        alias = PROGRAM_SLOT_ALIASES.get(tok.strip().lower().replace(" ", "").replace("pm", ""))
+        if alias:
+            out.add(alias)
+            continue
         span = _parse_span(tok)
         if span:
             out |= span
@@ -637,6 +642,7 @@ def _parse_span(tok: str) -> set[str] | None:
         return None
     a = next(iter(a))
     keys = WEEKDAY_KEYS if a in WEEKDAY_KEYS else PROGRAM_KEYS if a in PROGRAM_KEYS else WEEKEND_KEYS
+    keys = [k for k in keys if k not in PROGRAM_SLOT_ALIASES]  # 7:20-8:30 is only ever picked on its own
     try:
         b = parse_times(b_tok)
         b = next(iter(b)) if b and len(b) == 1 else None
@@ -706,6 +712,53 @@ def _one_date(tok: str, year, month_hint: int | None = None) -> date:
     if m and month_hint:
         return date(_year(year, month_hint), month_hint, int(m.group(1)))
     raise ValueError(f"Can't read date '{tok}'")
+
+
+def parse_sessions(value, year: int) -> list[tuple[str, date, date]]:
+    """'9: 11/2-11/30; 10: 12/1-12/31' -> [('9', Nov 2, Nov 30), ('10', Dec 1, Dec 31)], by date."""
+    if blank(value):
+        return []
+    out = []
+    for part in str(value).split(";"):
+        if not part.strip():
+            continue
+        if ":" not in part:
+            raise ValueError(f"session '{part.strip()}' should be like '9: 11/2/2026-11/30/2026'")
+        num, dates_ = part.split(":", 1)
+        rg = parse_date_ranges(dates_, year)
+        if not num.strip() or not rg:
+            raise ValueError(f"session '{part.strip()}' should be like '9: 11/2/2026-11/30/2026'")
+        out.append((num.strip().lstrip("#"), min(a for a, _ in rg), max(b for _, b in rg)))
+    return sorted(out, key=lambda x: x[1])
+
+
+def format_sessions(sessions) -> str:
+    """The Locals 'sessions' text for [(number, first, last)]."""
+    return "; ".join(f"{n}: {a:%m/%d/%Y}-{b:%m/%d/%Y}" for n, a, b in sessions)
+
+
+def session_meetings(locals_, closures=None) -> dict[tuple[int, date], tuple[str, int, int]]:
+    """For programs in sessions: (Locals row, date) -> (session number, which meeting, how many), e.g.
+    ('9', 4, 5) for the 4th of 5 practices of session 9. A row's days are counted together; cancelled
+    sessions, skipped holidays and closed days don't count."""
+    by_row: dict[int, list] = {}
+    for lp in locals_ or []:
+        if lp.sessions:
+            by_row.setdefault(lp.row, []).append(lp)
+    out = {}
+    closures = closures or {}
+    for row, lps in by_row.items():
+        for num, a, b in lps[0].sessions:
+            meet = [a + timedelta(days=k) for k in range((b - a).days + 1)]
+            meet = [d for d in meet if d not in closures and any(lp.runs_on(d) for lp in lps)]
+            for k, d in enumerate(meet, 1):
+                out[row, d] = (num, k, len(meet))
+    return out
+
+
+def session_title(lp, num: str, k: int, m: int) -> str:
+    """'Jump Start Session 9A (Practice 4 of 5)', 'Jump Start Volley Up Session 9 (Game 2 of 5)'."""
+    return f"{lp.name} Session {num}{lp.tag} ({lp.meeting or 'Practice'} {k} of {m})"
 
 
 def parse_date_ranges(value, year: int) -> list[tuple[date, date]]:
@@ -880,6 +933,13 @@ class LocalProgram:
     skip: set = field(default_factory=set)  # single dates it doesn't run (cancelled sessions)
     on_holidays: bool = False  # runs on the big holidays too (programs normally don't)
     short: str = ""  # shorthand for the printed sheets (Nov 2026); `name` (its full name) is used everywhere else
+    # Programs run in numbered sessions (Jump Start, Nov 2026): [(number, first day, last day)], and for
+    # this row (one time and side of the program) the tag after the number ("A", "B-BOYS") and what each
+    # meeting is called ("Practice", "Game"). Google Calendar: "Jump Start Session 9A (Practice 4 of 5)".
+    sessions: list = field(default_factory=list)
+    tag: str = ""
+    meeting: str = "Practice"
+    row: int = -1  # its row in the Locals table: a row's meetings are numbered together
 
     def runs_on(self, d: date) -> bool:
         if DAYS[d.weekday()] != self.day or d in self.skip:
@@ -899,6 +959,8 @@ class LocalProgram:
 def program_side(value, name: str = "") -> str:
     """'Girls'/'G'/'Boys'/'B' -> side; blank -> guessed from the name ('G HS L', 'Boys 14 League')."""
     v = "" if blank(value) else str(value).strip().lower()
+    if v.startswith("both") or v in ("g+b", "b+g", "girls & boys", "boys & girls"):
+        return "Both"  # girls and boys together (Jump Start's 3:30): counts as both sides
     if v.startswith("g"):
         return "Girls"
     if v.startswith("b"):
@@ -1309,6 +1371,9 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             on_site = True  # every program on the calendar uses our courts (the on_site column is ignored)
             staff = parse_names(r.get("coaches"))
             ranges = parse_date_ranges(r.get("dates"), year)
+            sessions = parse_sessions(r.get("sessions"), year)
+            if sessions:  # a program in sessions runs during its sessions
+                ranges = [(a, b) for _n, a, b in sessions]
             skip = {a + timedelta(days=k) for a, b in parse_date_ranges(r.get("skip"), year)
                     for k in range((b - a).days + 1)}
             # Any time on any day: a morning camp on weekdays (9AM-11AM), a 5:30 program on a Saturday...
@@ -1318,7 +1383,10 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                     locals_.append(LocalProgram(name, day, slot, courts, staff, on_site, ranges,
                                                 program_side(r.get("side"), name), skip,
                                                 yes(r.get("holidays")),
-                                                "" if blank(r.get("short")) else str(r["short"]).strip()))
+                                                "" if blank(r.get("short")) else str(r["short"]).strip(),
+                                                sessions, "" if blank(r.get("tag")) else str(r["tag"]).strip(),
+                                                ("" if blank(r.get("meeting")) else str(r["meeting"]).strip().title())
+                                                or "Practice", int(i)))
             if on_site and not courts:
                 warnings.append(f"Locals '{name}': courts not set yet, so it isn't blocking any courts "
                                 f"(its coaches are still blocked)")

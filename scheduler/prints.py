@@ -277,10 +277,10 @@ PRETTY_CSS = """
 
 
 def _pretty_chip(r) -> str:
-    from .views import CLUB_STRIPES, OTHER_STRIPE, _colors
+    from .views import OTHER_STRIPE, SIDE_STRIPES, _colors
     bg, fg = _colors(r)
     side = (r.get("side") or "") if r["kind"] == "Local" else _side(r)
-    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(side, OTHER_STRIPE)
+    stripe = SIDE_STRIPES.get(side, OTHER_STRIPE)
     if r["kind"] == "Local":
         ct = _text(r.get("courts_text")) or court_short(r["court"])
         sub = ""
@@ -301,13 +301,13 @@ def _pretty_chip(r) -> str:
 
 
 def _pretty_tourn(tn) -> str:
-    from .views import CLUB_STRIPES, LOCAL_COLORS, OTHER_STRIPE, SIDE_COLORS
+    from .views import LOCAL_COLORS, OTHER_STRIPE, SIDE_COLORS, SIDE_STRIPES
     if tn.kind == "travel":
         teams = f"<span>{html.escape(', '.join(short_label(t) for t in tn.teams))}</span>" if tn.teams else ""
         return f'<div class="pw-tn pw-travel">✈ {html.escape(tn.label())}{teams}</div>'
     side = getattr(tn, "side", "") or ""
     bg, fg = SIDE_COLORS.get(side, LOCAL_COLORS)
-    stripe = {"Girls": CLUB_STRIPES[0], "Boys": CLUB_STRIPES[1]}.get(side, OTHER_STRIPE)
+    stripe = SIDE_STRIPES.get(side, OTHER_STRIPE)
     return (f'<div class="pw-tn" style="background:{bg};color:{fg};border-left:4px solid {stripe}">'
             f'{html.escape(tn.label())}<span>Local tournament · Ct {courts_label(tn.courts)} until 7 PM</span></div>')
 

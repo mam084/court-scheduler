@@ -386,7 +386,7 @@ def _calendars():
         evs, missing = gcal.desired_events(pr_, loc_, cleaned.tournaments if extras else [], cleaned.teams,
                                            gcal.with_program_shorthand(links, cleaned.locals), d0, d1,
                                            test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
-                                           side_)
+                                           side_, cleaned.locals, cleaned.closures)
         if missing and not only_:
             st.caption(f"No calendar linked (skipped): {', '.join(missing[:12])}"
                        + (f" and {len(missing) - 12} more" if len(missing) > 12 else ""))
@@ -462,7 +462,7 @@ def _program_runs(client):
     tourns = [tn for tn in cleaned.tournaments if getattr(tn, "program", "") in pick]
     evs, _ = gcal.desired_events(None, rows, tourns, cleaned.teams, plinks, p0, p1,
                                  test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
-                                 {})
+                                 {}, cleaned.locals, cleaned.closures)
     evs = [e for e in evs if e.target.startswith("Program:")]
     cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else set(plinks.values()))
     ready = client is not None and (not test_mode or bool(test_cal.strip())) and bool(evs)

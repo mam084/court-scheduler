@@ -1166,7 +1166,7 @@ def solve(
                     "date": d, "day": DAYS[d.weekday()], "slot": s, "slot_label": SLOTS[s],
                     "court": c, "kind": "Local", "name": lp.name, "club": "", "age": None,
                     "coach": "; ".join(lp.coaches), "head": "; ".join(lp.coaches), "on_pattern": True,
-                    "side": lp.side,
+                    "side": lp.side, "prow": lp.row,
                 })
     assignments = pd.DataFrame(rows)
     if not assignments.empty:

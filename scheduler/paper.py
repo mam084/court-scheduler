@@ -16,7 +16,6 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from .labels import label_of, with_labels
 from .config import (
     COURTS,
     PRACTICE_COURT,
@@ -27,11 +26,13 @@ from .config import (
     blocked_by_local_tournament,
     week_start,
 )
+from .labels import label_of, with_labels
 
 HALVES = [([1, 2, 3, 4], "Courts 1–4"), ([5, 6, 7, PRACTICE_COURT], "Courts 5–7 & practice court")]
 
 # Time labels as the club writes them.
 LABEL = {"3:30": "3:30-4:30", "4:30": "4:30-5:30", "3:45": "3:45-5:30", "5:30": "5:30-7:20", "7:20": "7:20-9:10",
+         "7:20s": "7:20-8:30",
          "9AM": "9-11", "11AM": "11-1", "1PM": "1-3", "3PM": "3-5", "5PM": "5-7", "7PM": "7-9"}
 
 CSS = """<style>
@@ -120,6 +121,16 @@ def last_sessions(locals_) -> set[tuple[str, date]]:
     return set(last.items())
 
 
+def session_marks(locals_, closures=None) -> dict:
+    """(Locals row, date) -> what the sheet writes after a session program's name: ' #9' and a circled 1
+    on a session's first meeting, then the meeting's number circled (Jump Start, Nov 2026)."""
+    from .data import session_meetings
+    out = {}
+    for key, (num, k, _m) in session_meetings(locals_, closures).items():
+        out[key] = (f" #{html.escape(num)}" if k == 1 else "") + f'<span class="last">{k}</span>'
+    return out
+
+
 def only_tournaments(tourns) -> set[int]:
     """id() of each local tournament that is its program's one and only tournament (Nov 2026: the
     paper sheet marks it with a circled 1 and a circled ONLY). Tournaments without a program go by
@@ -137,7 +148,11 @@ ONLY_MARK = '<span class="last">1</span><span class="last">ONLY</span>'
 def _what(r, local_coaches: bool, last: set | frozenset = frozenset()) -> str:
     """One booking as it's written on the sheet; a program's last session gets LAST circled."""
     name = html.escape(label_of(r))
-    if r["kind"] == "Local" and (str(r["name"]), r["date"]) in last:
+    mark = r.get("pmark") if r["kind"] == "Local" else ""
+    mark = mark if isinstance(mark, str) else ""
+    if mark:  # a program in sessions: "JS #9 (1)" on a session's first day, then "JS (4)" (Nov 2026)
+        name += mark
+    elif r["kind"] == "Local" and (str(r["name"]), r["date"]) in last:
         name += '<span class="last">LAST</span>'
     bits = []
     if r["kind"] == "Local" and local_coaches:
@@ -185,7 +200,8 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
             by_slot["3:30"] = by_slot.pop("4:30")
             labels["3:30"] = "3:30-5:30"
         early = [s for s in ("3:30", "4:30") if s in by_slot]
-        slots = (early if early and "3:45" not in by_slot else ["3:45"]) + ["5:30", "7:20"]
+        late = "7:20s" if "7:20s" in by_slot and "7:20" not in by_slot else "7:20"  # Volley Up's 7:20-8:30
+        slots = (early if early and "3:45" not in by_slot else ["3:45"]) + ["5:30", late]
     slots += [s for s in by_slot if s not in slots]  # anything else booked
     items = []  # (minutes, html)
     tn_here = [tn for tn in tourns if tn.kind == "local" and c in tn.courts and tn.covers(d)]
@@ -271,6 +287,7 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
     one's last session gets LAST circled."""
     last = last_sessions(locals_)
     only = only_tournaments(tournaments)
+    marks = session_marks(locals_, closures)
     block_days = set(block_days or ())
     from .views import FIT_SCRIPT, PRINT_BUTTON
     closures = closures or {}
@@ -279,6 +296,11 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
     if len(a):  # one row per local per court is how locals are stored already; practices are one row each
         a = a.drop_duplicates(subset=["date", "slot", "court", "name"])
     a = with_labels(a)  # short team labels (S14-B, 16-E), as on the club's handwritten sheets
+    if marks and len(a):
+        from .gcal import program_row
+        a = a.copy()
+        a["pmark"] = [marks.get((program_row(r, locals_), r["date"]), "") if r["kind"] == "Local" else ""
+                      for r in a.to_dict("records")]
     need_by_week = {}
     if practice_counts is not None and len(practice_counts):
         need_by_week = practice_counts.groupby("week_of")["target"].sum().to_dict()

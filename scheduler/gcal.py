@@ -34,7 +34,7 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 
 from .config import SLOT_TIMES, SLOTS, court_name, is_boys_club, team_is_boys
-from .data import merge_local_tournaments
+from .data import merge_local_tournaments, session_title
 
 # The two club calendars (Nov 2026): boys (Seaside) teams go on the Seaside calendar and girls (SDVBC)
 # teams on the SDVBC one, decided by the team's side (its club, or a Black / Green name), not by
@@ -148,8 +148,9 @@ def _dt(d: date, hm: tuple[int, int]) -> datetime:
 
 def cap(text: str) -> str:
     """Every word starts with a capital, the rest left as typed ('14 black' -> '14 Black', 'court TBA'
-    -> 'Court TBA', 'SDVBC' stays): event titles on the Google Calendars (Nov 2026)."""
-    return " ".join(w[:1].upper() + w[1:] for w in str(text).split(" "))
+    -> 'Court TBA', 'SDVBC' stays): event titles on the Google Calendars (Nov 2026). 'of' stays small
+    after the first word ('Practice 4 of 5')."""
+    return " ".join(w if i and w == "of" else w[:1].upper() + w[1:] for i, w in enumerate(str(text).split(" ")))
 
 
 def program_sessions(locals_: list, closures, start: date, end: date, names=None) -> pd.DataFrame:
@@ -166,9 +167,22 @@ def program_sessions(locals_: list, closures, start: date, end: date, names=None
                 if (names is None or lp.name in names) and lp.on_site and lp.runs_on(d):
                     for c in (lp.courts or [None]):
                         rows.append({"date": d, "slot": lp.slot, "name": lp.name, "court": c,
-                                     "coach": "; ".join(lp.coaches)})
+                                     "coach": "; ".join(lp.coaches), "prow": lp.row})
         d += timedelta(days=1)
-    return pd.DataFrame(rows, columns=["date", "slot", "name", "court", "coach"])
+    return pd.DataFrame(rows, columns=["date", "slot", "name", "court", "coach", "prow"])
+
+
+def program_row(r: dict, locals_) -> int:
+    """The Locals row a program booking comes from: its 'prow', or (for schedules built before that was
+    kept) the row running that program then on that court. -1 if none."""
+    v = r.get("prow")
+    if v is not None and not (isinstance(v, float) and pd.isna(v)):
+        return int(v)
+    for lp in locals_ or []:
+        if lp.name == r.get("name") and lp.slot == r.get("slot") and lp.runs_on(r["date"]) \
+                and (pd.isna(r.get("court")) or r.get("court") in lp.courts):
+            return lp.row
+    return -1
 
 
 def program_span(locals_: list, names) -> tuple[date, date] | None:
@@ -189,7 +203,8 @@ def _courts(courts) -> str:
 
 def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournaments: list, teams: list,
                    links: dict, start: date, end: date, test_calendar: str = "", location: str = "",
-                   programs_side: dict | None = None) -> tuple[list[Event], list[str]]:
+                   programs_side: dict | None = None, locals_=None,
+                   closures=None) -> tuple[list[Event], list[str]]:
     """Every event the schedule should put on the linked calendars, and a
     note for each team / club / program that has events but no calendar."""
     out: list[Event] = []
@@ -232,16 +247,27 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             put("Club", club_for(r.name, getattr(r, "club", "") or ""), key, f"{r.name} · {ct}", desc,
                 _dt(r.date, s0), _dt(r.date, s1))
 
-    # Locals programs: one event per session, listing its courts.
+    # Locals programs: one event per session, listing its courts. A program in numbered sessions (Jump
+    # Start) gets one event per row (time and side) titled like 'Jump Start Session 9A (Practice 4 of 5)'.
     if local_rows is not None and len(local_rows):
-        lr = local_rows[(local_rows["date"] >= start) & (local_rows["date"] <= end)]
-        for (d, slot, name), g in lr.groupby(["date", "slot", "name"]):
+        from .data import session_meetings
+        lr = local_rows[(local_rows["date"] >= start) & (local_rows["date"] <= end)].copy()
+        meets = session_meetings(locals_, closures)
+        lp_of = {lp.row: lp for lp in locals_ or []}
+        lr["_tagged"] = [program_row(x, locals_) for x in lr.to_dict("records")] if len(lr) else []
+        lr["_tagged"] = [r if (r in lp_of and lp_of[r].sessions) else -1 for r in lr["_tagged"]]
+        for (d, slot, name, row), g in lr.groupby(["date", "slot", "name", "_tagged"]):
             if slot not in SLOT_TIMES:
                 continue
             (s0, s1) = SLOT_TIMES[slot]
             ct = _courts(g["court"])
             coaches = ", ".join(c.strip() for c in str(g["coach"].iloc[0] or "").split(";") if c.strip())
-            put("Program", name, f"program|{d}|{slot}|{name}", f"{name} · {ct}",
+            title, key = f"{name} · {ct}", f"program|{d}|{slot}|{name}"
+            if row != -1 and (row, d) in meets:
+                lp = lp_of[row]
+                title = session_title(lp, *meets[row, d])
+                key += f"|{lp.tag or row}"
+            put("Program", name, key, title,
                 f"{SLOTS[slot]} · {ct}" + (f"\nCoaches: {coaches}" if coaches else ""), _dt(d, s0), _dt(d, s1))
 
     # Tournaments: all-day events. Local tournaments with the same name on overlapping days (two programs
@@ -266,7 +292,7 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             sides = {programs_side.get(p_, "") for p_ in progs} or {""}
             boys_ = set()
             for side in sides:
-                boys_ |= {side == "Boys"} if side else {False, True}
+                boys_ |= {side == "Boys"} if side in ("Girls", "Boys") else {False, True}
             for boys in sorted(boys_):
                 put("Club", club_calendar(links, boys), key, title, desc, s, e, True)
             for p_ in progs:

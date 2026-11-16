@@ -10,10 +10,12 @@ from scheduler.config import ALL_COURTS, COURTS, DAYS, PROGRAM_KEYS, SLOT_KEYS, 
 from scheduler.data import (
     COLUMNS,
     blank,
+    format_sessions,
     parse_courts,
     parse_date_ranges,
     parse_days,
     parse_names,
+    parse_sessions,
     parse_times,
     program_side,
 )
@@ -27,10 +29,12 @@ SLOT_CHOICES = list(SLOT_KEYS)  # every time, in time order: any of them on any 
 
 def slot_label(k: str) -> str:
     """A program time for pickers: '5:30–7:20', '9–11 AM', '3:30–4:30 (JumpStart)'."""
-    return SLOTS[k] + (" (JumpStart)" if k in PROGRAM_KEYS else "")
+    return SLOTS[k] + (" (programs only)" if k in PROGRAM_KEYS else "")
 
 
-SIDES = ["Girls", "Boys", "Other"]
+SIDES = ["Girls", "Boys", "Both", "Other"]
+MEETINGS = ["Practice", "Game"]
+SESSION_COLS = ["session", "first_day", "last_day"]
 
 
 def program_defaults(row: dict | None, row_i=None) -> dict:
@@ -39,7 +43,7 @@ def program_defaults(row: dict | None, row_i=None) -> dict:
     if row is None:
         return {"name": "", "side": "Girls", "on_site": True, "days": [], "holidays": False,
                 "p_start": None, "p_end": None, "times": [], "courts": [], "coaches_sel": [], "coaches_new": "",
-                "tourns": []}
+                "tourns": [], "sessions": [], "tag": "", "meeting": "Practice"}
     yr = start.year
     try:
         ranges = parse_date_ranges(row.get("dates"), yr)
@@ -70,7 +74,17 @@ def program_defaults(row: dict | None, row_i=None) -> dict:
         "coaches_sel": [n for n in names if n in known],
         "coaches_new": ", ".join(n for n in names if n not in known),
         "tourns": program_tournaments(str(row.get("program", "")), row_i),
+        "sessions": _sessions_of(row, yr),
+        "tag": "" if blank(row.get("tag")) else str(row["tag"]).strip(),
+        "meeting": (str(row.get("meeting", "")).strip().title() if not blank(row.get("meeting")) else "") or "Practice",
     }
+
+
+def _sessions_of(row: dict, yr: int) -> list[dict]:
+    try:
+        return [{"session": n, "first_day": a, "last_day": b} for n, a, b in parse_sessions(row.get("sessions"), yr)]
+    except ValueError:
+        return []
 
 
 TOURN_COLS = ["date", "last_day", "name", "courts"]
@@ -193,6 +207,31 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
                                help="Programs normally skip the big holidays (Thanksgiving, Christmas Eve and Day, "
                                     "New Year's Eve and Day, July 4), which become open days. Tick this for a "
                                     "camp or clinic that should run on them.")
+        with st.expander("Numbered sessions (like Jump Start)", expanded=bool(dv.get("sessions"))):
+            st.caption("For a program that runs in numbered sessions. Its meetings are numbered within each "
+                       "session: Google Calendar shows **Jump Start Session 9A (Practice 4 of 5)**, and the paper "
+                       "sheet writes **JS #9** on a session's first day and circles the meeting number. The "
+                       "sessions are shared by every time of the program; the start and end dates above come "
+                       "from them.")
+            sdf = pd.DataFrame(dv.get("sessions") or [], columns=SESSION_COLS)
+            for c_ in ("first_day", "last_day"):
+                sdf[c_] = pd.to_datetime(sdf[c_], errors="coerce")
+            sdf["session"] = sdf["session"].astype(object).fillna("").astype(str)
+            sessions = st.data_editor(
+                sdf, num_rows="dynamic", hide_index=True, width="stretch", key=f"{key}_sessions",
+                column_config={"session": st.column_config.TextColumn("Session #", help="e.g. 9", required=True),
+                               "first_day": st.column_config.DateColumn("First day", format="MM/DD/YYYY",
+                                                                        required=True),
+                               "last_day": st.column_config.DateColumn("Last day", format="MM/DD/YYYY",
+                                                                       required=True)})
+            c1, c2 = st.columns(2)
+            tag = c1.text_input("This time's tag", value=dv.get("tag", ""), placeholder="e.g. A, B-GIRLS, B-BOYS",
+                                help="Goes right after the session number: A gives 'Session 9A', B-BOYS gives "
+                                     "'Session 9B-BOYS'. Blank: 'Session 9'.")
+            meeting = c2.radio("Each meeting is a", MEETINGS, horizontal=True,
+                               index=MEETINGS.index(dv.get("meeting", "Practice"))
+                               if dv.get("meeting", "Practice") in MEETINGS else 0,
+                               help="Practice 4 of 5, or Game 4 of 5 (Volley Up's Friday play days).")
         c1, c2 = st.columns(2)
         times = c1.multiselect("Time", SLOT_CHOICES, default=dv["times"], format_func=slot_label,
                                help="Pick every time it uses, on any day: 3:45 and 5:30 for a 3:45–7:20 program, "
@@ -230,7 +269,7 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
                 clicked = lab
     return clicked, dict(name=name, short=short, side=side, on_site=on_site, holidays=holidays, days=days, p_start=p_start,
                          p_end=p_end, times=times, courts=courts, coaches_sel=coaches_sel, coaches_new=coaches_new,
-                         tourns=tourns)
+                         tourns=tourns, sessions=sessions, tag=tag, meeting=meeting)
 
 
 def program_row(v: dict) -> tuple[list[str], dict]:
@@ -242,6 +281,23 @@ def program_row(v: dict) -> tuple[list[str], dict]:
         problems.append("Pick at least one day.")
     if not v["times"]:
         problems.append("Pick at least one timeslot.")
+    sess = []
+    sdf = v.get("sessions")
+    for r in (sdf.to_dict("records") if isinstance(sdf, pd.DataFrame) else []):
+        n = "" if blank(r.get("session")) else str(r["session"]).strip().lstrip("#")
+        if not n and pd.isna(r.get("first_day")) and pd.isna(r.get("last_day")):
+            continue
+        if not n or pd.isna(r.get("first_day")) or pd.isna(r.get("last_day")):
+            problems.append("Each session needs a number, a first day and a last day.")
+            continue
+        a, b = pd.Timestamp(r["first_day"]).date(), pd.Timestamp(r["last_day"]).date()
+        if b < a:
+            problems.append(f"Session {n}: the last day is before the first.")
+            continue
+        sess.append((n, a, b))
+    sess.sort(key=lambda x: x[1])
+    if sess:  # the program's dates are its sessions
+        v["p_start"], v["p_end"] = sess[0][1], max(b for _n, _a, b in sess)
     if v["p_start"] is None or v["p_end"] is None:
         problems.append("Give it a start date and an end date.")
     elif v["p_end"] < v["p_start"]:
@@ -256,8 +312,33 @@ def program_row(v: dict) -> tuple[list[str], dict]:
         "on_site": "Yes" if v["on_site"] else "No",
         "holidays": "Yes" if v.get("holidays") else "",
         "dates": (f"{v['p_start']:%m/%d/%Y}-{v['p_end']:%m/%d/%Y}" if v["p_start"] and v["p_end"] else ""),
+        "sessions": format_sessions(sess),
+        "tag": str(v.get("tag", "") or "").strip() if sess else "",
+        "meeting": (v.get("meeting") or "Practice") if sess else "",
     }
     return problems, row
+
+
+def share_sessions(locals_df: pd.DataFrame, row: dict, idx=None) -> pd.DataFrame:
+    """Every row of the program gets the saved row's sessions (and the dates they cover): the sessions
+    belong to the program, each row (time and side) only has its own tag. A new row (idx) added without
+    sessions to a program that has them takes the program's."""
+    nl = locals_df.copy()
+    for c_ in ("sessions", "tag", "meeting", "dates"):
+        if c_ not in nl.columns:
+            nl[c_] = ""
+        nl[c_] = nl[c_].astype(object)
+    same = nl["program"].astype(str).str.strip().str.lower() == row["program"].strip().lower()
+    if row.get("sessions"):
+        nl.loc[same, "sessions"] = row["sessions"]
+        nl.loc[same, "dates"] = row["dates"]
+    elif idx is not None:
+        have = [x for i, x in nl.loc[same, ["sessions", "dates"]].iterrows() if i != idx and not blank(x["sessions"])]
+        if have:
+            nl.at[idx, "sessions"], nl.at[idx, "dates"] = have[0]["sessions"], have[0]["dates"]
+            if blank(nl.at[idx, "meeting"]):
+                nl.at[idx, "meeting"] = "Practice"
+    return nl
 
 
 def try_locals(new_locals: pd.DataFrame, what: str, new_tourn: pd.DataFrame | None = None) -> bool:
@@ -344,7 +425,11 @@ def render():
                 else:
                     nl = inp.locals.copy()
                     for k, val in new_row.items():
+                        if k not in nl.columns:
+                            nl[k] = ""
+                        nl[k] = nl[k].astype(object)
                         nl.at[nl.index[pick], k] = val
+                    nl = share_sessions(nl, new_row)
                     if new_row["program"] != old_name and others:
                         # renaming one row of a program: keep its tournaments with the other rows
                         new_t = replace_program_tournaments("", t_rows) if t_rows else None
@@ -433,7 +518,9 @@ def render():
         t_problems, t_rows = tournament_rows(row["program"], v["tourns"])
         if problems or t_problems:
             st.error(" ".join(problems + t_problems))
-        elif try_locals(pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True), f"add {row['program']}",
+        elif try_locals(share_sessions(pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True), row,
+                                       len(inp.locals)),
+                        f"add {row['program']}",
                         replace_program_tournaments("", t_rows) if t_rows else None):
             when = f"{v['p_start']:%b %-d}–{v['p_end']:%b %-d}"
             st.session_state.flash = done_msg(f"Added {row['program']} ({row['days']}, {when})"
@@ -454,5 +541,6 @@ def render():
         view["side"] = [program_side(s, n) or "Other" for s, n in zip(view["side"], view["program"])]
         st.dataframe(view.rename(columns={"program": "Program", "short": "Printout", "side": "Side", "days": "Days", "time": "Time",
                                           "courts": "Courts", "coaches": "Coaches",
-                                          "dates": "Dates", "skip": "Cancelled"}),
+                                          "dates": "Dates", "skip": "Cancelled", "sessions": "Sessions",
+                                          "tag": "Tag", "meeting": "Meeting"}),
                      hide_index=True, width="stretch")
