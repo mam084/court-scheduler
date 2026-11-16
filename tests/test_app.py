@@ -1701,3 +1701,46 @@ def test_old_backups_thin_out(db, monkeypatch):
     db.save("main", "M", {"v": 1})   # makes a 13th copy and thins out
     left = db.backups("main")
     assert rec is not None and 3 < len(left) < 13
+
+
+def test_a_new_season_of_a_program_doesnt_pick_up_the_last_ones_tournaments(db):
+    """Two programs with the same name in different seasons (fall and spring): each one's form shows only
+    its own season's tournaments, and saving the spring one leaves the fall tournament alone."""
+    from streamlit.testing.v1 import AppTest
+
+    inp = simulate(4, 2, 2, seed=26, start=date(2026, 11, 1), end=date(2026, 11, 30))
+    prog = str(inp.locals.iloc[0]["program"])
+    inp.locals.at[inp.locals.index[0], "dates"] = "11/01/2026-11/30/2026"
+    spring = inp.locals.iloc[[0]].copy()
+    spring["dates"] = "12/28/2026-03/15/2027"
+    inp.locals = pd.concat([inp.locals, spring], ignore_index=True)
+    inp.tournaments = pd.concat([inp.tournaments, pd.DataFrame([
+        {"name": "Fall Local", "type": "Local", "start_date": "11/07/2026", "end_date": "11/07/2026",
+         "program": prog, "courts": "1-4"},
+        {"name": "Spring Local", "type": "Local", "start_date": "01/16/2027", "end_date": "01/16/2027",
+         "program": prog, "courts": "1-4"}])], ignore_index=True)
+    r = solve(inp, date(2026, 11, 1), date(2026, 11, 30), time_limit_s=10)
+    pid = new_id()
+    db.save(pid, "Seasons", make_payload(inp, date(2026, 11, 1), date(2026, 11, 30), {"time_limit": 10}, r))
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Programs").run()
+    pick = next(s for s in at.selectbox if s.key and s.key.startswith("edit_pick_"))
+    pick.set_value(next(o for o in pick.options if o.startswith(prog) and "12/28" in o)).run()
+    next(b for b in at.button if b.label == "Save changes").click().run()
+    assert not at.exception, at.exception
+    t = at.session_state["inp"].tournaments
+    assert sorted(t[t["program"] == prog]["name"]) == ["Fall Local", "Spring Local"]   # nothing lost or doubled
+    # Each season's form lists only its own tournament.
+    from types import SimpleNamespace
+
+    import ui.tabs.programs as P
+    page, P.S = P.S, SimpleNamespace(inp=at.session_state["inp"], start=date(2026, 11, 1))
+    try:
+        rows = P.S.inp.locals.index[P.S.inp.locals["program"] == prog].tolist()
+        fall = [x["name"] for x in P.program_tournaments(prog, rows[0])]
+        spring_ = [x["name"] for x in P.program_tournaments(prog, rows[-1])]
+    finally:
+        P.S = page
+    assert fall == ["Fall Local"] and spring_ == ["Spring Local"], (fall, spring_)

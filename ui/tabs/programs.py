@@ -33,8 +33,8 @@ def slot_label(k: str) -> str:
 SIDES = ["Girls", "Boys", "Other"]
 
 
-def program_defaults(row: dict | None) -> dict:
-    """Form values for a new program (row=None) or an existing Locals row."""
+def program_defaults(row: dict | None, row_i=None) -> dict:
+    """Form values for a new program (row=None) or an existing Locals row (row_i: its index)."""
     start, cleaned = S.start, S.cleaned
     if row is None:
         return {"name": "", "side": "Girls", "on_site": True, "days": [], "holidays": False,
@@ -69,27 +69,68 @@ def program_defaults(row: dict | None) -> dict:
         "times": [t for t in times if t in SLOT_CHOICES], "courts": courts,
         "coaches_sel": [n for n in names if n in known],
         "coaches_new": ", ".join(n for n in names if n not in known),
-        "tourns": program_tournaments(str(row.get("program", ""))),
+        "tourns": program_tournaments(str(row.get("program", "")), row_i),
     }
 
 
 TOURN_COLS = ["date", "last_day", "name", "courts"]
 
 
-def _is_program_tourn(df: pd.DataFrame, program: str) -> pd.Series:
-    """Local tournaments that belong to a program (its tournament dates)."""
+def _is_program_tourn(df: pd.DataFrame, program: str, row_i=None) -> pd.Series:
+    """Local tournaments that belong to a program (its tournament dates). Two programs can share a name
+    across seasons (a fall and a spring "Boys Locals"): then row_i, the program row in question, keeps
+    only the tournaments nearest its own season's dates, so a new season doesn't pick up (or, on save,
+    wipe out) the last one's tournaments (Nov 2026)."""
     if df.empty or not program:
         return pd.Series(False, index=df.index)
-    return (df["type"].astype(str).str.strip().str.lower().str.startswith("loc")
+    mask = (df["type"].astype(str).str.strip().str.lower().str.startswith("loc")
             & (df["program"].fillna("").astype(str).str.strip().str.lower() == program.strip().lower()))
+    seasons = _seasons(program)
+    if row_i is None or len(seasons) < 2:
+        return mask
+    mine = next((k for k, (rows, _a, _b) in enumerate(seasons) if row_i in rows), None)
+    if mine is None:
+        return mask
+    for i in df.index[mask]:
+        try:
+            d = parse_date_ranges(df.at[i, "start_date"], S.start.year)[0][0]
+        except (ValueError, IndexError):
+            continue
+        near = min(range(len(seasons)), key=lambda k: 0 if seasons[k][1] <= d <= seasons[k][2]
+                   else min(abs((d - seasons[k][1]).days), abs((d - seasons[k][2]).days)))
+        if near != mine:
+            mask.at[i] = False
+    return mask
 
 
-def program_tournaments(program: str) -> list[dict]:
+def _seasons(program: str) -> list[tuple[set, object, object]]:
+    """The rows of a program grouped into seasons: rows whose dates overlap are one season.
+    [(row indexes, first day, last day)], by date."""
+    loc = S.inp.locals
+    spans = []
+    for i, r in loc[loc["program"].astype(str).str.strip().str.lower() == program.strip().lower()].iterrows():
+        try:
+            rg = parse_date_ranges(r.get("dates"), S.start.year)
+        except ValueError:
+            rg = []
+        if rg:
+            spans.append(({i}, min(a for a, _ in rg), max(b for _, b in rg)))
+    spans.sort(key=lambda x: x[1])
+    out: list = []
+    for rows, a, b in spans:
+        if out and a <= out[-1][2]:
+            out[-1] = (out[-1][0] | rows, out[-1][1], max(out[-1][2], b))
+        else:
+            out.append((rows, a, b))
+    return out
+
+
+def program_tournaments(program: str, row_i=None) -> list[dict]:
     """A program's local tournaments, as rows for its form's tournament-dates table."""
     inp, start = S.inp, S.start
     tdf = inp.tournaments.fillna("")
     out = []
-    for _, r in tdf[_is_program_tourn(tdf, program)].iterrows():
+    for _, r in tdf[_is_program_tourn(tdf, program, row_i)].iterrows():
         try:
             a = parse_date_ranges(r["start_date"], start.year)[0][0]
             b = a if blank(r["end_date"]) else parse_date_ranges(r["end_date"], start.year)[0][0]
@@ -242,10 +283,10 @@ def try_locals(new_locals: pd.DataFrame, what: str, new_tourn: pd.DataFrame | No
     return True
 
 
-def replace_program_tournaments(old_name: str, new_rows: list[dict]) -> pd.DataFrame:
-    """The Tournaments table with a program's local tournaments swapped for new_rows."""
+def replace_program_tournaments(old_name: str, new_rows: list[dict], row_i=None) -> pd.DataFrame:
+    """The Tournaments table with a program's local tournaments (for row_i's season) swapped for new_rows."""
     inp = S.inp
-    keep = inp.tournaments[~_is_program_tourn(inp.tournaments, old_name)] if old_name else inp.tournaments
+    keep = inp.tournaments[~_is_program_tourn(inp.tournaments, old_name, row_i)] if old_name else inp.tournaments
     return pd.concat([keep, pd.DataFrame(new_rows, columns=COLUMNS["Tournaments"])], ignore_index=True)
 
 
@@ -278,14 +319,20 @@ def render():
         pick = labels.index(pick_lab) if pick_lab in labels else None
         if pick is not None:
             row = inp.locals.fillna("").iloc[pick].to_dict()
-            clicked, v = program_form(f"edit_program_{pick}_{ver}", program_defaults(row),
+            row_i = inp.locals.index[pick]
+            clicked, v = program_form(f"edit_program_{pick}_{ver}", program_defaults(row, row_i),
                                       ["Save changes", "Delete program"])
             old_name = str(row["program"]).strip()
             others = (inp.locals["program"].astype(str).str.strip() == old_name).sum() > 1  # other rows, same program
             if clicked == "Delete program":
-                n_t = 0 if others else int(_is_program_tourn(inp.tournaments, old_name).sum())
+                seasons = _seasons(old_name)
+                season_rows = next((rows for rows, _a, _b in seasons if row_i in rows), None) \
+                    if len(seasons) > 1 else None
+                same_season = len(season_rows) > 1 if season_rows is not None else others
+                # Other rows of the same program (and season) keep its tournaments.
+                n_t = 0 if same_season else int(_is_program_tourn(inp.tournaments, old_name, row_i).sum())
                 if try_locals(inp.locals.drop(inp.locals.index[pick]), "delete it",
-                              replace_program_tournaments(old_name, []) if n_t else None):
+                              replace_program_tournaments(old_name, [], row_i) if n_t else None):
                     st.session_state.flash = done_msg(f"Deleted {row['program']}"
                                                       + (f" and its {plural(n_t, 'tournament')}" if n_t else ""))
                     st.rerun()
@@ -302,7 +349,7 @@ def render():
                         # renaming one row of a program: keep its tournaments with the other rows
                         new_t = replace_program_tournaments("", t_rows) if t_rows else None
                     else:
-                        new_t = replace_program_tournaments(old_name, t_rows)
+                        new_t = replace_program_tournaments(old_name, t_rows, row_i)
                     if try_locals(nl, "save the changes", new_t):
                         st.session_state.flash = done_msg(f"Updated {new_row['program']}"
                                                           + (f" ({plural(len(t_rows), 'tournament date')})"
@@ -342,7 +389,8 @@ def render():
                         st.session_state.flash = done_msg(f"Cancelled {one_prog} on {c_day:%a %b %-d}")
                         st.rerun()
         else:
-            dv = program_defaults(inp.locals.fillna("").loc[rows_of[0]].to_dict() if rows_of else None)
+            dv = program_defaults(inp.locals.fillna("").loc[rows_of[0]].to_dict() if rows_of else None,
+                                  rows_of[0] if rows_of else None)
             c1, c2, c3 = st.columns(3)
             a_day = c1.date_input("Date", value=dv["p_start"] or start, format="MM/DD/YYYY",
                                   key=f"one_add_day_{ver}")
