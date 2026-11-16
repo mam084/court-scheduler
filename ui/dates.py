@@ -421,8 +421,13 @@ def _row_spans(rows: list[dict], cols: tuple[str, ...]) -> list[tuple[date, date
 
 def _changed(old: pd.DataFrame, new: pd.DataFrame) -> list[dict]:
     """Rows in one table but not the other (added, removed, or the before and after of an edit)."""
+    cols = list(dict.fromkeys(list(old.columns) + list(new.columns)))
+
     def recs(df):
-        df = df.dropna(how="all").fillna("").astype(str)
+        # Same columns on both sides: a column added to the table (e.g. 'sessions', Nov 2026) is blank in
+        # the rows that don't use it, and doesn't make every row look changed.
+        df = df.reindex(columns=cols).dropna(how="all").fillna("").astype(str)
+        df = df.replace({"nan": "", "None": "", "NaT": ""})
         return [tuple(sorted(r.items())) for r in df.to_dict("records")]
     a, b = recs(old), recs(new)
     diff = [x for x in a if x not in b] + [x for x in b if x not in a]

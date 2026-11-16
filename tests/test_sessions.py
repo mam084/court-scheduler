@@ -92,3 +92,14 @@ def test_program_form_sessions_are_shared_by_the_programs_rows():
     new = dict(other, tag="B-GIRLS")
     nl2 = share_sessions(pd.concat([nl, pd.DataFrame([new])], ignore_index=True), new, 2)
     assert nl2.at[2, "sessions"] == row["sessions"]       # a new time of the program takes its sessions
+
+
+def test_adding_a_program_only_counts_that_program_as_changed():
+    """A new column (sessions/tag/meeting) on the added row doesn't make every other program look changed,
+    which rebuilt every scheduled run of dates (Nov 16, 2026)."""
+    from ui.dates import _changed
+    old = pd.DataFrame([{"program": "Girls Locals", "days": "Tue", "time": "5:30", "dates": "11/1/2026-11/30/2026"}])
+    new = pd.concat([old, pd.DataFrame([{"program": "Open Gym", "days": "Sun", "time": "1PM",
+                                         "dates": "1/4/2027-3/1/2027", "sessions": "", "tag": "", "meeting": ""}])],
+                    ignore_index=True)
+    assert [r["program"] for r in _changed(old, new)] == ["Open Gym"]
