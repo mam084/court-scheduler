@@ -293,7 +293,7 @@ def _calendars():
         st.caption("Paste each calendar's ID (Google Calendar → the calendar's ⋮ → Settings and sharing → "
                    "Integrate calendar → Calendar ID). Leave a row blank to skip it.")
         clubs_ = sorted({t.club for t in cleaned.teams if t.club})
-        progs_ = sorted({lp.name for lp in cleaned.locals})
+        progs_ = sorted({(lp.short or lp.name) for lp in cleaned.locals})  # by printout shorthand when it has one
         rows_ = gcal.link_rows([t.name for t in cleaned.teams], clubs_, progs_, inp.calendars)
         if g_cals:
             st.markdown("**Link from your Google calendars**")
@@ -367,6 +367,7 @@ def _calendars():
                                placeholder="All linked calendars",
                                help="Pick one or a few to try a sync on just them (e.g. your own team's), "
                                     "leaving every other calendar alone.")
+        d0, d1, add_only, skip_taken = _push_options("cal", start, end)
         extras = st.toggle("Include programs and tournaments", value=False, key="cal_extras",
                            help="Off: only team practices are sent (to team and club calendars), and program "
                                 "calendars aren't touched. Programs and tournaments already on the calendars stay as "
@@ -382,8 +383,8 @@ def _calendars():
         if not extras:
             loc_ = loc_.iloc[0:0]
         side_ = {lp.name: lp.side for lp in cleaned.locals}
-        evs, missing = gcal.desired_events(pr_, loc_, cleaned.tournaments if extras else [], cleaned.teams, links,
-                                           start, end,
+        evs, missing = gcal.desired_events(pr_, loc_, cleaned.tournaments if extras else [], cleaned.teams,
+                                           gcal.with_program_shorthand(links, cleaned.locals), d0, d1,
                                            test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
                                            side_)
         if missing and not only_:
@@ -391,23 +392,21 @@ def _calendars():
                        + (f" and {len(missing) - 12} more" if len(missing) > 12 else ""))
         all_cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else set(links.values()))
         ready = client is not None and (not test_mode or bool(test_cal.strip())) and bool(evs)
-        sig_ = (ver_["id"], test_mode, test_cal.strip(), tuple(sorted(links.items())), tuple(only_), extras)
+        sig_ = (ver_["id"], test_mode, test_cal.strip(), tuple(sorted(links.items())), tuple(only_), extras,
+                d0, d1, add_only, skip_taken)
         if st.button(f"Preview changes ({plural(len(evs), 'event')})", disabled=not ready, key="cal_preview",
                      help=None if ready else
                      "Connect Google, link calendars (and a test calendar in test mode) first."):
             with st.spinner("Reading the calendars…"):
-                st.session_state.cal_plan = (sig_, gcal.plan(evs, client, start, end, all_cals,
-                                                             leave=() if extras else ("program", "tournament")))
+                st.session_state.cal_plan = (sig_, gcal.plan(evs, client, d0, d1, all_cals,
+                                                             leave=() if extras else ("program", "tournament"),
+                                                             add_only=add_only, skip_taken=skip_taken))
         held = st.session_state.get("cal_plan")
         if held and held[0] == sig_:
             plan_ = held[1]
             for err in plan_.errors:
                 st.error(err)
-            c = st.columns(4)
-            c[0].metric("Add", len(plan_.create))
-            c[1].metric("Update", len(plan_.update))
-            c[2].metric("Remove", len(plan_.delete))
-            c[3].metric("Already right", plan_.unchanged)
+            _plan_summary(plan_)
             if plan_.n_changes:
                 st.dataframe(plan_.table().rename(columns=str.title), hide_index=True, width="stretch",
                              height=min(400, 38 + 35 * plan_.n_changes))
@@ -416,7 +415,8 @@ def _calendars():
                     bar = st.progress(0.0)
                     n, errs = gcal.apply(plan_, client, progress=bar.progress)
                     store.log(VIEWER.log_name, "Google Calendar",
-                              f"{'test mode, ' if test_mode else ''}{ver_['label']}: {len(plan_.create)} added, "
+                              f"{'test mode, ' if test_mode else ''}{ver_['label']} ({d0:%b %-d}–{d1:%b %-d}"
+                              f"{', add only' if add_only else ''}): {len(plan_.create)} added, "
                               f"{len(plan_.update)} updated, {len(plan_.delete)} removed"
                               + (f", {len(errs)} failed" if errs else ""), st.session_state.project_id)
                     st.session_state.pop("cal_plan", None)
@@ -436,7 +436,7 @@ def _program_runs(client):
     calendar in one go, without scheduling those months. Only the picked programs' own calendars are
     read or changed, from the program's first day to its last; team and club calendars aren't touched."""
     inp, cleaned, store, VIEWER = S.inp, S.cleaned, S.store, S.VIEWER
-    links = gcal.links_from(inp.calendars)
+    links = gcal.with_program_shorthand(gcal.links_from(inp.calendars), cleaned.locals)
     progs = sorted({lp.name for lp in cleaned.locals if ("Program", lp.name) in links})
     st.markdown("**Programs over their whole run**")
     st.caption("Sends a program's sessions from its start date to its end date (from **Programs**), even past "
@@ -456,7 +456,7 @@ def _program_runs(client):
         st.warning("Those programs don't have start and end dates yet.")
     if not pick or span is None:
         return
-    p0, p1 = span
+    p0, p1, add_only, skip_taken = _push_options("cal_prog", *span)
     plinks = {k: v for k, v in links.items() if k == ("Program", k[1]) and k[1] in pick}
     rows = gcal.program_sessions(cleaned.locals, cleaned.closures, p0, p1, set(pick))
     tourns = [tn for tn in cleaned.tournaments if getattr(tn, "program", "") in pick]
@@ -466,22 +466,19 @@ def _program_runs(client):
     evs = [e for e in evs if e.target.startswith("Program:")]
     cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else set(plinks.values()))
     ready = client is not None and (not test_mode or bool(test_cal.strip())) and bool(evs)
-    sig_ = ("progs", tuple(pick), test_mode, test_cal.strip(), p0, p1, len(evs))
+    sig_ = ("progs", tuple(pick), test_mode, test_cal.strip(), p0, p1, len(evs), add_only, skip_taken)
     if st.button(f"Preview {p0:%b %-d, %Y} – {p1:%b %-d, %Y} ({plural(len(evs), 'event')})", disabled=not ready,
                  key="cal_prog_preview"):
         with st.spinner("Reading the calendars…"):
-            st.session_state.cal_prog_plan = (sig_, gcal.plan(evs, client, p0, p1, cals))
+            st.session_state.cal_prog_plan = (sig_, gcal.plan(evs, client, p0, p1, cals, add_only=add_only,
+                                                              skip_taken=skip_taken))
     held = st.session_state.get("cal_prog_plan")
     if not (held and held[0] == sig_):
         return
     plan_ = held[1]
     for err in plan_.errors:
         st.error(err)
-    c = st.columns(4)
-    c[0].metric("Add", len(plan_.create))
-    c[1].metric("Update", len(plan_.update))
-    c[2].metric("Remove", len(plan_.delete))
-    c[3].metric("Already right", plan_.unchanged)
+    _plan_summary(plan_)
     if not plan_.n_changes:
         if not plan_.errors:
             st.success("Those program calendars already match.")
@@ -502,6 +499,46 @@ def _program_runs(client):
         st.session_state.flash = f"Synced {plural(n, 'change')} to {where}."
         if not errs:
             st.rerun()
+
+
+def _push_options(key: str, lo, hi):
+    """Which dates to send, and whether to only add what's missing (Nov 2026). Returns
+    (from, to, add_only, skip_taken)."""
+    c1, c2 = st.columns(2)
+    d0 = c1.date_input("From", value=lo, min_value=lo, max_value=hi, format="MM/DD/YYYY", key=f"{key}_from")
+    d1 = c2.date_input("To", value=hi, min_value=lo, max_value=hi, format="MM/DD/YYYY", key=f"{key}_to")
+    if d1 < d0:
+        d0, d1 = d1, d0
+    add_only = st.toggle("Only add what's missing", value=True, key=f"{key}_addonly",
+                         help="Nothing already on the calendars is changed or removed, including events this app "
+                              "added before. Turn off to also update and remove the app's own events so they match "
+                              "the schedule (events added by hand are never touched either way).")
+    skip = st.toggle("Skip times that already have an event added by hand", value=True, disabled=not add_only,
+                     key=f"{key}_skip",
+                     help="Doesn't add an event where that calendar already has one, made by hand, starting at the "
+                          "same time (or the same day for all-day events), so nothing gets doubled up.")
+    return d0, d1, add_only, bool(skip and add_only)
+
+
+def _plan_summary(plan_):
+    """The numbers at the top of a preview."""
+    c = st.columns(4)
+    c[0].metric("Add", len(plan_.create))
+    if plan_.skipped or plan_.kept or not (plan_.update or plan_.delete):
+        c[1].metric("Already there", plan_.unchanged)
+        c[2].metric("Skipped (event there already)", len(plan_.skipped))
+        c[3].metric("Left as they are", plan_.kept,
+                    help="Events this app added before that differ from the schedule now. 'Only add what's "
+                         "missing' leaves them; turn it off to update or remove them.")
+    else:
+        c[1].metric("Update", len(plan_.update))
+        c[2].metric("Remove", len(plan_.delete))
+        c[3].metric("Already right", plan_.unchanged)
+    if plan_.skipped:
+        with st.expander(f"Skipped: {plural(len(plan_.skipped), 'event')} where the calendar has one already"):
+            st.dataframe(pd.DataFrame([{"Calendar": e.target, "When": gcal._when(e.start, e.all_day),
+                                        "Event": e.summary} for e in plan_.skipped]),
+                         hide_index=True, width="stretch")
 
 
 def _automatic(client):

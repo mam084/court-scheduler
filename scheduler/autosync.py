@@ -147,7 +147,7 @@ def sync(store: Store, secrets, teams: set[str] | None = None, who: str = "Autom
         side = {lp.name: lp.side for lp in cleaned.locals}
         evs, _missing = gcal.desired_events(
             practices, local_rows if opts["extras"] else None, cleaned.tournaments if opts["extras"] else [],
-            cleaned.teams, links, s_, e_, "", address, side)
+            cleaned.teams, gcal.with_program_shorthand(links, cleaned.locals), s_, e_, "", address, side)
         cals = set(links.values())
         if teams is not None:  # just these teams' calendars (and their whole club calendars)
             mine = {e.calendar_id for e in evs if e.target in {f"Team: {t}" for t in teams}}

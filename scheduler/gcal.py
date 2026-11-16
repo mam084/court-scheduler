@@ -94,6 +94,18 @@ def links_from(df: pd.DataFrame | None) -> dict[tuple[str, str], str]:
     return out
 
 
+def with_program_shorthand(links: dict, locals_) -> dict:
+    """Links plus each program's full name pointing at the calendar linked to its printout shorthand
+    (Nov 2026): programs are linked by shorthand ("BJS"), which stays the same from season to season
+    while the full name changes. A link made to a program's full name still wins."""
+    out = dict(links)
+    for lp in locals_ or []:
+        short = str(getattr(lp, "short", "") or "").strip()
+        if short and ("Program", short) in links and ("Program", lp.name) not in links:
+            out["Program", lp.name] = links["Program", short]
+    return out
+
+
 def link_rows(teams, clubs, programs, current: pd.DataFrame | None) -> pd.DataFrame:
     """One row per team, club and program (plus any linked before), with
     the calendar id filled in where it's known."""
@@ -331,6 +343,28 @@ class CalendarClient:
             if not token:
                 return out
 
+    def other_events(self, cid: str, start: date, end: date) -> list[dict]:
+        """Events on a calendar this app didn't make (added by hand), overlapping start..end."""
+        out, token = [], None
+        from zoneinfo import ZoneInfo
+        z = ZoneInfo(TZ)
+        params = {"singleEvents": "true", "maxResults": 2500,
+                  "timeMin": datetime(start.year, start.month, start.day, tzinfo=z).isoformat(),
+                  "timeMax": (datetime(end.year, end.month, end.day, tzinfo=z) + timedelta(days=1)).isoformat()}
+        while True:
+            if token:
+                params["pageToken"] = token
+            r = self._call("GET", self._url(cid, "events"), params=params)
+            if r.status_code in (403, 404):
+                raise PermissionError(f"can't read calendar {cid} (is it shared with {self.robot}?)")
+            r.raise_for_status()
+            data = r.json()
+            out += [e for e in data.get("items", []) if e.get("status") != "cancelled"
+                    and e.get("extendedProperties", {}).get("private", {}).get(TAG) != "1"]
+            token = data.get("nextPageToken")
+            if not token:
+                return out
+
     def create(self, cid: str, body: dict):
         r = self._call("POST", self._url(cid, "events"), json=body)
         if r.status_code == 409:   # the id was used before (an event since deleted): bring it back
@@ -357,6 +391,8 @@ class Plan:
     delete: list = field(default_factory=list)    # [(calendar_id, event id, summary, start)]
     unchanged: int = 0
     errors: list = field(default_factory=list)    # [str]: calendars that couldn't be read
+    skipped: list = field(default_factory=list)   # [Event]: not added, the calendar has an event then already
+    kept: int = 0                                 # add-only: app events left as they are though they differ
 
     @property
     def n_changes(self) -> int:
@@ -374,18 +410,55 @@ class Plan:
         return pd.DataFrame(rows, columns=["change", "calendar", "when", "event"])
 
 
+def _start_of(ev: dict) -> str:
+    """A calendar event's start as 'YYYY-MM-DD' (all-day) or 'YYYY-MM-DDTHH:MM' in the club's time zone."""
+    st_ = ev.get("start", {})
+    if st_.get("date"):
+        return st_["date"]
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.fromisoformat(str(st_.get("dateTime"))).astimezone(ZoneInfo(TZ)).strftime("%Y-%m-%dT%H:%M")
+    except (TypeError, ValueError):
+        return ""
+
+
 def _when(v, all_day=False) -> str:
     return f"{v:%a %b %-d}" if all_day or not isinstance(v, datetime) else f"{v:%a %b %-d, %-I:%M %p}"
 
 
 def plan(events: list[Event], client: CalendarClient, start: date, end: date,
-         calendars: list[str] | None = None, leave: tuple[str, ...] = ()) -> Plan:
+         calendars: list[str] | None = None, leave: tuple[str, ...] = (),
+         add_only: bool = False, skip_taken: bool = False) -> Plan:
     """What a sync would change. Only reads the calendars.
     calendars: every calendar the sync covers (so a calendar whose events
     all went away gets them removed), defaulting to those with events.
     leave: kinds of the app's own events this sync leaves alone, e.g. ("program", "tournament")
-    when those aren't being sent (they're never removed then)."""
+    when those aren't being sent (they're never removed then).
+    add_only: only add events that aren't there yet; nothing already on a calendar is changed or removed.
+    skip_taken (with add_only): don't add an event where the calendar already has one, made by hand,
+    starting at the same time (same day for all-day events), so nothing gets doubled up."""
     p = Plan()
+    if add_only:
+        p0 = plan(events, client, start, end, calendars, leave)
+        p.errors, p.unchanged = p0.errors, p0.unchanged + len(p0.update)
+        p.kept = len(p0.update) + len(p0.delete)
+        taken: dict[str, set] = {}
+        for e in p0.create:
+            if skip_taken and e.calendar_id not in taken:
+                try:
+                    taken[e.calendar_id] = {_start_of(ev) for ev in client.other_events(e.calendar_id, start, end)}
+                except Exception as ex:  # noqa: BLE001
+                    p.errors.append(f"{e.calendar_id}: {ex}")
+                    taken[e.calendar_id] = set()
+            if isinstance(e.start, datetime) and not e.all_day:
+                when = e.start.strftime("%Y-%m-%dT%H:%M")
+            else:
+                when = (e.start.date() if isinstance(e.start, datetime) else e.start).isoformat()
+            if skip_taken and when in taken.get(e.calendar_id, set()):
+                p.skipped.append(e)
+            else:
+                p.create.append(e)
+        return p
     by_cal = defaultdict(list)
     for e in events:
         by_cal[e.calendar_id].append(e)

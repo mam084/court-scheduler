@@ -20,6 +20,10 @@ class FakeGoogle(gcal.CalendarClient):
         return [e for e in self.cals.get(cid, {}).values()
                 if e.get("extendedProperties", {}).get("private", {}).get(gcal.TAG) == "1"]
 
+    def other_events(self, cid, start, end):
+        return [e for e in self.cals.get(cid, {}).values()
+                if e.get("extendedProperties", {}).get("private", {}).get(gcal.TAG) != "1"]
+
     def create(self, cid, body):
         self.cals.setdefault(cid, {})[body["id"]] = body
         self.writes += 1
@@ -254,3 +258,38 @@ def test_program_shorthand_only_on_printouts():
         assert evs[0].summary.startswith("Girls 14U Spring League ·")
     finally:
         labels.set_program_shorts([])
+
+
+def test_add_only_sends_just_whats_missing_and_skips_times_taken_by_hand():
+    from dataclasses import replace
+    inp, r, data, links = _club()
+    g = FakeGoogle()
+    evs, _ = _events(r, data, links)
+    team_evs = [e for e in evs if e.calendar_id.startswith("team-")]
+    first, second, third = team_evs[0], team_evs[1], team_evs[2]
+    gcal.apply(gcal.plan([first, second], g, S, E, [first.calendar_id, second.calendar_id]), g)
+    # The schedule changed for `second` since it was sent; a hand-made event sits where `third` would go.
+    changed = replace(second, summary=second.summary + " (moved)")
+    g.cals.setdefault(third.calendar_id, {})["hand1"] = {"id": "hand1", "summary": "Practice (by hand)",
+                                                           "start": {"dateTime": third.start.isoformat() + "-08:00"}}
+    want = [first, changed, third] + [e for e in team_evs[3:6]]
+    p = gcal.plan(want, g, S, E, sorted({e.calendar_id for e in want}), add_only=True, skip_taken=True)
+    assert not p.update and not p.delete                         # nothing already there changes
+    assert p.kept == 1 and p.unchanged >= 1
+    assert third in p.skipped and third not in p.create          # not doubled up on the hand-made one
+    assert {e.event_id for e in p.create} == {e.event_id for e in team_evs[3:6]} - {third.event_id}
+    p2 = gcal.plan(want, g, S, E, sorted({e.calendar_id for e in want}), add_only=True)
+    assert third in p2.create                                    # skipping is its own switch
+
+
+def test_programs_link_by_their_printout_shorthand():
+    inp, r, data, links = _club()
+    lp = data.locals[0]
+    lp.short = "BJS"
+    links = {k: v for k, v in links.items() if k != ("Program", lp.name)}
+    links["Program", "BJS"] = "prog-bjs"
+    evs, missing = _events(r, data, gcal.with_program_shorthand(links, data.locals))
+    assert f"Program: {lp.name}" not in missing
+    assert any(e.calendar_id == "prog-bjs" for e in evs)
+    rows = gcal.link_rows([], [], ["BJS"], None)
+    assert ("Program", "BJS") in set(zip(rows["kind"], rows["name"]))
