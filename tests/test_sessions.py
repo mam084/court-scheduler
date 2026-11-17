@@ -87,7 +87,9 @@ def test_program_form_sessions_are_shared_by_the_programs_rows():
     assert row["side"] == "Both" and row["tag"] == "A" and row["dates"] == "11/02/2026-12/31/2026"
     assert row["sessions"] == "9: 11/02/2026-11/27/2026; 10: 11/30/2026-12/31/2026"
     other = {"program": "Jump Start", "days": "Wed", "time": "4:30", "tag": "B-BOYS", "sessions": "", "dates": ""}
-    nl = share_sessions(pd.DataFrame([other, row]), row)
+    alone = share_sessions(pd.DataFrame([other, row]), row)          # by default only this time changes
+    assert list(alone["sessions"]) == ["", row["sessions"]]
+    nl = share_sessions(pd.DataFrame([other, row]), row, share=True)  # "also use for the other times"
     assert set(nl["sessions"]) == {row["sessions"]} and list(nl["tag"]) == ["B-BOYS", "A"]
     new = dict(other, tag="B-GIRLS")
     nl2 = share_sessions(pd.concat([nl, pd.DataFrame([new])], ignore_index=True), new, 2)

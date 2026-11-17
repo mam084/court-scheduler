@@ -210,9 +210,9 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         with st.expander("Numbered sessions (like Jump Start)", expanded=bool(dv.get("sessions"))):
             st.caption("For a program that runs in numbered sessions. Its meetings are numbered within each "
                        "session: Google Calendar shows **Jump Start Session 9A (Practice 4 of 5)**, and the paper "
-                       "sheet writes **JS #9** on a session's first day and circles the meeting number. The "
-                       "sessions are shared by every time of the program; the start and end dates above come "
-                       "from them.")
+                       "sheet writes **JS #9** on a session's first day and circles the meeting number. Each "
+                       "time of the program has its own sessions (a new time starts with the program's); the "
+                       "start and end dates above come from them.")
             sdf = pd.DataFrame(dv.get("sessions") or [], columns=SESSION_COLS)
             for c_ in ("first_day", "last_day"):
                 sdf[c_] = pd.to_datetime(sdf[c_], errors="coerce")
@@ -232,6 +232,10 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
                                index=MEETINGS.index(dv.get("meeting", "Practice"))
                                if dv.get("meeting", "Practice") in MEETINGS else 0,
                                help="Practice 4 of 5, or Game 4 of 5 (Volley Up's Friday play days).")
+            share = st.checkbox("Also use these sessions for this program's other times", value=False,
+                                key=f"{key}_share",
+                                help="Off: only this time (e.g. Volley Up's Monday practices) changes. On: every "
+                                     "time of the program gets these sessions (e.g. all three Jump Start times).")
         c1, c2 = st.columns(2)
         times = c1.multiselect("Time", SLOT_CHOICES, default=dv["times"], format_func=slot_label,
                                help="Pick every time it uses, on any day: 3:45 and 5:30 for a 3:45–7:20 program, "
@@ -269,7 +273,7 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
                 clicked = lab
     return clicked, dict(name=name, short=short, side=side, on_site=on_site, holidays=holidays, days=days, p_start=p_start,
                          p_end=p_end, times=times, courts=courts, coaches_sel=coaches_sel, coaches_new=coaches_new,
-                         tourns=tourns, sessions=sessions, tag=tag, meeting=meeting)
+                         tourns=tourns, sessions=sessions, tag=tag, meeting=meeting, share=share)
 
 
 def program_row(v: dict) -> tuple[list[str], dict]:
@@ -319,20 +323,20 @@ def program_row(v: dict) -> tuple[list[str], dict]:
     return problems, row
 
 
-def share_sessions(locals_df: pd.DataFrame, row: dict, idx=None) -> pd.DataFrame:
-    """Every row of the program gets the saved row's sessions (and the dates they cover): the sessions
-    belong to the program, each row (time and side) only has its own tag. A new row (idx) added without
-    sessions to a program that has them takes the program's."""
+def share_sessions(locals_df: pd.DataFrame, row: dict, idx=None, share: bool = False) -> pd.DataFrame:
+    """With share, every row of the program gets the saved row's sessions (and the dates they cover).
+    Without it only the row itself has them (Volley Up's Monday and Friday sessions differ, Nov 2026).
+    A new row (idx) added without sessions to a program that has them takes the program's."""
     nl = locals_df.copy()
     for c_ in ("sessions", "tag", "meeting", "dates"):
         if c_ not in nl.columns:
             nl[c_] = ""
         nl[c_] = nl[c_].astype(object)
     same = nl["program"].astype(str).str.strip().str.lower() == row["program"].strip().lower()
-    if row.get("sessions"):
+    if row.get("sessions") and share:
         nl.loc[same, "sessions"] = row["sessions"]
         nl.loc[same, "dates"] = row["dates"]
-    elif idx is not None:
+    elif not row.get("sessions") and idx is not None:
         have = [x for i, x in nl.loc[same, ["sessions", "dates"]].iterrows() if i != idx and not blank(x["sessions"])]
         if have:
             nl.at[idx, "sessions"], nl.at[idx, "dates"] = have[0]["sessions"], have[0]["dates"]
@@ -464,7 +468,7 @@ def render():
                             nl[k] = ""
                         nl[k] = nl[k].astype(object)
                         nl.at[nl.index[pick], k] = val
-                    nl = share_sessions(nl, new_row)
+                    nl = share_sessions(nl, new_row, share=bool(v.get("share")))
                     if new_row["program"] != old_name and others:
                         # renaming one row of a program: keep its tournaments with the other rows
                         new_t = replace_program_tournaments("", t_rows) if t_rows else None
@@ -554,7 +558,7 @@ def render():
         if problems or t_problems:
             st.error(" ".join(problems + t_problems))
         elif try_locals(share_sessions(pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True), row,
-                                       len(inp.locals)),
+                                       len(inp.locals), share=bool(v.get("share"))),
                         f"add {row['program']}",
                         replace_program_tournaments("", t_rows) if t_rows else None):
             when = f"{v['p_start']:%b %-d}–{v['p_end']:%b %-d}"
