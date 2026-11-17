@@ -240,7 +240,7 @@ def test_program_over_its_whole_run():
     links = {("Program", "Girls 14U Spring League"): "g14"}
     evs, _ = gcal.desired_events(None, rows, [], [], links, date(2026, 12, 22), date(2027, 3, 9))
     assert len(evs) == len(days) and all(e.calendar_id == "g14" for e in evs)
-    assert evs[0].summary == "Girls 14U Spring League · Courts 1-2"
+    assert evs[0].summary == "Girls 14U Spring League"   # no courts on program events (Nov 2026)
 
 
 def test_program_shorthand_only_on_printouts():
@@ -256,7 +256,7 @@ def test_program_shorthand_only_on_printouts():
         html_ = paper_weeks_html(a, date(2026, 11, 1), date(2026, 11, 7))
         assert "G14 SL" in html_ and "Girls 14U Spring League" not in html_
         evs, _ = gcal.desired_events(None, a, [], [], {("Program", "Girls 14U Spring League"): "g"}, S, E)
-        assert evs[0].summary.startswith("Girls 14U Spring League ·")
+        assert evs[0].summary == "Girls 14U Spring League"
     finally:
         labels.set_program_shorts([])
 
@@ -308,8 +308,8 @@ def test_same_named_local_tournaments_on_a_day_are_one_event():
                                  programs_side={"Girls 12s": "Girls", "Boys 14s": "Boys"})
     nov = [e for e in evs if e.start == d]
     assert sorted(e.calendar_id for e in nov) == ["b14", "boys", "g12", "girls"]  # one event per calendar
-    assert len({e.summary for e in nov}) == 1 and all("Courts 1" in e.description for e in nov)
-    assert all("5" in e.description and "Ann" in e.description and "Bo" in e.description for e in nov)
+    assert len({e.summary for e in nov}) == 1 and not any("Court" in e.description for e in nov)
+    assert all("Ann" in e.description and "Bo" in e.description for e in nov)
     assert len([e for e in evs if e.start == date(2026, 12, 5)]) == 2               # another day stays its own
 
 
@@ -328,3 +328,24 @@ def test_programs_go_on_their_sides_club_calendars():
           ("Girls Locals", "Boys Locals", "Jump Start", "Open Gym")}
     assert on == {"Girls Locals": ["Girls Locals", "sd"], "Boys Locals": ["Boys Locals", "ss"],
                   "Jump Start": ["Jump Start", "sd", "ss"], "Open Gym": ["Open Gym"]}
+
+
+def test_add_and_fix_updates_but_never_removes():
+    from dataclasses import replace
+    inp, r, data, links = _club()
+    g = FakeGoogle()
+    evs, _ = _events(r, data, links)
+    ev = [e for e in evs if e.calendar_id.startswith("team-")][:3]
+    gcal.apply(gcal.plan(ev, g, S, E, [e.calendar_id for e in ev]), g)
+    want = [replace(ev[0], summary="Changed"), ev[1]]                       # ev[2] isn't wanted any more
+    p = gcal.plan(want, g, S, E, sorted({e.calendar_id for e in ev}), no_delete=True)
+    assert len(p.update) == 1 and not p.delete and p.kept == 1
+
+
+def test_program_events_have_no_courts():
+    from scheduler.data import LocalProgram
+    d = date(2026, 11, 4)
+    lp = LocalProgram("Girls Locals", "Wed", "5:30", [1, 2], ["Ann"], True, [(S, E)], "Girls", row=0)
+    evs, _ = gcal.desired_events(None, gcal.program_sessions([lp], {}, d, d), [], [], {("Program", lp.name): "g"},
+                                 d, d, locals_=[lp])
+    assert [e.summary for e in evs] == ["Girls Locals"] and "Court" not in evs[0].description

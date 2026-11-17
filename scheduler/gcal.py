@@ -263,12 +263,13 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             (s0, s1) = SLOT_TIMES[slot]
             ct = _courts(g["court"])
             coaches = ", ".join(c.strip() for c in str(g["coach"].iloc[0] or "").split(";") if c.strip())
-            title, key = f"{name} · {ct}", f"program|{d}|{slot}|{name}"
+            # No courts on program events (Nov 2026): just the program, its time and coaches.
+            title, key = name, f"program|{d}|{slot}|{name}"
             if row != -1 and (row, d) in meets:
                 lp = lp_of[row]
                 title = session_title(lp, *meets[row, d])
                 key += f"|{lp.tag or row}"
-            desc = f"{SLOTS[slot]} · {ct}" + (f"\nCoaches: {coaches}" if coaches else "")
+            desc = SLOTS[slot] + (f"\nCoaches: {coaches}" if coaches else "")
             put("Program", name, key, title, desc, _dt(d, s0), _dt(d, s1))
             # ...and its side's club calendar (Nov 2026): girls on SDVBC's, boys on Seaside's, both on both.
             # Programs that are neither ("Other") stay on their own calendar only.
@@ -293,7 +294,7 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
                 put("Club", club, key, title, desc, s, e, True)
         else:
             title = f"{tn.name} (Local Tournament, Until 7 PM)"
-            desc = f"Hosted here until 7 PM on {_courts(tn.courts)}." + (
+            desc = "Hosted here until 7 PM." + (
                 f"\nWorking it: {', '.join(tn.coaches)}" if tn.coaches else "")
             progs = [p_ for p_ in getattr(tn, "programs", None) or [getattr(tn, "program", "")] if p_]
             sides = {programs_side.get(p_, "") for p_ in progs} or {""}
@@ -467,7 +468,7 @@ def _when(v, all_day=False) -> str:
 
 def plan(events: list[Event], client: CalendarClient, start: date, end: date,
          calendars: list[str] | None = None, leave: tuple[str, ...] = (),
-         add_only: bool = False, skip_taken: bool = False, keep=None) -> Plan:
+         add_only: bool = False, skip_taken: bool = False, keep=None, no_delete: bool = False) -> Plan:
     """What a sync would change. Only reads the calendars.
     calendars: every calendar the sync covers (so a calendar whose events
     all went away gets them removed), defaulting to those with events.
@@ -476,13 +477,17 @@ def plan(events: list[Event], client: CalendarClient, start: date, end: date,
     add_only: only add events that aren't there yet; nothing already on a calendar is changed or removed.
     skip_taken (with add_only): don't add an event where the calendar already has one, made by hand,
     starting at the same time (same day for all-day events), so nothing gets doubled up.
+    no_delete: add and update the app's events, but never remove one (skip_taken works here too).
     keep(key) -> True: an app event (by its key) that's left alone even if it isn't wanted any more,
     e.g. other programs' events on a club calendar when sending a few programs."""
     p = Plan()
-    if add_only:
+    if add_only or no_delete:
         p0 = plan(events, client, start, end, calendars, leave, keep=keep)
-        p.errors, p.unchanged = p0.errors, p0.unchanged + len(p0.update)
-        p.kept = len(p0.update) + len(p0.delete)
+        p.errors = p0.errors
+        if add_only:
+            p.unchanged, p.kept = p0.unchanged + len(p0.update), len(p0.update) + len(p0.delete)
+        else:
+            p.unchanged, p.update, p.kept = p0.unchanged, p0.update, len(p0.delete)
         taken: dict[str, set] = {}
         for e in p0.create:
             if skip_taken and e.calendar_id not in taken:
