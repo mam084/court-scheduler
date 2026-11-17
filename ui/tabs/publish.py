@@ -432,16 +432,20 @@ def _calendars():
 
 def _program_runs(client):
     """Programs over their whole run (Nov 2026): a spring league from late December to March goes on its
-    calendar in one go, without scheduling those months. Only the picked programs' own calendars are
-    read or changed, from the program's first day to its last; team and club calendars aren't touched."""
+    calendar in one go, without scheduling those months. The picked programs' own calendars and their
+    sides' club calendars (girls SDVBC, boys Seaside, both both) are read and changed, from the program's
+    first day to its last; on club calendars only the picked programs' events. Team calendars aren't
+    touched."""
     inp, cleaned, store, VIEWER = S.inp, S.cleaned, S.store, S.VIEWER
     links = gcal.with_program_shorthand(gcal.links_from(inp.calendars), cleaned.locals)
-    progs = sorted({lp.name for lp in cleaned.locals if ("Program", lp.name) in links})
+    progs = sorted({lp.name for lp in cleaned.locals if ("Program", lp.name) in links
+                    or lp.side in ("Girls", "Boys", "Both")})
     st.markdown("**Programs over their whole run**")
     st.caption("Sends a program's sessions from its start date to its end date (from **Programs**), even past "
-               "the dates you've scheduled: a spring league from December to March goes on in one go. Only the "
-               "program's own calendar is changed. Cancelled sessions, closures and the big holidays are left "
-               "off.")
+               "the dates you've scheduled: a spring league from December to March goes on in one go. It goes on "
+               "the program's own calendar and its side's club calendar (girls SDVBC, boys Seaside, both on "
+               "both); nothing else on the club calendars is touched. Cancelled sessions, closures and the big "
+               "holidays are left off.")
     if not progs:
         st.caption("Link a program's calendar under **Calendar links** first.")
         return
@@ -456,20 +460,30 @@ def _program_runs(client):
     if not pick or span is None:
         return
     p0, p1, add_only, skip_taken = _push_options("cal_prog", *span)
-    plinks = {k: v for k, v in links.items() if k == ("Program", k[1]) and k[1] in pick}
+    plinks = {k: v for k, v in links.items() if (k[0] == "Program" and k[1] in pick) or k[0] == "Club"}
     rows = gcal.program_sessions(cleaned.locals, cleaned.closures, p0, p1, set(pick))
     tourns = [tn for tn in cleaned.tournaments if getattr(tn, "program", "") in pick]
     evs, _ = gcal.desired_events(None, rows, tourns, cleaned.teams, plinks, p0, p1,
                                  test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
                                  {}, cleaned.locals, cleaned.closures)
-    evs = [e for e in evs if e.target.startswith("Program:")]
-    cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else set(plinks.values()))
+    # The programs' own calendars, and their sides' club calendars (girls SDVBC, boys Seaside, both both).
+    evs = [e for e in evs if e.target.startswith(("Program:", "Club:"))]
+    cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else
+                  {v for k, v in plinks.items() if k[0] == "Program"} | {e.calendar_id for e in evs})
+    t_names = {tn.name for tn in tourns}
+
+    def keep(key: str) -> bool:
+        """Everything else on a club calendar (practices, other programs) stays as it is."""
+        parts = key.split("|")
+        kind = parts[1] if len(parts) > 1 else ""
+        return not ((kind == "program" and len(parts) > 4 and parts[4] in pick)
+                    or (kind == "tournament" and len(parts) > 3 and parts[3] in t_names))
     ready = client is not None and (not test_mode or bool(test_cal.strip())) and bool(evs)
     sig_ = ("progs", tuple(pick), test_mode, test_cal.strip(), p0, p1, len(evs), add_only, skip_taken)
     if st.button(f"Preview {p0:%b %-d, %Y} – {p1:%b %-d, %Y} ({plural(len(evs), 'event')})", disabled=not ready,
                  key="cal_prog_preview"):
         with st.spinner("Reading the calendars…"):
-            st.session_state.cal_prog_plan = (sig_, gcal.plan(evs, client, p0, p1, cals, add_only=add_only,
+            st.session_state.cal_prog_plan = (sig_, gcal.plan(evs, client, p0, p1, cals, add_only=add_only, keep=keep,
                                                               skip_taken=skip_taken))
     held = st.session_state.get("cal_prog_plan")
     if not (held and held[0] == sig_):

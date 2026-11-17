@@ -90,7 +90,8 @@ def test_sync_adds_updates_removes_and_never_touches_hand_made_events():
     pr.loc[pr.index[0], "court"] = 2 if pr.iloc[0]["court"] != 2 else 3
     pr = pr.drop(pr.index[1])
     loc = r.assignments[r.assignments["kind"] == "Local"]
-    evs2, _ = gcal.desired_events(pr, loc, data.tournaments, data.teams, links, S, E)
+    evs2, _ = gcal.desired_events(pr, loc, data.tournaments, data.teams, links, S, E,
+                                  programs_side={lp.name: lp.side for lp in data.locals})
     p2 = gcal.plan(evs2, g, S, E, list(links.values()))
     assert len(p2.update) == 2 and len(p2.delete) == 2 and not p2.create   # team + club calendar each
     gcal.apply(p2, g)
@@ -310,3 +311,20 @@ def test_same_named_local_tournaments_on_a_day_are_one_event():
     assert len({e.summary for e in nov}) == 1 and all("Courts 1" in e.description for e in nov)
     assert all("5" in e.description and "Ann" in e.description and "Bo" in e.description for e in nov)
     assert len([e for e in evs if e.start == date(2026, 12, 5)]) == 2               # another day stays its own
+
+
+def test_programs_go_on_their_sides_club_calendars():
+    from scheduler.data import LocalProgram
+    d = date(2026, 11, 4)
+    lps = [LocalProgram("Girls Locals", "Wed", "5:30", [1], [], True, [(S, E)], "Girls", row=0),
+           LocalProgram("Boys Locals", "Wed", "5:30", [2], [], True, [(S, E)], "Boys", row=1),
+           LocalProgram("Jump Start", "Wed", "3:30", [3], [], True, [(S, E)], "Both", row=2),
+           LocalProgram("Open Gym", "Wed", "7:20", [4], [], True, [(S, E)], "", row=3)]
+    rows = gcal.program_sessions(lps, {}, d, d)
+    links = {("Club", gcal.GIRLS_CLUB): "sd", ("Club", gcal.BOYS_CLUB): "ss",
+             **{("Program", lp.name): lp.name for lp in lps}}
+    evs, _ = gcal.desired_events(None, rows, [], [], links, d, d, locals_=lps)
+    on = {name: sorted(e.calendar_id for e in evs if e.summary.startswith(name)) for name in
+          ("Girls Locals", "Boys Locals", "Jump Start", "Open Gym")}
+    assert on == {"Girls Locals": ["Girls Locals", "sd"], "Boys Locals": ["Boys Locals", "ss"],
+                  "Jump Start": ["Jump Start", "sd", "ss"], "Open Gym": ["Open Gym"]}

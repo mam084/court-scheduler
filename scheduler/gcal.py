@@ -254,8 +254,9 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
         lr = local_rows[(local_rows["date"] >= start) & (local_rows["date"] <= end)].copy()
         meets = session_meetings(locals_, closures)
         lp_of = {lp.row: lp for lp in locals_ or []}
-        lr["_tagged"] = [program_row(x, locals_) for x in lr.to_dict("records")] if len(lr) else []
-        lr["_tagged"] = [r if (r in lp_of and lp_of[r].sessions) else -1 for r in lr["_tagged"]]
+        rows_ = [program_row(x, locals_) for x in lr.to_dict("records")] if len(lr) else []
+        lr["_side"] = [lp_of[r].side if r in lp_of else programs_side.get(n, "") for r, n in zip(rows_, lr["name"])]
+        lr["_tagged"] = [r if (r in lp_of and lp_of[r].sessions) else -1 for r in rows_]
         for (d, slot, name, row), g in lr.groupby(["date", "slot", "name", "_tagged"]):
             if slot not in SLOT_TIMES:
                 continue
@@ -267,8 +268,14 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
                 lp = lp_of[row]
                 title = session_title(lp, *meets[row, d])
                 key += f"|{lp.tag or row}"
-            put("Program", name, key, title,
-                f"{SLOTS[slot]} · {ct}" + (f"\nCoaches: {coaches}" if coaches else ""), _dt(d, s0), _dt(d, s1))
+            desc = f"{SLOTS[slot]} · {ct}" + (f"\nCoaches: {coaches}" if coaches else "")
+            put("Program", name, key, title, desc, _dt(d, s0), _dt(d, s1))
+            # ...and its side's club calendar (Nov 2026): girls on SDVBC's, boys on Seaside's, both on both.
+            # Programs that are neither ("Other") stay on their own calendar only.
+            sides = set(g["_side"])
+            clubs_ = ({False} if sides & {"Girls", "Both"} else set()) | ({True} if sides & {"Boys", "Both"} else set())
+            for boys in sorted(clubs_):
+                put("Club", club_calendar(links, boys), key, title, desc, _dt(d, s0), _dt(d, s1))
 
     # Tournaments: all-day events. Local tournaments with the same name on overlapping days (two programs
     # hosting one event) become one event (Nov 2026), on each of their programs' calendars.
@@ -460,7 +467,7 @@ def _when(v, all_day=False) -> str:
 
 def plan(events: list[Event], client: CalendarClient, start: date, end: date,
          calendars: list[str] | None = None, leave: tuple[str, ...] = (),
-         add_only: bool = False, skip_taken: bool = False) -> Plan:
+         add_only: bool = False, skip_taken: bool = False, keep=None) -> Plan:
     """What a sync would change. Only reads the calendars.
     calendars: every calendar the sync covers (so a calendar whose events
     all went away gets them removed), defaulting to those with events.
@@ -468,10 +475,12 @@ def plan(events: list[Event], client: CalendarClient, start: date, end: date,
     when those aren't being sent (they're never removed then).
     add_only: only add events that aren't there yet; nothing already on a calendar is changed or removed.
     skip_taken (with add_only): don't add an event where the calendar already has one, made by hand,
-    starting at the same time (same day for all-day events), so nothing gets doubled up."""
+    starting at the same time (same day for all-day events), so nothing gets doubled up.
+    keep(key) -> True: an app event (by its key) that's left alone even if it isn't wanted any more,
+    e.g. other programs' events on a club calendar when sending a few programs."""
     p = Plan()
     if add_only:
-        p0 = plan(events, client, start, end, calendars, leave)
+        p0 = plan(events, client, start, end, calendars, leave, keep=keep)
         p.errors, p.unchanged = p0.errors, p0.unchanged + len(p0.update)
         p.kept = len(p0.update) + len(p0.delete)
         taken: dict[str, set] = {}
@@ -511,7 +520,7 @@ def plan(events: list[Event], client: CalendarClient, start: date, end: date,
         for eid, ev in have.items():
             key = ev.get("extendedProperties", {}).get("private", {}).get("cs_key", "")
             kind = key.split("|")[1] if key.count("|") >= 1 else ""  # 'Team: 16 Black|practice|...'
-            if eid not in want and not (leave and kind in leave):
+            if eid not in want and not (leave and kind in leave) and not (keep and keep(key)):
                 st_ = ev.get("start", {})
                 p.delete.append((cid, eid, ev.get("summary", ""),
                                  st_.get("date") or str(st_.get("dateTime", ""))[:16].replace("T", " ")))
