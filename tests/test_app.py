@@ -143,10 +143,13 @@ def test_program_edits_stay_on_programs_and_can_wait_for_rebuild(db):
     assert not at.exception
     assert at.session_state["nav"] == "Programs"
     assert at.session_state["result"] is before          # no rebuild yet
-    assert at.session_state["pending_rebuild"] == "Programs changed"
-    at.sidebar.button(key="as_go").click().run()
-    assert at.session_state["result"] is not before
-    assert "pending_rebuild" not in at.session_state
+    if "pending_rebuild" in at.session_state:            # the change lands on a practice: waits for a rebuild
+        assert at.session_state["pending_rebuild"] == "Programs changed"
+        at.sidebar.button(key="as_go").click().run()
+        assert at.session_state["result"] is not before
+        assert "pending_rebuild" not in at.session_state
+    else:                                                # it moves no practice: nothing to rebuild
+        assert any("nothing was rebuilt" in s.value for s in at.success)
 
 
 def test_court_view_opens_on_first_week(db):
@@ -377,8 +380,13 @@ def test_cancel_one_program_session(db):
     assert not at.exception, at.exception
     loc = at.session_state["inp"].locals
     assert loc[loc["program"] == prog]["skip"].astype(str).str.len().max() > 0
-    a = at.session_state["result"].assignments
-    assert not ((a["kind"] == "Local") & (a["name"] == prog) & (a["date"].map(lambda x: f"{x:%a %b %-d}") == d)).any()
+    # The calendar shows programs as they are now (cancelling a session moves no practice, so nothing
+    # is rebuilt): the session is gone from what the court view and prints use.
+    from scheduler import clean
+    day = next(x for x in pd.date_range("2026-11-01", "2026-11-30").date if f"{x:%a %b %-d}" == d)
+    lps = [lp for lp in clean(at.session_state["inp"], date(2026, 11, 1), date(2026, 11, 30)).locals
+           if lp.name == prog]
+    assert lps and not any(lp.runs_on(day) for lp in lps)
 
 
 # --------------------------------------------------------- roles (stage 1) --
@@ -1147,7 +1155,7 @@ def test_program_on_dates_not_scheduled_yet(db):
     next(d for d in reversed(at.date_input) if d.label == "End date").set_value(date(2026, 12, 23))
     next(b for b in at.button if b.label == "Add program").click().run()
     assert not at.exception, at.exception
-    assert any("nothing needed rebuilding" in s.value for s in at.success)
+    assert any("nothing needed rebuilding" in s.value or "nothing was rebuilt" in s.value for s in at.success)
     assert at.session_state["result"] is before
     at.radio(key="nav").set_value("Calendar").run()
     at.date_input(key="cal_pick").set_value(date(2026, 12, 21)).run()
@@ -1744,3 +1752,47 @@ def test_a_new_season_of_a_program_doesnt_pick_up_the_last_ones_tournaments(db):
     finally:
         P.S = page
     assert fall == ["Fall Local"] and spring_ == ["Spring Local"], (fall, spring_)
+
+
+def test_a_program_that_moves_no_practice_rebuilds_nothing(db):
+    """Open Gym on the practice court, with nobody practicing then: saving it (or editing it) leaves the
+    schedule as it is, and the calendar shows it right away. A program on a practice's court rebuilds."""
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.config import PRACTICE_COURT
+    from scheduler.data import ScheduleInput
+    from ui.tabs import programs as P
+    pid = _save(db, "Open gym", 61)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Programs").run()
+    before = at.session_state["result"]
+    inp = at.session_state["inp"]
+    row = {"program": "Open Gym", "side": "", "days": "Sun", "time": "1PM", "courts": "P", "coaches": "",
+           "dates": "11/01/2026-11/30/2026"}
+    new = pd.concat([inp.locals, pd.DataFrame([row])], ignore_index=True)
+    trial = ScheduleInput(inp.teams, inp.availability, inp.wishlist, new, inp.weekends, inp.closures,
+                          tournaments=inp.tournaments, coaches=inp.coaches, overrides=inp.overrides)
+
+    class _Page:  # what program_clashes reads off the page
+        start, end = date(2026, 11, 1), date(2026, 11, 30)
+    page, P.S = P.S, _Page
+    try:
+        D = P.dates   # the dates module programs.py uses (the app reloads its modules)
+        built = [(date(2026, 11, 1), date(2026, 11, 30), before.assignments, [], None)]
+        real, D._built_parts = D._built_parts, lambda: built
+        try:
+            assert P.program_clashes(trial, inp.locals, new) == []
+            a = before.assignments
+            p0 = a[(a["kind"] == "Practice")].iloc[0]
+            row2 = dict(row, days=p0["day"], time=p0["slot"], courts=str(int(p0["court"])),
+                        dates=f"{p0['date']:%m/%d/%Y}-{p0['date']:%m/%d/%Y}")
+            new2 = pd.concat([inp.locals, pd.DataFrame([row2])], ignore_index=True)
+            trial.locals = new2
+            assert P.program_clashes(trial, inp.locals, new2) == [(p0["date"], p0["date"])]
+        finally:
+            D._built_parts = real
+    finally:
+        P.S = page
+    assert PRACTICE_COURT not in set(a["court"])

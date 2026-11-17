@@ -260,19 +260,22 @@ def window(a: date, b: date, with_preview: bool = True) -> tuple[ScheduleResult 
             continue
         covered.update(mine)
         if len(asg):
-            frames.append(asg[asg["date"].isin(mine)])
+            # Programs come from the Programs tab as it is now (added below), not from when these dates
+            # were built: changing a program that moves no practice doesn't need a rebuild (Nov 2026).
+            frames.append(asg[asg["date"].isin(mine) & (asg["kind"] != "Local")])
         wk.update(d for d in wd if lo <= d <= hi)
         if pc is not None and len(pc) and "week_of" in pc.columns:
             pcs.append(pc[pc["week_of"].map(lambda w, lo=lo, hi=hi: week_start(lo) <= w <= hi)])
     wk.update(d for d in open_now(a, b) if d in covered)  # open days as they are now, built or not
     gaps = [d for d in _days(a, b) if d not in covered]
-    if gaps and with_preview:
-        pv = preview(min(gaps), max(gaps))
+    shown = set(covered) | (set(gaps) if with_preview else set())
+    if shown:
+        pv = preview(min(shown), max(shown))
         if pv is not None:
-            g = set(gaps)
             if len(pv.assignments):
-                frames.append(pv.assignments[pv.assignments["date"].isin(g)])
-            wk.update(d for d in pv.weekend_dates if d in g)
+                frames.append(pv.assignments[pv.assignments["date"].isin(shown)])
+            if with_preview:
+                wk.update(d for d in pv.weekend_dates if d in set(gaps))
     if not frames:
         return None, gaps
     a_all = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0].reset_index(drop=True)

@@ -257,7 +257,6 @@ def _calendars():
     start = S.start
     end = S.end
     published = S.published
-    result = S.result
     cleaned = S.cleaned
     st.subheader("Google Calendar")
     st.markdown("Push a published version to the club's Google Calendars: each team's calendar gets its practices "
@@ -379,7 +378,7 @@ def _calendars():
             links = {k: v for k, v in links.items() if f"{k[0]}: {k[1]}" in only_}
         ver_ = published[vi_]
         pr_ = practices_of(ver_)
-        loc_ = result.assignments[result.assignments["kind"] == "Local"]
+        loc_ = gcal.program_sessions(cleaned.locals, cleaned.closures, d0, d1)  # programs as they are now
         if not extras:
             loc_ = loc_.iloc[0:0]
         side_ = {lp.name: lp.side for lp in cleaned.locals}

@@ -357,11 +357,46 @@ def try_locals(new_locals: pd.DataFrame, what: str, new_tourn: pd.DataFrame | No
     if new_tourn is not None:
         inp.tournaments = new_tourn.reset_index(drop=True)
     st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
-    # Rebuild the scheduled dates the program runs on (none, if they aren't scheduled yet).
-    st.session_state.rebuild_note = dates.rebuild_for(
-        [(before_l, inp.locals, ("dates",)), (before_t, inp.tournaments, ("start_date", "end_date"))],
-        autobuild=st.session_state.get("prog_autobuild", True))
+    # Rebuild the scheduled dates where a changed program now takes a practice's court or coach. A
+    # program change that moves no practice (Open Gym on the practice court, a removed program, a new
+    # coach who isn't practicing then) rebuilds nothing; the calendar shows it right away (Nov 2026).
+    clash = program_clashes(trial, before_l, new_locals)
+    changes = [(before_t, inp.tournaments, ("start_date", "end_date"))]
+    if clash:
+        changes.append((pd.DataFrame(), pd.DataFrame([{"dates": f"{a:%m/%d/%Y}-{b:%m/%d/%Y}"} for a, b in clash]),
+                        ("dates",)))
+    if not clash and not dates._changed(before_t, inp.tournaments):
+        st.session_state.rebuild_note = "No practice is affected, so nothing was rebuilt."
+        return True
+    st.session_state.rebuild_note = dates.rebuild_for(changes, autobuild=st.session_state.get("prog_autobuild", True))
     return True
+
+
+def program_clashes(trial: ScheduleInput, before: pd.DataFrame, after: pd.DataFrame) -> list:
+    """Days a new or changed program now takes a court a practice is on, or a coach who's practicing
+    then, on dates already scheduled: [(day, day)]. Removed programs free things up and move nobody."""
+    from scheduler.config import slots_overlap
+    old_rows = {tuple(sorted((k, str(v)) for k, v in r.items() if not blank(v)))
+                for r in before.to_dict("records")}
+    changed = {i for i, r in after.iterrows()
+               if tuple(sorted((k, str(v)) for k, v in r.to_dict().items() if not blank(v))) not in old_rows}
+    if not changed:
+        return []
+    try:
+        lps = [lp for lp in clean(trial, S.start, S.end).locals if lp.row in changed]
+    except ValueError:
+        return []
+    days = set()
+    for _s, _e, asg, _wd, _pc in dates._built_parts():
+        if not len(asg):
+            continue
+        for r in asg[asg["kind"] == "Practice"].to_dict("records"):
+            staff = {c.strip() for c in str(r.get("coach") or "").split(";") if c.strip()}
+            for lp in lps:
+                if lp.runs_on(r["date"]) and slots_overlap(lp.slot, str(r["slot"])) and (
+                        (pd.notna(r.get("court")) and int(r["court"]) in lp.courts) or staff & set(lp.coaches)):
+                    days.add(r["date"])
+    return [(d, d) for d in sorted(days)]
 
 
 def replace_program_tournaments(old_name: str, new_rows: list[dict], row_i=None) -> pd.DataFrame:

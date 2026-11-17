@@ -111,6 +111,8 @@ def _published_ranges(payload: dict):
             cleaned = clean(inp, s_, e_)
         except ValueError:
             cleaned = None
+        if cleaned is not None:  # programs as they are now (a program edit doesn't rebuild the dates)
+            local_rows = gcal.program_sessions(cleaned.locals, cleaned.closures, s_, e_)
         yield s_, e_, practices, local_rows, cleaned
 
 
