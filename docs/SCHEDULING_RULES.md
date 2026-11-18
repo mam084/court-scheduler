@@ -188,6 +188,12 @@ and privates.
   waiting, and the admin can decline it with a note.
 - **Hand moves on unpublished dates** wait for the **Update schedule** button,
   so a batch of moves only rebuilds once.
+- **A practice's own hours** (Edit practices → Change a practice's hours, admins
+  only): a practice can start or end off its timeslot, like 9–11:30. It keeps
+  its court, and that court is held from other team practices in every other
+  timeslot those hours run into (no team gets it 11–1). Privates only have to
+  stay clear of the hours themselves (a private there at 11:30 is fine).
+  Setting hours rebuilds nothing; moving or removing the practice drops them.
 - **Coaches** only ask for changes. Scheduling admins approve them, and only
   admins change preferences and no-dates.
 - **Google Calendar:** each team's calendar gets its practices and tournaments.

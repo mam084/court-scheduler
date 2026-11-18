@@ -49,6 +49,12 @@ def apply_overrides(rows: list[dict], message: str, backup: pd.DataFrame | None 
     st.session_state.overrides_backup = inp.overrides.copy() if backup is None else backup
     base = without_pin(inp.overrides, *replace_pin) if replace_pin else inp.overrides
     inp.overrides = pd.concat([base, pd.DataFrame(rows)], ignore_index=True)
+    # A practice moved or removed loses its own hours (Nov 2026): they were for that date and time.
+    from scheduler.hours import without as _hours_without
+    for x in rows:
+        d_ = _row_date(x.get("date"))
+        if d_ and str(x.get("action", "")).strip().lower().startswith(("rem", "can")) and len(inp.hours):
+            inp.hours = _hours_without(inp.hours, x["team"], d_, str(x.get("time", "")).strip())
     st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
     if stage and _stage(rows, replace_pin, message):
         return  # (reruns)
@@ -155,6 +161,7 @@ def court_use(d: date, slot: str) -> dict | None:
     on fewer courts, a closure) read 'not open then'. None when d isn't scheduled yet (nothing to
     check against)."""
     from scheduler.config import COURTS, SLOT_TIMES, WEEKDAY_DAYTIME, WEEKDAY_KEYS, slots_overlap
+    from scheduler.hours import slot_span, span_of
     from ui import dates
     if dates.run_at(d) is None:
         return None
@@ -173,7 +180,11 @@ def court_use(d: date, slot: str) -> dict | None:
     r, _ = dates.window(d, d)
     if r is not None and len(r.assignments):
         for x in r.assignments.to_dict("records"):
-            if x["date"] != d or not slots_overlap(str(x["slot"]), slot) or pd.isna(x.get("court")):
+            if x["date"] != d or pd.isna(x.get("court")):
+                continue
+            sp, mine = span_of(x), slot_span(slot)
+            # a practice with its own hours holds its court for every timeslot they run into (Nov 2026)
+            if not (sp[0] < mine[1] and mine[0] < sp[1] if sp and mine else slots_overlap(str(x["slot"]), slot)):
                 continue
             used.setdefault(int(x["court"]), str(x["name"]))
     for tn in (cleaned.tournaments if cleaned is not None else []):

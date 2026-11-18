@@ -69,6 +69,7 @@ from .config import (
 )
 from .config import week_start as _week_start
 from .data import CleanInput, Rule, ScheduleInput, clean, span_text, tournament_conflicts
+from .hours import held_courts, with_hours
 
 
 @dataclass
@@ -170,6 +171,8 @@ def solve(
         base = [c for c in data.weekends[d].courts if c in COURTS] if d in data.weekends else COURTS
         blocked = {c for lp in locals_at(d, s) if lp.on_site for c in lp.courts}
         blocked |= {c for tn in local_tourn if tn.blocks(d, s) for c in tn.courts}
+        # A practice with its own hours running into this timeslot holds its court (Nov 2026)
+        blocked |= held_courts(data.hours, d, s)
         return [c for c in base if c not in blocked]
 
     def gym_company(d, s) -> bool:
@@ -1128,7 +1131,10 @@ def solve(
                     local_links.append(((t, d, s), cs))
     home_court, court_of, doubled = _assign_courts(
         booked, T, courts_on, weights, seed,
-        fixed_courts={k: c for k, c in pinned.items() if c is not None},
+        # a practice with its own hours keeps the court they were set on (it's the court they hold)
+        fixed_courts={**{(idx[h.team], h.day, h.slot): h.court for h in data.hours.values()
+                         if h.court is not None and h.team in idx},
+                      **{k: c for k, c in pinned.items() if c is not None}},
         fixed_home=fixed_home, prev_court=prev_court, net_of=net_of,
         coach_links=coach_links, local_links=local_links, ages={t: teams[t].age for t in T},
         boys_of={t: team_is_boys(teams[t].club, teams[t].name) for t in T})
@@ -1348,6 +1354,7 @@ def solve(
                        f"{', '.join(c['teams2'])} at {c['travel2']} at the same time")}]), issues],
             ignore_index=True)
     warnings = list(data.warnings) + [n["text"] for n in restore_notes if not n["kept"]]
+    assignments = with_hours(assignments, data.hours)  # practices with their own start and end
     return ScheduleResult(status_name, assignments, pattern, issues, metrics, warnings, start, end,
                           shown_weekends, data.tournaments, practice_counts, broken_rows, openings)
 

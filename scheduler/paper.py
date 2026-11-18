@@ -25,6 +25,7 @@ from .config import (
     WEEKEND_KEYS,
     week_start,
 )
+from .hours import clock, short_label, slot_span
 from .labels import label_of, with_labels
 
 HALVES = [([1, 2, 3, 4], "Courts 1–4"), ([5, 6, 7, PRACTICE_COURT], "Courts 5–7 & practice court")]
@@ -310,9 +311,14 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
     weekend = d.weekday() >= 5 or d in block_days
     here = book[(book["date"] == d) & (book["court"] == c)] if len(book) else book
     by_slot: dict[str, list] = {}
+    labels = dict(LABEL)
+    holds = []  # practices with their own hours: (start, end, who), Nov 2026
     for _, r in (here.iterrows() if len(here) else []):
         by_slot.setdefault(r["slot"], []).append(_what(r, local_coaches, last))
-    labels = dict(LABEL)
+        t0, t1 = r.get("t0"), r.get("t1")
+        if t0 is not None and t1 is not None and not (isinstance(t0, float) and pd.isna(t0)):
+            labels[r["slot"]] = short_label(int(t0), int(t1))  # its own hours on its line: "9-11:30"
+            holds.append((int(t0), int(t1), html.escape(label_of(r)), r["slot"]))
     if weekend:
         slots = list(WEEKEND_KEYS)
     else:
@@ -344,8 +350,13 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
             items.append((tn_min, f'<div class="tnb" style="min-height:{h}px"><small>{head}</small>{names}</div>'))
         slots = [x for x in slots if x not in gone]
     for s in slots:
-        items.append((_start(s), _slot(labels.get(s, s), " / ".join(by_slot.get(s, [])),
-                                       "wk" if weekend else "", two=not weekend)))
+        what = " / ".join(by_slot.get(s, []))
+        if not what and s in SLOT_TIMES:  # a practice running into this time from the one before
+            a_, b_ = slot_span(s)
+            over = [f"{who} until {clock(e_, False)}" for s0_, e_, who, own in holds
+                    if own != s and s0_ < b_ and a_ < e_]
+            what = f"<small>{' / '.join(over)}</small>" if over else ""
+        items.append((_start(s), _slot(labels.get(s, s), what, "wk" if weekend else "", two=not weekend)))
     for p in privs:
         if p["date"] == d and p["court"] == c:
             who = html.escape(p["coach"] + (f" · {p['team']}" if p.get("team") else ""))

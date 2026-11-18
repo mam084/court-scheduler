@@ -99,6 +99,9 @@ COLUMNS = {
                     "note", "ends"],
     "Privates": ["coach", "date", "time", "court", "type", "team", "player", "note"],
     "Calendars": ["kind", "name", "calendar_id"],
+    # Practices with their own start and end (Nov 2026, see hours.py): the practice (team, date, its
+    # timeslot), its court, and its hours.
+    "Hours": ["team", "date", "time", "court", "start", "end", "note"],
     # Coverage flags marked as sorted out (a coach double-booked at
     # tournaments or programs): the flag's id, how it was covered, by whom.
     "Resolved": ["flag", "note", "who", "at"],
@@ -106,7 +109,7 @@ COLUMNS = {
 ATTRS = {"Teams": "teams", "Availability": "availability", "Wishlist": "wishlist",
          "Locals": "locals", "Weekends": "weekends", "Closures": "closures", "Tournaments": "tournaments",
          "Coaches": "coaches", "Overrides": "overrides", "Privates": "privates",
-         "Calendars": "calendars", "Resolved": "resolved"}
+         "Calendars": "calendars", "Resolved": "resolved", "Hours": "hours"}
 
 
 def empty(sheet: str) -> pd.DataFrame:
@@ -146,6 +149,7 @@ class ScheduleInput:
     privates: pd.DataFrame = field(default_factory=lambda: empty("Privates"))
     calendars: pd.DataFrame = field(default_factory=lambda: empty("Calendars"))
     resolved: pd.DataFrame = field(default_factory=lambda: empty("Resolved"))
+    hours: pd.DataFrame = field(default_factory=lambda: empty("Hours"))
     # Weekends not on the Open days list are open (the club's rule). False: only listed ones are
     # (kept for tests written around a closed-unless-listed weekend).
     weekends_open: bool = True
@@ -224,9 +228,9 @@ class ScheduleInput:
 # Tables that belong to the club rather than to one spreadsheet: importing a
 # spreadsheet keeps them, and a new schedule starts with them.
 KEPT_TABLES = {"Locals": "locals", "Tournaments": "tournaments", "Privates": "privates", "Calendars": "calendars",
-               "Resolved": "resolved"}
+               "Resolved": "resolved", "Hours": "hours"}
 _KEPT_LABEL = {"Locals": "programs", "Tournaments": "tournaments", "Privates": "privates",
-               "Calendars": "calendar links", "Resolved": "resolved flags"}
+               "Calendars": "calendar links", "Resolved": "resolved flags", "Hours": "practice hours"}
 
 
 def keep_programs(new: ScheduleInput, old: ScheduleInput | None, use_file: bool = False) -> list[str]:
@@ -1293,6 +1297,7 @@ class CleanInput:
     usual_court: dict = field(default_factory=dict)          # team -> court
     makeups: dict = field(default_factory=dict)              # (team, week's Sunday) -> extra practices that week
     hand_weeks: set = field(default_factory=set)             # week's Sunday -> only hand-placed practices that week
+    hours: dict = field(default_factory=dict)                # (team, date, slot) -> hours.Hours (own start/end)
 
     @property
     def coaches(self) -> list[str]:
@@ -1704,8 +1709,10 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
     if errors:
         raise ValueError("Please fix these in the input:\n- " + "\n- ".join(errors))
 
+    from .hours import from_table
     return CleanInput(teams, rules, wishes, locals_, weekends, closures, warnings, tournaments, roster,
-                      pins, cancels, usual, usual_court, makeups, hand_weeks)
+                      pins, cancels, usual, usual_court, makeups, hand_weeks,
+                      from_table(getattr(inp, "hours", None)))
 
 
 def rename_team(inp: ScheduleInput, old: str, new: str) -> None:
@@ -1717,7 +1724,7 @@ def rename_team(inp: ScheduleInput, old: str, new: str) -> None:
         return not blank(v) and _norm_name(v) == o
 
     for attr, col in (("teams", "team"), ("availability", "who"), ("wishlist", "team"), ("overrides", "team"),
-                      ("privates", "team")):
+                      ("privates", "team"), ("hours", "team")):
         df = getattr(inp, attr, None)
         if isinstance(df, pd.DataFrame) and col in df.columns and len(df):
             df = df.copy().astype(object)

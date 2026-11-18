@@ -60,14 +60,17 @@ def decision(req: dict, status: str, by: str, note: str = "", link: str = "") ->
 def coach_rows(practices: pd.DataFrame, teams: list[str]) -> pd.DataFrame:
     """A coach's teams' practices, sorted by team (in the order given) then date and time."""
     if practices is None or practices.empty or not teams:
-        return pd.DataFrame(columns=["team", "date", "slot", "court"])
+        return pd.DataFrame(columns=["team", "date", "slot", "court", "when"])
     p = practices[practices["name"].isin(teams)].copy()
     if "kind" in p.columns:
         p = p[p["kind"] == "Practice"]
     p["_t"] = p["name"].map({t: i for i, t in enumerate(teams)})
     p["_s"] = p["slot"].map(lambda s: SLOT_KEYS.index(s) if s in SLOT_KEYS else 99)
     p = p.sort_values(["_t", "date", "_s"])
-    return p.rename(columns={"name": "team"})[["team", "date", "slot", "court"]].reset_index(drop=True)
+    # its time as shown everywhere: a practice's own hours if it has them (Nov 2026)
+    p["when"] = [lab if isinstance(lab, str) and lab else SLOTS.get(s, s)
+                 for lab, s in zip(p["slot_label"] if "slot_label" in p.columns else [None] * len(p), p["slot"])]
+    return p.rename(columns={"name": "team"})[["team", "date", "slot", "court", "when"]].reset_index(drop=True)
 
 
 def _missing_parts(team: str, missing: list[dict]) -> tuple[list[str], str]:
@@ -124,9 +127,9 @@ def practices_email(coach: str, teams: list[str], practices: pd.DataFrame, perio
         items = []
         for r in g.itertuples():
             when = f"{r.date:%a %b %-d}"
-            lines_t.append(f"  {when:<11}  {SLOTS.get(r.slot, r.slot):<12}  {court_name(r.court)}")
+            lines_t.append(f"  {when:<11}  {r.when:<12}  {court_name(r.court)}")
             items.append(f"<tr><td style='padding:3px 14px 3px 0'>{when}</td>"
-                         f"<td style='padding:3px 14px 3px 0'>{_h.escape(SLOTS.get(r.slot, r.slot))}</td>"
+                         f"<td style='padding:3px 14px 3px 0'>{_h.escape(r.when)}</td>"
                          f"<td style='padding:3px 0'>{_h.escape(court_name(r.court))}</td></tr>")
         for t in tn:
             span = f"{t.start:%a %b %-d}" + ("" if t.end == t.start else f"–{t.end:%a %b %-d}")

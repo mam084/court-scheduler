@@ -282,6 +282,9 @@ def window(a: date, b: date, with_preview: bool = True) -> tuple[ScheduleResult 
     r = st.session_state.get("result") if _active_built() else None
     cleaned = getattr(S, "cleaned", None) if _has(S, "cleaned") else None
     tourn = cleaned.tournaments if cleaned is not None else (r.tournaments if r is not None else [])
+    if cleaned is not None:  # practices' own hours as they are now: setting them needs no rebuild (Nov 2026)
+        from scheduler.hours import with_hours
+        a_all = with_hours(a_all, cleaned.hours)
     pattern = r.pattern if r is not None else pd.DataFrame(columns=["team", "day", "slot", "court"])
     counts = pd.concat(pcs, ignore_index=True) if pcs else pd.DataFrame()
     return ScheduleResult(status="OPTIMAL", assignments=a_all, pattern=pattern,

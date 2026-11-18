@@ -236,6 +236,82 @@ def _clear_after(keys: list[str]):
     st.session_state[_CLEAR] = list(keys)
 
 
+# Times a practice's own hours can start and end on (Nov 2026): every 15 minutes, 6 AM to 10 PM.
+HOUR_STEPS = list(range(6 * 60, 22 * 60 + 1, 15))
+
+
+def hours_problems(team: str, d, slot: str, court, start: int, end: int) -> tuple[list[str], list[str]]:
+    """What's in the way of a practice running from start to end on its court: (problems, warnings).
+    Every other timeslot those hours run into needs the court free of team practices, programs and
+    tournaments (it's held there); privates only matter where they overlap the hours themselves."""
+    from scheduler.config import SLOT_TIMES
+    from scheduler.hours import clock, slot_span
+    from ui.edits import court_use
+    probs, warns = [], []
+    own = slot_span(slot)
+    if end <= start:
+        return ["The end has to be after the start."], []
+    if own is None or not (start < own[1] and own[0] < end):
+        return [f"Those hours don't overlap its timeslot ({SLOTS.get(slot, slot)}). To move it, use "
+                "Move a practice."], []
+    if court is None or (isinstance(court, float) and pd.isna(court)):
+        return ["It has no court yet."], []
+    court = int(court)
+    for s in TEAM_SLOT_CHOICES + WEEKDAY_DAYTIME:
+        sp = slot_span(s) if s in SLOT_TIMES else None
+        if s == slot or sp is None or not (start < sp[1] and sp[0] < end):
+            continue
+        used = court_use(d, s) or {}
+        who = used.get(court)
+        if who is None or who == team or str(who).startswith("private ("):
+            continue
+        if who in ("not open then", "closed"):
+            warns.append(f"Court {court} isn't open {SLOTS[s]} that day.")
+        else:
+            probs.append(f"Court {court} has {who} {SLOTS[s]}.")
+    for p_ in S.privs or []:
+        if p_["date"] == d and p_["court"] == court and p_["start"] < end and start < p_["end"]:
+            probs.append(f"Court {court} has a private then ({p_['coach']}, {clock(p_['start'])}).")
+    return list(dict.fromkeys(probs)), list(dict.fromkeys(warns))
+
+
+def _hours_form(team: str, old) -> None:
+    """A scheduling admin gives one practice its own start and end (Nov 2026), like 9-11:30: it holds its
+    court from team practices in any other timeslot those hours run into, while privates can still go
+    on that court outside the hours. Nothing else is rebuilt or moved."""
+    from scheduler import hours as H
+    inp, cleaned = S.inp, S.cleaned
+    d, slot, court = old["date"], old["slot"], old["court"]
+    own = H.slot_span(slot)
+    cur = cleaned.hours.get((team, d, slot)) if cleaned is not None else None
+    s0, e0 = (cur.start, cur.end) if cur else own
+    opts = sorted(set(HOUR_STEPS) | {s0, e0})
+    hk = f"hr_{team}_{d}_{slot}"
+    st.caption(f"Normally {SLOTS.get(slot, slot)}." + (f" Now **{H.label(cur.start, cur.end)}**." if cur else "")
+               + " Running into the next time holds this court from other teams then; privates can still "
+                 "use it outside these hours.")
+    c1, c2 = st.columns(2)
+    hs = c1.selectbox("Starts", opts, index=opts.index(s0), format_func=H.clock, key=f"{hk}_s")
+    he = c2.selectbox("Ends", opts, index=opts.index(e0), format_func=H.clock, key=f"{hk}_e")
+    probs, warns = hours_problems(team, d, slot, court, hs, he)
+    for w in warns:
+        st.warning(w)
+    for p_ in probs:
+        st.error(p_)
+    normal = (hs, he) == tuple(own)
+    b1, b2 = st.columns(2)
+    if b1.button("Set hours", type="primary", width="stretch", key=f"{hk}_go",
+                 disabled=bool(probs) or normal or (cur is not None and (hs, he) == (cur.start, cur.end))):
+        base = H.without(inp.hours, team, d, slot)
+        inp.hours = pd.concat([base, pd.DataFrame([H.row(team, d, slot, court, hs, he)])], ignore_index=True)
+        st.session_state.flash = f"{team}'s {d:%a %b %-d} practice now runs {H.label(hs, he)} on Court {int(court)}."
+        st.rerun()
+    if cur is not None and b2.button("Back to normal hours", width="stretch", key=f"{hk}_reset"):
+        inp.hours = H.without(inp.hours, team, d, slot)
+        st.session_state.flash = f"{team}'s {d:%a %b %-d} practice is back to {SLOTS.get(slot, slot)}."
+        st.rerun()
+
+
 def render():
     """Edit practices section."""
     VIEWER, CAN, inp, result, cleaned = S.VIEWER, S.CAN, S.inp, S.result, S.cleaned
@@ -288,8 +364,8 @@ def render():
 
         with c_right:
             mode = st.radio("What do you want to do?", ["Suggest a preference", "Move a practice", "Remove a practice",
-                                                        "Add a practice", "Makeup practice", "Set usual days",
-                                                        "Practices per week"]
+                                                        "Add a practice", "Change a practice's hours",
+                                                        "Makeup practice", "Set usual days", "Practices per week"]
                             if CAN else ["Ask to move a practice", "Ask for an extra practice",
                                          "Ask to cancel a practice"],
                             key="ed_mode",
@@ -333,6 +409,12 @@ def render():
                                             f"{'Removed' if act == 'Remove' else 'Cancelled'} {e_team}'s "
                                             f"{old['date']:%a %b %-d} practice.",
                                             replace_pin=(e_team, old["date"], old["slot"]), stage=True)
+            elif mode == "Change a practice's hours":
+                if not labels:
+                    st.caption("No practices to change.")
+                else:
+                    lab_i = st.selectbox("Practice", labels, key=f"hr_pick_{e_team}", index=_from_view(tp))
+                    _hours_form(e_team, tp.iloc[labels.index(lab_i) if lab_i in labels else 0])
             elif mode.startswith("Ask to move") or mode.startswith("Ask to cancel"):
                 if not labels:
                     st.caption("No practices to change.")

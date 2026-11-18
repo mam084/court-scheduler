@@ -204,9 +204,10 @@ def _courts(courts) -> str:
 def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournaments: list, teams: list,
                    links: dict, start: date, end: date, test_calendar: str = "", location: str = "",
                    programs_side: dict | None = None, locals_=None,
-                   closures=None) -> tuple[list[Event], list[str]]:
+                   closures=None, hours: dict | None = None) -> tuple[list[Event], list[str]]:
     """Every event the schedule should put on the linked calendars, and a
-    note for each team / club / program that has events but no calendar."""
+    note for each team / club / program that has events but no calendar.
+    hours: practices with their own start and end (hours.py); their events run then."""
     out: list[Event] = []
     missing: set[str] = set()
     club_of = {t.name: t.club for t in teams}
@@ -232,13 +233,19 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
 
     # Practices: the team's calendar and its club's calendar.
     if practices is not None and len(practices):
+        from .hours import label as hours_label
+        from .hours import span_of, with_hours
+        if hours:
+            practices = with_hours(practices, hours)
         for r in practices.itertuples():
             if not (start <= r.date <= end) or r.slot not in SLOT_TIMES:
                 continue
-            (s0, s1) = SLOT_TIMES[r.slot]
+            m0, m1 = span_of(r)  # its own hours, if it has them (Nov 2026)
+            (s0, s1) = divmod(m0, 60), divmod(m1, 60)
             ct = court_name(int(r.court)) if pd.notna(r.court) else "Court TBA"
             coaches = ", ".join(c.strip() for c in str(getattr(r, "coach", "") or "").split(";") if c.strip())
-            desc = f"{SLOTS[r.slot]} · {ct}" + (f"\nCoaches: {coaches}" if coaches else "")
+            when = hours_label(m0, m1) if (m0, m1) != span_of({"slot": r.slot}) else SLOTS[r.slot]
+            desc = f"{when} · {ct}" + (f"\nCoaches: {coaches}" if coaches else "")
             paired = getattr(r, "paired", "")
             if isinstance(paired, str) and paired:
                 desc += f"\nShared court: {paired}"

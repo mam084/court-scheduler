@@ -240,14 +240,23 @@ def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str
             (" · 2 days in a row" if b2b and not is_local else "")
         lc = f' · {html.escape(coaches)}' if is_local and local_coaches and coaches else ""
         return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
-                f'<span class="cs-time">{r["slot"]}</span> {name}{court}{small}{lc}</div>')
+                f'<span class="cs-time">{_time_txt(r)}</span> {name}{court}{small}{lc}</div>')
     who = f'<br><span>{html.escape(coaches)}</span>' if local_coaches and coaches else ""
     if is_local:
         return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
                 f'<span class="cs-time">{r["slot"]}</span> {name}{who}</div>')
     return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
-            f'<b><span class="cs-time">{r["slot"]}</span> {name}</b><span>{html.escape(coaches)}</span>'
+            f'<b><span class="cs-time">{_time_txt(r)}</span> {name}</b><span>{html.escape(coaches)}</span>'
             + (f"<div>{tags}</div>" if tags else "") + '</div>')
+
+
+def _time_txt(r) -> str:
+    """The time on a chip: its timeslot ('9AM', '5:30'), or a practice's own hours ('9-11:30')."""
+    t0, t1 = r.get("t0"), r.get("t1")
+    if t0 is not None and t1 is not None and not (isinstance(t0, float) and pd.isna(t0)):
+        from .hours import short_label
+        return short_label(int(t0), int(t1))
+    return str(r["slot"])
 
 
 def _text(v) -> str:
@@ -447,8 +456,11 @@ def court_grid_html(
                               _private_chip(pv, highlight)))
             if open_slots:
                 taken = [r["slot"] for r in cell]
+                from .hours import span_of
+                spans = [sp for sp in (span_of(r) for r in cell) if sp]  # (a practice's own hours too)
                 free = [sl for sl, cs in (open_slots.get(wd) or {}).items()
                         if c in cs and not any(slots_overlap(sl, x) for x in taken)
+                        and not any(a0 < _minutes_end(sl) and _minutes(sl) < a1 for a0, a1 in spans)
                         and not any(pv["start"] < _minutes_end(sl) and _minutes(sl) < pv["end"] for pv in here_pv)]
                 for run in _runs(free):
                     a_, b_ = run[0], run[-1]

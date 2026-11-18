@@ -231,7 +231,9 @@ def _ics(a: pd.DataFrame, mine: pd.DataFrame, cal_name: str, tz: str, key_extra:
              f"X-WR-CALNAME:{_ics_escape(cal_name)}", f"X-WR-TIMEZONE:{tz}"]
     coach = key_extra
     for _, r in mine.iterrows():
-        (sh, sm), (eh, em) = SLOT_TIMES[r["slot"]]
+        from .hours import span_of
+        m0, m1 = span_of(r)  # a practice's own hours, if it has them
+        (sh, sm), (eh, em) = divmod(m0, 60), divmod(m1, 60)
         d = r["date"]
         dstart = datetime(d.year, d.month, d.day, sh, sm).strftime("%Y%m%dT%H%M%S")
         dend = datetime(d.year, d.month, d.day, eh, em).strftime("%Y%m%dT%H%M%S")
@@ -240,7 +242,7 @@ def _ics(a: pd.DataFrame, mine: pd.DataFrame, cal_name: str, tz: str, key_extra:
         key = f"{d:%Y%m%d}|{r['slot']}|{r['name']}|{coach}"
         uid = hashlib.md5(key.encode()).hexdigest() + "@court-scheduler"
         who = r["coach"] if isinstance(r.get("coach"), str) and r["coach"] else ""
-        desc = SLOTS[r["slot"]] + " · " + where + (f" · {who}" if who else "")
+        desc = str(r.get("slot_label") or SLOTS[r["slot"]]) + " · " + where + (f" · {who}" if who else "")
         lines += ["BEGIN:VEVENT", f"UID:{uid}", f"DTSTAMP:{stamp}",
                   f"DTSTART;TZID={tz}:{dstart}", f"DTEND;TZID={tz}:{dend}",
                   f"SUMMARY:{_ics_escape(r['name'])} ({r['kind'].lower()})",

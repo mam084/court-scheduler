@@ -22,6 +22,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .config import DAYS, PRACTICE_COURT, PRIVATE_MINUTES, SLOT_TIMES, court_name, court_short
+from .hours import span_of
 from .data import blank, parse_courts, to_date
 
 # The three kinds of private (Nov 2026): a player private (the default), a team private, and a
@@ -124,9 +125,10 @@ def conflicts(privs: list[dict], assignments: pd.DataFrame | None,
         if a is not None:
             day = a[a["date"] == p["date"]]
             for r in day.itertuples():
-                if r.slot not in SLOT_TIMES:
+                sp = span_of(r)  # a practice's own hours if it has them (Nov 2026), else its timeslot's
+                if sp is None:
                     continue
-                s0, s1 = _slot_span(r.slot)
+                s0, s1 = sp
                 if not (s0 < p["end"] and p["start"] < s1):
                     continue
                 if pd.notna(r.court) and int(r.court) == p["court"]:
@@ -151,8 +153,9 @@ def free_courts(when: date, start: int, assignments: pd.DataFrame | None, privs:
     taken = set()
     if assignments is not None and len(assignments):
         for r in assignments[assignments["date"] == when].itertuples():
-            if r.slot in SLOT_TIMES and pd.notna(r.court):
-                s0, s1 = _slot_span(r.slot)
+            sp = span_of(r)
+            if sp is not None and pd.notna(r.court):
+                s0, s1 = sp
                 if s0 < start + PRIVATE_MINUTES and start < s1:
                     taken.add(int(r.court))
     for q in privs:

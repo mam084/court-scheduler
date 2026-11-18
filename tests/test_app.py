@@ -1815,3 +1815,39 @@ def test_reopening_a_day_on_published_dates_rebuilds_nothing():
             mock.patch.object(D, "is_published", side_effect=lambda k: k == "pub"):
         msg = D.rebuild_for([(old, new, ("date",))], skip_published=True)
     assert "aren't rebuilt" in msg and not st_.session_state.get("resolve")
+
+
+def test_admin_changes_a_practices_hours(db):
+    """Nov 18, 2026: Change a practice's hours: the practice shows its own hours, its court is held from
+    other teams in the next timeslot, nothing gets rebuilt, and Back to normal hours undoes it."""
+    from streamlit.testing.v1 import AppTest
+
+    from scheduler.hours import from_table
+    pid = _save(db, "Hours", 5)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Edit practices").run()
+    a = at.session_state["result"].assignments
+    p = a[(a["kind"] == "Practice") & (a["slot"] == "5:30")].sort_values(["date", "court"])
+    # one whose court is free at 7:20 that day
+    p = p[[a[(a["date"] == r.date) & (a["slot"] == "7:20") & (a["court"] == r.court)].empty for r in p.itertuples()]]
+    first = p.iloc[0]
+    team, d = first["name"], first["date"]
+    at.selectbox(key="ed_team").set_value(team).run()
+    at.radio(key="ed_mode").set_value("Change a practice's hours").run()
+    lab = next(o for o in at.selectbox(key=f"hr_pick_{team}").options if f"{d:%a %b %-d}" in o and "5:30" in o)
+    at.selectbox(key=f"hr_pick_{team}").set_value(lab).run()
+    hk = f"hr_{team}_{d}_5:30"
+    result_before = at.session_state["result"]
+    at.selectbox(key=f"{hk}_e").set_value(20 * 60).run()
+    assert not at.error, [e.value for e in at.error]
+    next(b for b in at.button if b.label == "Set hours").click().run()
+    assert not at.exception
+    hrs = from_table(at.session_state["inp"].hours)
+    assert (team, d, "5:30") in hrs and hrs[team, d, "5:30"].end == 20 * 60
+    assert at.session_state["result"] is result_before   # nothing rebuilt
+    saved = db.get(pid)["payload"]["inputs"]["Hours"]
+    assert any(r["team"] == team and r["end"] == "8 PM" for r in saved)
+    next(b for b in at.button if b.label == "Back to normal hours").click().run()
+    assert not at.exception and not len(at.session_state["inp"].hours)

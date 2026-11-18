@@ -53,6 +53,9 @@ def email_practices(ver: dict, coaches: list[str], only_me: bool, progress=None)
     emails = access.coach_emails(store.users(), cleaned.roster if cleaned else {})
     me_ = VIEWER.person.email if VIEWER.person else ""
     pr_, missing_ = practices_of(ver), missing_of(ver)
+    if cleaned is not None:  # practices with their own start and end show them (Nov 2026)
+        from scheduler.hours import with_hours
+        pr_ = with_hours(pr_, cleaned.hours)
     sent, problems = 0, []
     for i, c in enumerate(coaches):
         teams_ = mail.teams_of(c, cleaned.teams)
@@ -385,7 +388,7 @@ def _calendars():
         evs, missing = gcal.desired_events(pr_, loc_, cleaned.tournaments if extras else [], cleaned.teams,
                                            gcal.with_program_shorthand(links, cleaned.locals), d0, d1,
                                            test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
-                                           side_, cleaned.locals, cleaned.closures)
+                                           side_, cleaned.locals, cleaned.closures, cleaned.hours)
         if missing and not only_:
             st.caption(f"No calendar linked (skipped): {', '.join(missing[:12])}"
                        + (f" and {len(missing) - 12} more" if len(missing) > 12 else ""))
