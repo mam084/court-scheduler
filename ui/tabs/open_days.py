@@ -146,6 +146,8 @@ def _closed_days():
             before = inp.closures.copy()
             inp.closures = cl.iloc[[i for i, lab in enumerate(labs) if lab not in drop_c]].reset_index(drop=True)
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
+            # Nov 18, 2026: reopening a day never rebuilds published dates (nothing on them moves);
+            # add practices on the reopened day by hand.
             st.session_state.flash = (f"Reopened {plural(len(drop_c), 'day')}. "
-                                      + dates.rebuild_for([(before, inp.closures, ("date",))]))
+                                      + dates.rebuild_for([(before, inp.closures, ("date",))], skip_published=True))
             st.rerun()

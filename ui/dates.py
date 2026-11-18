@@ -437,7 +437,8 @@ def _changed(old: pd.DataFrame, new: pd.DataFrame) -> list[dict]:
     return [dict(x) for x in diff]
 
 
-def rebuild_for(changes: list[tuple[pd.DataFrame, pd.DataFrame, tuple[str, ...]]], autobuild: bool = True) -> str:
+def rebuild_for(changes: list[tuple[pd.DataFrame, pd.DataFrame, tuple[str, ...]]], autobuild: bool = True,
+                skip_published: bool = False) -> str:
     """After programs, tournaments or open days change: rebuild every scheduled run of dates the change
     touches (the first now, the rest next), not just the one being worked on. Dates not scheduled yet
     need nothing (they show the change right away). `changes`: (table before, after, its date columns).
@@ -448,6 +449,12 @@ def rebuild_for(changes: list[tuple[pd.DataFrame, pd.DataFrame, tuple[str, ...]]
         sp = _row_spans(_changed(old, new), cols)
         spans = None if sp is None or spans is None else spans + sp
     hits = [r for r in runs() if spans is None or any(x <= r[2] and r[1] <= y for x, y in spans)]
+    if skip_published:  # e.g. reopening a day on published dates: they stay exactly as published
+        kept = [r for r in hits if is_published(r[0])]
+        hits = [r for r in hits if not is_published(r[0])]
+        if kept and not hits:
+            return ("Published dates aren't rebuilt: everything stays where it is, and the day is open for "
+                    "practices added by hand.")
     if not hits:
         return "No scheduled dates are affected, so nothing needed rebuilding."
     labels = " and ".join(range_label(s_, e_) for _, s_, e_ in hits)

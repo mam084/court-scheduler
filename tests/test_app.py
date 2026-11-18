@@ -1796,3 +1796,22 @@ def test_a_program_that_moves_no_practice_rebuilds_nothing(db):
     finally:
         P.S = page
     assert PRACTICE_COURT not in set(a["court"])
+
+
+def test_reopening_a_day_on_published_dates_rebuilds_nothing():
+    """Nov 18, 2026: reopening a closed day on published dates leaves them exactly as published (no
+    rebuild, so no team picks up a new practice on the reopened day); unpublished dates still rebuild."""
+    from unittest import mock
+
+    import ui.dates as D
+    old = pd.DataFrame([{"date": "11/27/2026", "reason": "Closed"}])
+    new = old.iloc[0:0]
+    runs = [("pub", date(2026, 11, 22), date(2026, 11, 28)), ("draft", date(2026, 11, 29), date(2026, 12, 5))]
+    class _SS(dict):
+        __getattr__ = dict.get
+    st_ = mock.MagicMock()
+    st_.session_state = _SS(range_start=date(2026, 11, 1))
+    with mock.patch.object(D, "runs", return_value=runs), mock.patch.object(D, "st", st_), \
+            mock.patch.object(D, "is_published", side_effect=lambda k: k == "pub"):
+        msg = D.rebuild_for([(old, new, ("date",))], skip_published=True)
+    assert "aren't rebuilt" in msg and not st_.session_state.get("resolve")
