@@ -764,18 +764,23 @@ PRINT_BUTTON = """<style>
 FIT_SCRIPT = """<script>
 // Only a page that's still too tall (a very busy week) gets shrunk to fit.
 // The box is sized for the smaller of US Letter and A4 landscape inside the
-// 0.35in margins (A4: 7.57in tall), minus a small safety buffer, so nothing spills onto an extra page.
+// 0.35in margins (A4: 7.57in tall), minus a safety buffer, so nothing spills onto an extra page.
 function fitWeeks() {
-  var pageH = 7.45 * 96, pageW = 10.1 * 96;
+  var pageH = 7.3 * 96, pageW = 10.1 * 96;
   document.querySelectorAll('.cs-week').forEach(function (s) {
-    s.style.zoom = 1; s.style.width = pageW + 'px';
+    // The biggest zoom at which the page really fits (Nov 18, 2026: a busy week could end a bit too
+    // tall and spill over). A shrunk page gets wider, so its lines wrap less; scrollHeight is its
+    // unzoomed height at that width. Binary search: it fits at lo, it doesn't at hi.
+    function fits(z) { s.style.width = (pageW / z) + 'px'; return s.scrollHeight * z <= pageH; }
+    s.style.zoom = 1;
     var z = 1;
-    for (var k = 0; k < 4; k++) {  // a shrunk page gets wider (fewer wrapped lines), then re-fits
-      s.style.width = (pageW / z) + 'px';
-      z = Math.min(1, pageH / s.scrollHeight);
+    if (!fits(1)) {
+      var lo = 0.3, hi = 1;
+      for (var k = 0; k < 14; k++) { var m = (lo + hi) / 2; if (fits(m)) lo = m; else hi = m; }
+      z = Math.floor(lo * 1000) / 1000;
+      fits(z);
     }
-    s.style.width = (pageW / z) + 'px';
-    s.style.zoom = z.toFixed(3);
+    s.style.zoom = z;
   });
 }
 window.addEventListener('load', fitWeeks);
