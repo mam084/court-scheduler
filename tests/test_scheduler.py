@@ -2801,3 +2801,25 @@ def test_court_view_shows_same_named_local_tournaments_as_one():
                           tournaments=[a, b])
     assert out.count("cs-chip cs-tourn") == 1             # one tournament under the day's name...
     assert "Ct 1-2, 5-6" in out or "Ct 1, 2, 5, 6" in out  # ...on both programs' courts
+
+
+def test_local_tournament_ending_early_frees_later_times():
+    """Nov 18, 2026: a local tournament can end early ("ends" 3 PM): practice times starting then or later
+    stay open on its courts (a Saturday one ending at 3 leaves 3-5 on), and everything says when it ends."""
+    from scheduler.data import Tournament, clock_label, parse_clock
+    from scheduler.paper import paper_weeks_html
+    assert parse_clock("3") == (15, 0) and parse_clock("2:30 pm") == (14, 30) and parse_clock("15:00") == (15, 0)
+    assert clock_label((15, 0)) == "3 PM" and clock_label((19, 0)) == "7 PM"
+    sat = date(2026, 12, 12)
+    tn = Tournament("Seaside", "local", sat, sat, [], [1, 2], [], until=(15, 0))
+    assert tn.blocks(sat, "1PM") and not tn.blocks(sat, "3PM") and not tn.blocks(sat, "5PM")
+    assert Tournament("SDVBC", "local", sat, sat, [], [1], []).blocks(sat, "5PM")   # 7 PM as usual
+    s, e = date(2026, 12, 6), date(2026, 12, 12)
+    inp = simulate(4, 2, 0, seed=3, start=s, end=e)
+    inp.tournaments = pd.DataFrame([{"name": "Seaside", "type": "Local", "start_date": "12/12/2026",
+                                     "end_date": "12/12/2026", "courts": "1-2", "ends": "3 PM"}])
+    data = clean(inp, s, e)
+    t = next(x for x in data.tournaments if x.kind == "local")
+    assert t.until == (15, 0) and t.until_label == "3 PM"
+    h = paper_weeks_html(pd.DataFrame(columns=["date", "court", "slot", "kind", "name"]), s, e, {}, data.tournaments)
+    assert "until 3 PM" in h and "until 7 PM" not in h

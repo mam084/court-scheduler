@@ -23,7 +23,6 @@ from .config import (
     WEEK_ORDER,
     WEEKDAY_KEYS,
     WEEKDAYS,
-    blocked_by_local_tournament,
     court_name,
     court_short,
     slots_overlap,
@@ -315,10 +314,10 @@ def _tourn_chip(tn, compact=False) -> str:
     if tn.kind == "travel" and not compact:
         extra = f"<span style='font-weight:400'> · {html.escape(', '.join(tn.teams))}</span>"
     if tn.kind == "local":
-        extra = "<span style='font-weight:400'> · until 7 PM" + ("" if compact else f", Ct {courts_label(tn.courts)}") \
+        extra = f"<span style='font-weight:400'> · until {tn.until_label}" + ("" if compact else f", Ct {courts_label(tn.courts)}") \
                 + "</span>"
     span = f"{tn.start:%a %-m/%-d}" + ("" if not tn.multi_day else f"–{tn.end:%a %-m/%-d}")
-    kind = ("local until 7 PM, " + ", ".join(court_name(c) for c in tn.courts)) if tn.kind == "local" else "travel"
+    kind = (f"local until {tn.until_label}, " + ", ".join(court_name(c) for c in tn.courts)) if tn.kind == "local" else "travel"
     title = f"{tn.name} ({kind}) {span}"
     return (f'<div class="cs-chip {cls}"{_tourn_style(tn)} title="{html.escape(title)}">'
             f'{html.escape(tn.label())}{extra}</div>')
@@ -331,9 +330,9 @@ def _tourn_block(tns: list, weekend: bool = False) -> str:
     side = sides.pop() if len(sides) == 1 else ""
     bg, fg = SIDE_COLORS.get(side, LOCAL_COLORS)
     stripe = SIDE_STRIPES.get(side, OTHER_STRIPE)
-    head = f"Local tournament{'s' if len(tns) > 1 else ''} · until 7 PM"
+    head = f"Local tournament{'s' if len(tns) > 1 else ''} · until {max(tns, key=lambda t: t.until).until_label}"
     names = "".join(f'<div class="cs-tb-name">{html.escape(tn.label())}</div>' for tn in tns)
-    title = "; ".join(f"{tn.name} (until 7 PM)" for tn in tns)
+    title = "; ".join(f"{tn.name} (until {tn.until_label})" for tn in tns)
     return (f'<div class="cs-tblock{" cs-tblock-wk" if weekend else ""}" '
             f'style="background:{bg};color:{fg};border-left-color:{stripe}" title="{html.escape(title)}">'
             f'<div class="cs-tb-head">{head}</div>{names}</div>')
@@ -343,7 +342,7 @@ def _tourn_head_chip(tn) -> str:
     """A tournament under its day's name in the weekly grid."""
     cls = "cs-tourn" if tn.kind == "local" else "cs-travel"
     if tn.kind == "local":
-        sub = f"Local · until 7 PM · Ct {courts_label(tn.courts)}"
+        sub = f"Local · until {tn.until_label} · Ct {courts_label(tn.courts)}"
     else:
         sub = "Travel" + (f" · {', '.join(tn.teams)}" if tn.teams else "")
     span = f"{tn.start:%a %-m/%-d}" + ("" if not tn.multi_day else f"–{tn.end:%a %-m/%-d}")
@@ -437,7 +436,7 @@ def court_grid_html(
             # Local tournaments on this court: one block, listing each of them, in place of the
             # times they take (a weekday's 3:45 and 5:30; a weekend's blocks until 7 PM).
             items = [(0, -1, _tourn_block(tns, weekend))] if tns else []
-            if tns and not weekend:
+            if tns and not weekend and any(tn.takes("5:30") for tn in tns):  # (one ending early doesn't)
                 merged.add((c, wd))
             for r in cell:
                 m = _minutes(r["slot"])
@@ -541,7 +540,7 @@ def open_slot_map(day_dates: dict | None, data, closures: dict | None = None) ->
         if data is not None:
             for tn in data.tournaments:
                 for s in slots:
-                    if tn.kind == "local" and tn.covers(d) and blocked_by_local_tournament(s):
+                    if tn.kind == "local" and tn.covers(d) and tn.takes(s):
                         per[s] -= set(tn.courts)
         per = {s: cs for s, cs in per.items() if cs}
         if per:

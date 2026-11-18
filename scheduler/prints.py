@@ -309,7 +309,7 @@ def _pretty_tourn(tn) -> str:
     bg, fg = SIDE_COLORS.get(side, LOCAL_COLORS)
     stripe = SIDE_STRIPES.get(side, OTHER_STRIPE)
     return (f'<div class="pw-tn" style="background:{bg};color:{fg};border-left:4px solid {stripe}">'
-            f'{html.escape(tn.label())}<span>Local tournament · Ct {courts_label(tn.courts)} until 7 PM</span></div>')
+            f'{html.escape(tn.label())}<span>Local tournament · Ct {courts_label(tn.courts)} until {tn.until_label}</span></div>')
 
 
 def calendar_pretty_html(assignments: pd.DataFrame, start: date, end: date, closures: dict | None = None,

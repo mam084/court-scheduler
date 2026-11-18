@@ -293,8 +293,8 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             for club in sorted({club_for(n) for n in tn.teams}):
                 put("Club", club, key, title, desc, s, e, True)
         else:
-            title = f"{tn.name} (Local Tournament, Until 7 PM)"
-            desc = "Hosted here until 7 PM." + (
+            title = f"{tn.name} (Local Tournament, Until {tn.until_label})"
+            desc = f"Hosted here until {tn.until_label}." + (
                 f"\nWorking it: {', '.join(tn.coaches)}" if tn.coaches else "")
             progs = [p_ for p_ in getattr(tn, "programs", None) or [getattr(tn, "program", "")] if p_]
             sides = {programs_side.get(p_, "") for p_ in progs} or {""}

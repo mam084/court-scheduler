@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from scheduler.config import ALL_COURTS, COURTS, court_name
-from scheduler.data import blank, parse_courts, parse_list, parse_names, to_date
+from scheduler.data import blank, clock_label, parse_clock, parse_courts, parse_list, parse_names, to_date
 from ui import dates
 from ui.common import plural
 from ui.flags import flags_panel
@@ -18,7 +18,7 @@ from ui.state import S
 def render():
     """Tournaments section."""
     inp, start, cleaned = S.inp, S.start, S.cleaned
-    st.markdown("**Local** tournaments are hosted here and take over their courts until 7 PM (7:20 practices still "
+    st.markdown("**Local** tournaments are hosted here and take over their courts until 7 PM, or earlier if they end early (7:20 practices still "
                 "happen), along with the coaches working them. "
                 "**Travel** tournaments don't use our courts, but the teams going can't practice those days, "
                 "avoid the days right before and after, and get priority for their two practices that week.")
@@ -39,7 +39,7 @@ def render():
     sfx = f"_{t_sel}_{st.session_state.get('locals_ver', 0)}" if editing else ""
 
     def _tval(col, default=""):
-        return str(cur_t[col]).strip() if editing and not blank(cur_t[col]) else default
+        return str(cur_t.get(col, "")).strip() if editing and not blank(cur_t.get(col, "")) else default
 
     def _tdate(col, default):
         try:
@@ -77,6 +77,19 @@ def render():
                                        key=f"t_coaches_{t_prog}{sfx}",
                                        help="Busy until 7 PM that day. A coach also going to a travel tournament "
                                             "then gets flagged.")
+            # Nov 18, 2026: one that wraps up early gives its courts back then (a weekend one ending at 3
+            # leaves the 3-5 block open). "7 PM" is the usual.
+            _ends_opts = ["7 PM"] + [clock_label((h, m)) for h in range(11, 19) for m in (0, 30)]
+            try:
+                _ends_now = clock_label(parse_clock(_tval("ends"))) if _tval("ends") else "7 PM"
+            except ValueError:
+                _ends_now = "7 PM"
+            if _ends_now not in _ends_opts:
+                _ends_opts.append(_ends_now)
+            t_ends = st.selectbox("Gives the courts back at", _ends_opts, index=_ends_opts.index(_ends_now),
+                                  key=f"t_ends{sfx}",
+                                  help="7 PM normally. If it ends early, pick when: practice times starting then "
+                                       "or later stay open on its courts.")
             t_club, t_ages, t_teams = "", [], []
         else:
             c1, c2 = st.columns(2)
@@ -96,7 +109,7 @@ def render():
             t_teams = st.multiselect("Teams going", _names, default=_listed if editing else match,
                                      key=f"t_teams_{t_club}_{'-'.join(map(str, t_ages))}{sfx}",
                                      help="Filled in from the club and ages; remove teams that aren't going.")
-            t_prog, t_courts, t_coaches = "(none)", [], []
+            t_prog, t_courts, t_coaches, t_ends = "(none)", [], [], "7 PM"
         if editing:
             c1, c2, c3 = st.columns([2, 2, 1])
             add_t = c1.button("Save changes", type="primary", width="stretch")
@@ -131,7 +144,8 @@ def render():
                    "program": "" if t_prog == "(none)" else t_prog,
                    "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(t_courts))
                    if t_kind == "Local" else "", "coaches": "; ".join(t_coaches),
-                   "note": _tval("note") if editing else ""}
+                   "note": _tval("note") if editing else "",
+                   "ends": "" if t_kind != "Local" or t_ends == "7 PM" else t_ends}
             span = f"{t_start:%b %-d}" + ("" if t_end == t_start else f"–{t_end:%b %-d}")
             before = inp.tournaments.copy()
             if editing:
@@ -156,8 +170,9 @@ def render():
         tv = inp.tournaments.copy().fillna("")
         _tl = [f"{r['name']} · {r['type']} · {r['start_date']}" for _, r in tv.iterrows()]
         tv.index = [lab if _tl.count(lab) == 1 else f"{lab} (#{i + 1})" for i, lab in enumerate(_tl)]
-        _tcols = ["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts", "coaches"]
-        st.dataframe(tv[_tcols]
+        _tcols = ["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts", "coaches",
+                  "ends"]
+        st.dataframe(tv.reindex(columns=_tcols, fill_value="")
                      .rename(columns=lambda c: c.replace("_", " ").title()), hide_index=True, width="stretch")
         c1, c2 = st.columns([3, 1])
         drop_t = c1.multiselect("Remove tournaments", list(tv.index), placeholder="Choose tournaments to remove")

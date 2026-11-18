@@ -116,7 +116,7 @@ def to_excel(result: ScheduleResult, closures: dict) -> bytes:
             elif not (result.start <= d <= result.end):
                 closed[wd] = "Outside this schedule period"
             else:
-                here = [tn.name + (" (local, until 7 PM)" if tn.kind == "local" else "")
+                here = [tn.name + (f" (local, until {tn.until_label})" if tn.kind == "local" else "")
                         for tn in result.tournaments if tn.covers(d)]
                 if here:
                     labels[wd] += "\n" + "; ".join(here)
@@ -309,7 +309,7 @@ def _calendar_sheet(wb, result: ScheduleResult, closures: dict, highlight=None, 
                 for tn in result.tournaments:
                     if tn.covers(d) and (not highlight or tn.kind == "local" or set(tn.teams) & set(highlight)):
                         where = _courts_text(tn.courts) if tn.kind == "local" else "away"
-                        items.append(("until 7 PM" if tn.kind == "local" else "", tn.name, where,
+                        items.append((f"until {tn.until_label}" if tn.kind == "local" else "", tn.name, where,
                                       local_fill if tn.kind == "local" else tourn_fill))  # locals' colors
                 if d.weekday() >= 5 and d not in weekend_open and d not in by_date and not items:
                     items.append(("", "Closed", "", _closed))

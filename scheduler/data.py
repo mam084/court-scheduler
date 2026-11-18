@@ -77,6 +77,7 @@ from .config import (
     WEEKDAYS,
     WEEKEND,
     WEEKEND_KEYS,
+    LOCAL_TOURNAMENT_END,
     blocked_by_local_tournament,
     default_priority,
     slot_allowed_for_age,
@@ -95,7 +96,7 @@ COLUMNS = {
     "Weekends": ["date", "open", "courts", "group", "required", "note"],
     "Closures": ["date", "reason"],
     "Tournaments": ["name", "type", "start_date", "end_date", "club", "ages", "teams", "program", "courts", "coaches",
-                    "note"],
+                    "note", "ends"],
     "Privates": ["coach", "date", "time", "court", "type", "team", "player", "note"],
     "Calendars": ["kind", "name", "calendar_id"],
     # Coverage flags marked as sorted out (a coach double-booked at
@@ -1022,6 +1023,31 @@ class WeekendDay:
     auto: bool = False  # a weekend that's open because weekends are, not because it's on the Open days list
 
 
+def parse_clock(value) -> tuple[int, int]:
+    """'3 PM', '3pm', '2:30 PM', '15:00', '3' -> (hour, minute). A bare 1-8 is afternoon (a
+    tournament ending early ends in the afternoon)."""
+    v = str(value).strip().lower().replace(".", "")
+    m = re.match(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm|a|p)?$", v)
+    if not m:
+        raise ValueError(f"ends '{value}' isn't a time (like 3 PM)")
+    h, mi, ap = int(m.group(1)), int(m.group(2) or 0), m.group(3) or ""
+    if ap.startswith("p") and h < 12:
+        h += 12
+    elif ap.startswith("a") and h == 12:
+        h = 0
+    elif not ap and 1 <= h <= 8:
+        h += 12
+    if not (0 <= h <= 23 and 0 <= mi <= 59):
+        raise ValueError(f"ends '{value}' isn't a time (like 3 PM)")
+    return h, mi
+
+
+def clock_label(t: tuple[int, int]) -> str:
+    """(15, 0) -> '3 PM', (14, 30) -> '2:30 PM'."""
+    h, mi = t
+    return f"{(h - 1) % 12 + 1}{f':{mi:02d}' if mi else ''} {'PM' if h >= 12 else 'AM'}"
+
+
 @dataclass
 class Tournament:
     """A local tournament (hosted here: takes courts and coaches until 7 PM) or a travel one (teams away)."""
@@ -1036,13 +1062,23 @@ class Tournament:
     ages: list[int] = field(default_factory=list)
     program: str = ""         # local: the locals program running it
     side: str = ""            # local: "Girls" / "Boys" (its program's side), for its colors
+    until: tuple = LOCAL_TOURNAMENT_END  # local: when it gives its courts back (7 PM unless it ends early)
 
     def covers(self, d: date) -> bool:
         return self.start <= d <= self.end
 
     def blocks(self, d: date, slot: str) -> bool:
-        """A local tournament takes its courts and coaches until 7 PM."""
-        return self.kind == "local" and self.covers(d) and blocked_by_local_tournament(slot)
+        """A local tournament takes its courts and coaches until 7 PM (or until it ends early)."""
+        return self.kind == "local" and self.covers(d) and self.takes(slot)
+
+    def takes(self, slot: str) -> bool:
+        """Does it hold its courts in this timeslot (any day it runs)?"""
+        return self.kind == "local" and blocked_by_local_tournament(slot, self.until)
+
+    @property
+    def until_label(self) -> str:
+        """'7 PM', '3 PM', '2:30 PM'."""
+        return clock_label(self.until)
 
     @property
     def multi_day(self) -> bool:
@@ -1223,7 +1259,7 @@ def merge_local_tournaments(tournaments: list) -> list:
         out[hit] = replace(o, start=min(o.start, tn.start), end=max(o.end, tn.end),
                            courts=sorted(set(o.courts) | set(tn.courts)),
                            coaches=list(dict.fromkeys(list(o.coaches) + list(tn.coaches))),
-                           side=o.side if o.side == tn.side else "")
+                           side=o.side if o.side == tn.side else "", until=max(o.until, tn.until))
         out[hit].programs = progs
     return out
 
@@ -1569,10 +1605,11 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 warnings.append(f"{row}: program '{prog}' isn't on the Locals sheet")
             side = next((lp.side for lp in locals_ if prog and lp.name.lower() == prog.lower() and lp.side), "")
             side = side or club_side(club) or program_side("", prog or name)
+            until = LOCAL_TOURNAMENT_END if blank(r.get("ends")) else parse_clock(r.get("ends"))
             tournaments.append(Tournament(name, kind, t_start, t_end, t_teams,
                                           courts if kind == "local" else [], coaches, club, ages,
                                           next((lp.name for lp in locals_ if lp.name.lower() == prog.lower()), prog),
-                                          side if kind == "local" else ""))
+                                          side if kind == "local" else "", until))
         except (ValueError, TypeError, KeyError) as e:
             errors.append(f"{row}: {e}")
 

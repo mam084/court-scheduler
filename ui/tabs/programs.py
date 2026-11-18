@@ -10,8 +10,10 @@ from scheduler.config import ALL_COURTS, COURTS, DAYS, PROGRAM_KEYS, SLOT_KEYS, 
 from scheduler.data import (
     COLUMNS,
     blank,
+    clock_label,
     format_sessions,
     parse_courts,
+    parse_clock,
     parse_date_ranges,
     parse_days,
     parse_names,
@@ -87,7 +89,7 @@ def _sessions_of(row: dict, yr: int) -> list[dict]:
         return []
 
 
-TOURN_COLS = ["date", "last_day", "name", "courts"]
+TOURN_COLS = ["date", "last_day", "name", "courts", "ends"]
 
 
 def _is_program_tourn(df: pd.DataFrame, program: str, row_i=None) -> pd.Series:
@@ -151,7 +153,7 @@ def program_tournaments(program: str, row_i=None) -> list[dict]:
         except (ValueError, IndexError):
             continue
         out.append({"date": a, "last_day": None if b == a else b, "name": str(r["name"]),
-                    "courts": str(r["courts"]).strip()})
+                    "courts": str(r["courts"]).strip(), "ends": str(r.get("ends", "") or "").strip()})
     return out
 
 
@@ -176,11 +178,18 @@ def tournament_rows(program: str, table: pd.DataFrame) -> tuple[list[str], list[
         except ValueError as e:
             problems.append(f"Tournament on {d:%b %-d}: {e}")
             continue
+        ends = "" if blank(r.get("ends")) else str(r["ends"]).strip()
+        if ends:  # it ends before 7 PM (Nov 18, 2026): its courts open up after
+            try:
+                ends = clock_label(parse_clock(ends))
+            except ValueError as e:
+                problems.append(f"Tournament on {d:%b %-d}: {e}")
+                continue
         rows.append({"name": (str(r["name"]).strip() if not blank(r.get("name")) else "") or f"{program} Tournament",
                      "type": "Local", "start_date": f"{d:%m/%d/%Y}", "end_date": f"{last:%m/%d/%Y}",
                      "club": "", "ages": "", "teams": "", "program": program,
                      "courts": ", ".join("P" if c not in COURTS else str(c) for c in sorted(cl)), "coaches": "",
-                     "note": ""})
+                     "note": "", "ends": ends})
     return problems, rows
 
 
@@ -253,19 +262,22 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         st.markdown("**Local tournament dates**")
         st.caption("Tournaments this program hosts here. Each row is one tournament (add as many as you like, "
                    "several on the same day is fine). They take their courts and this program's coaches until "
-                   "7 PM. Courts like `1-4` or `1, 2, P`; blank = courts 1–7.")
+                   "7 PM (or the time under **Ends early at**). Courts like `1-4` or `1, 2, P`; blank = courts 1–7.")
         tdf = pd.DataFrame(dv["tourns"], columns=TOURN_COLS)
         for c in ("date", "last_day"):
             tdf[c] = pd.to_datetime(tdf[c], errors="coerce")
         tdf["name"] = tdf["name"].astype(object).fillna("")
         tdf["courts"] = tdf["courts"].astype(object).fillna("")
+        tdf["ends"] = tdf["ends"].astype(object).fillna("")
         tourns = st.data_editor(
             tdf, num_rows="dynamic", hide_index=True, width="stretch", key=f"{key}_tourns",
             column_config={
                 "date": st.column_config.DateColumn("Date", format="MM/DD/YYYY", required=True),
                 "last_day": st.column_config.DateColumn("Last day (if more than one)", format="MM/DD/YYYY"),
                 "name": st.column_config.TextColumn("Name (optional)", help="Blank: “<program> Tournament”"),
-                "courts": st.column_config.TextColumn("Courts", help="Like 1-4 or 1, 2, P. Blank = courts 1-7.")})
+                "courts": st.column_config.TextColumn("Courts", help="Like 1-4 or 1, 2, P. Blank = courts 1-7."),
+                "ends": st.column_config.TextColumn("Ends early at", help="Only if it gives the courts back "
+                                                    "before 7 PM, like 3 PM. Blank = 7 PM.")})
         cols = st.columns(len(submit_labels) + 3)
         clicked = None
         for i, lab in enumerate(submit_labels):

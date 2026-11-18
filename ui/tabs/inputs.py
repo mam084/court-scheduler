@@ -45,7 +45,8 @@ def render():
                      "team / club / program; calendar_id = the calendar's ID from its Google Calendar settings.",
         "Privates": "1-hour private lessons (easier: the Privates tab). time = start, like 4:00 PM. court = P "
                     "(practice court) or 1-7. type = Player (the default), Team or Coach reps; team = which team, for team privates.",
-        "Tournaments": "type = Local (hosted here: blocks its courts and coaches until 7 PM; blank courts = all; "
+        "Tournaments": "type = Local (hosted here: blocks its courts and coaches until 7 PM, or until `ends` like 3 PM; "
+                       "blank courts = all; "
                        "coaches = who's working it) or Travel "
                        "(away: the teams matching club + ages, or the listed teams, can't practice those days "
                        "and avoid the days right before and after). Ages like `15-16` or `14U`.",

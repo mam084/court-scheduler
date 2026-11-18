@@ -25,7 +25,8 @@ below it, so breaking one higher rule outweighs breaking several lower ones.
 ## Hard rules (never broken)
 
 - **One team per court per timeslot.** Locals programs and local tournaments
-  block their courts (local tournaments only until 7 PM). Closures block whole
+  block their courts (local tournaments only until 7 PM, or earlier when one is
+  set to end early: a Saturday one ending at 3 leaves the 3–5 block open). Closures block whole
   days.
 - **No team ever practices alone**, at any time on any day. A locals program or
   local tournament in the gym at the same time counts as company.

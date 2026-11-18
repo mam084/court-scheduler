@@ -23,7 +23,6 @@ from .config import (
     WEEK_ORDER,
     WEEKDAY_KEYS,
     WEEKEND_KEYS,
-    blocked_by_local_tournament,
     week_start,
 )
 from .labels import label_of, with_labels
@@ -329,13 +328,14 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
     only = only or {}
     tn_here = [tn for tn in tourns if tn.kind == "local" and c in tn.courts and tn.covers(d)]
     tn_min = None
-    if tn_here:  # a local tournament takes the court until 7 PM: one block in place of those times
-        gone = [x for x in slots if blocked_by_local_tournament(x) and x not in by_slot]
+    if tn_here:  # a local tournament takes the court until 7 PM (or it ends early): one block in their place
+        gone = [x for x in slots if any(tn.takes(x) for tn in tn_here) and x not in by_slot]
         if gone:
             tn_min = min(_start(x) for x in gone)
             # about as tall as the lines it replaces, so the times after it stay where they'd be
             h = len(gone) * (24 if weekend else 39) - 5
-            head = f"Local tournament{'s' if len(tn_here) > 1 else ''} · until 7 PM"
+            head = (f"Local tournament{'s' if len(tn_here) > 1 else ''} · until "
+                    f"{max(tn_here, key=lambda t: t.until).until_label}")
             # its number only on the first of its courts (Nov 18, 2026); the day's header has it too
             firsts = {id(tn) for tn in tn_here
                       if c == min(tn.courts, key=lambda x: PRINT_ORDER.get(x, 99))}

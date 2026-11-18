@@ -221,9 +221,10 @@ MAX_PRACTICES_PER_WEEK = 5
 LOCAL_TOURNAMENT_END = (19, 0)
 
 
-def blocked_by_local_tournament(slot: str) -> bool:
-    """Does a local tournament (courts taken until 7 PM) block this timeslot?"""
-    return SLOT_TIMES[slot][0] < LOCAL_TOURNAMENT_END
+def blocked_by_local_tournament(slot: str, until: tuple = LOCAL_TOURNAMENT_END) -> bool:
+    """Does a local tournament (courts taken until 7 PM, or until it ends early) block this timeslot?
+    A timeslot that starts before it ends is blocked."""
+    return SLOT_TIMES[slot][0] < tuple(until)
 
 
 def back_to_back(a: str, b: str) -> bool:
