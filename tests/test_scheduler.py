@@ -1921,8 +1921,39 @@ def test_paper_marks_a_programs_only_local_tournament():
     assert only_tournaments(t) == {id(g14), id(two_day)}
     h = paper_weeks_html(pd.DataFrame(columns=["date", "court", "slot", "kind", "name"]), s, e, {}, t)
     assert f"<b>G 14 L{ONLY_MARK}</b>" in h and f"<b>G HS{ONLY_MARK}</b>" in h
-    assert "<b>Boys 14s</b>" in h and f"Boys 14s{ONLY_MARK}" not in h
-    assert f"Far Away Cup{ONLY_MARK}" not in h
+    # Nov 18: every other local tournament gets its number in the program circled (12/7 is B 14 L's 2nd)
+    assert '<b>Boys 14s<span class="last">2</span></b>' in h and f"Boys 14s{ONLY_MARK}" not in h
+    assert f"Far Away Cup{ONLY_MARK}" not in h and 'Far Away Cup (travel)<span' not in h
+
+
+def test_paper_numbers_program_sessions_and_tournaments():
+    """Nov 18, 2026 paper marks: a locals program's first two sessions circled 1 and 2 (its days counted
+    together, from its first day), LAST on its last; Open Gym numbers every session; a fall and a spring
+    season of the same program count apart, for sessions and tournaments alike."""
+    from scheduler.data import LocalProgram, Tournament
+    from scheduler.paper import ONLY_MARK, program_marks, tournament_marks
+
+    def c(x):
+        return f'<span class="last">{x}</span>'
+    fall = LocalProgram("Girls Locals", "Tue", "5:30", [6], [], True, [(date(2026, 9, 1), date(2026, 11, 19))], row=0)
+    fall_th = LocalProgram("Girls Locals", "Thu", "5:30", [6], [], True, [(date(2026, 9, 1), date(2026, 11, 19))],
+                           row=0)
+    spring = LocalProgram("Girls Locals", "Tue", "5:30", [6], [], True, [(date(2027, 1, 5), date(2027, 3, 30))],
+                          row=1)
+    og = LocalProgram("Open Gym", "Sun", "1PM", [8], [], True, [(date(2027, 1, 3), date(2027, 1, 31))], row=2)
+    closures = {date(2027, 1, 12): "Closed"}
+    m = program_marks([fall, fall_th, spring, og], closures)
+    assert m[0, date(2026, 9, 1)] == c(1) and m[0, date(2026, 9, 3)] == c(2)   # Tue then Thu
+    assert (0, date(2026, 9, 8)) not in m and m[0, date(2026, 11, 19)] == c("LAST")
+    assert m[1, date(2027, 1, 5)] == c(1) and m[1, date(2027, 1, 19)] == c(2)  # closed 1/12 doesn't count
+    assert [m[2, date(2027, 1, d)] for d in (3, 10, 17, 24)] == [c(1), c(2), c(3), c(4)]
+    assert m[2, date(2027, 1, 31)] == c(5) + c("LAST")
+    t = [Tournament("GL Nov", "local", date(2026, 11, 7), date(2026, 11, 7), [], [1], [], program="Girls Locals"),
+         Tournament("GL Feb", "local", date(2027, 2, 6), date(2027, 2, 6), [], [1], [], program="Girls Locals"),
+         Tournament("GL Jan", "local", date(2027, 1, 23), date(2027, 1, 24), [], [1], [], program="Girls Locals")]
+    tm = tournament_marks(t, [fall, fall_th, spring, og])
+    assert tm[id(t[0])] == ONLY_MARK                       # the fall season's only one
+    assert tm[id(t[2])] == c(1) and tm[id(t[1])] == c(2)   # spring: Jan, then Feb
 
 
 def test_fill_530_before_720():
