@@ -2405,11 +2405,14 @@ def test_paper_print_local_tournament_blocks_and_last_session():
                          r.weekend_dates, data.locals)
     # Nov 2026: the tournament blocks out its times on each of its courts (1-7), not big on Court 1.
     from scheduler.paper import ONLY_MARK  # it's the only one, so it carries a circled 1 and ONLY
-    assert h.count('<div class="tnb"') == 7 and h.count(f"<b>Boys Local Tourney{ONLY_MARK}</b>") == 7
+    # Nov 18: its marks only on its first court (and in the day's header); the other six show the name
+    assert h.count('<div class="tnb"') == 7 and h.count(f"<b>Boys Local Tourney{ONLY_MARK}</b>") == 1
+    assert h.count("<b>Boys Local Tourney</b>") == 6
     assert "tnbig" not in h
-    n_last = len(r.assignments[(r.assignments["name"] == lp.name) & (r.assignments["date"] == date(2026, 12, 3))]
-                 .drop_duplicates(["court", "slot"]))
-    assert h.count('class="last">LAST') == n_last > 0
+    # Nov 18: LAST only where the program first appears that day (its first court), not on every court
+    on = r.assignments[(r.assignments["name"] == lp.name) & (r.assignments["date"] == date(2026, 12, 3))]
+    first = min(on["court"], key=lambda c: 99 if c > 7 else c)
+    assert h.count('class="last">LAST') == len(on[on["court"] == first].drop_duplicates("slot")) > 0
     assert "border-top: 1.5px solid #555; padding: 0 5px" not in h   # no line above the first practice time
 
 

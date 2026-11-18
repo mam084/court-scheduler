@@ -29,6 +29,7 @@ from .config import (
 from .labels import label_of, with_labels
 
 HALVES = [([1, 2, 3, 4], "Courts 1–4"), ([5, 6, 7, PRACTICE_COURT], "Courts 5–7 & practice court")]
+PRINT_ORDER = {c: i for i, c in enumerate(c for cs, _ in HALVES for c in cs)}
 
 # Time labels as the club writes them.
 LABEL = {"3:30": "3:30-4:30", "4:30": "4:30-5:30", "3:45": "3:45-5:30", "5:30": "5:30-7:20", "7:20": "7:20-9:10",
@@ -335,7 +336,11 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
             # about as tall as the lines it replaces, so the times after it stay where they'd be
             h = len(gone) * (24 if weekend else 39) - 5
             head = f"Local tournament{'s' if len(tn_here) > 1 else ''} · until 7 PM"
-            names = "".join(f"<b>{n}</b>" for n in _tourn_names(tn_here, only))
+            # its number only on the first of its courts (Nov 18, 2026); the day's header has it too
+            firsts = {id(tn) for tn in tn_here
+                      if c == min(tn.courts, key=lambda x: PRINT_ORDER.get(x, 99))}
+            names = "".join(f"<b>{n}</b>" for n in _tourn_names(
+                tn_here, {i: m for i, m in only.items() if i in firsts}))
             items.append((tn_min, f'<div class="tnb" style="min-height:{h}px"><small>{head}</small>{names}</div>'))
         slots = [x for x in slots if x not in gone]
     for s in slots:
@@ -425,6 +430,14 @@ def paper_weeks_html(assignments: pd.DataFrame, start: date, end: date, closures
         # None: the program row isn't known (falls back to LAST by name); "" for no marks
         a["pmark"] = [marks.get((w, r["date"]), "") if w >= 0 else None
                       for w, r in zip(rows_, a.to_dict("records"))]
+    if len(a) and "pmark" in a:
+        # Nov 18, 2026: a program's marks go only where it first appears that day (its first court in
+        # print order: courts 1-4, then 5-7 and the practice court), not on every court it takes.
+        is_loc = a["kind"] == "Local"
+        first = a[is_loc].assign(_o=a.loc[is_loc, "court"].map(PRINT_ORDER)).groupby(["name", "date"])["_o"].min()
+        keep = [k != "Local" or PRINT_ORDER.get(c) == first.get((n, d))
+                for k, c, n, d in zip(a["kind"], a["court"], a["name"], a["date"])]
+        a["pmark"] = [m if ok else "" for m, ok in zip(a["pmark"], keep)]
     need_by_week = {}
     if practice_counts is not None and len(practice_counts):
         need_by_week = practice_counts.groupby("week_of")["target"].sum().to_dict()
