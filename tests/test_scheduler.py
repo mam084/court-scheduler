@@ -1920,10 +1920,31 @@ def test_paper_marks_a_programs_only_local_tournament():
     t = [g14, b14a, b14b, two_day, away]
     assert only_tournaments(t) == {id(g14), id(two_day)}
     h = paper_weeks_html(pd.DataFrame(columns=["date", "court", "slot", "kind", "name"]), s, e, {}, t)
-    assert f"<b>G 14 L{ONLY_MARK}</b>" in h and f"<b>G HS{ONLY_MARK}</b>" in h
+    # Nov 18: local tournaments are labeled by their program ("<shorthand> Local Tourney")
+    assert f"<b>G 14 L Local Tourney{ONLY_MARK}</b>" in h and f"<b>G HS L Local Tourney{ONLY_MARK}</b>" in h
     # Nov 18: every other local tournament gets its number in the program circled (12/7 is B 14 L's 2nd)
-    assert '<b>Boys 14s<span class="last">2</span></b>' in h and f"Boys 14s{ONLY_MARK}" not in h
+    assert '<b>B 14 L Local Tourney<span class="last">2</span></b>' in h and f"B 14 L Local Tourney{ONLY_MARK}" not in h
     assert f"Far Away Cup{ONLY_MARK}" not in h and 'Far Away Cup (travel)<span' not in h
+
+
+def test_local_tournament_label_comes_from_its_program():
+    """Nov 18, 2026: local tournaments are typed in as just "SDVBC" / "Seaside"; the printouts and court
+    view call them by their program's shorthand. Travel ones and ones without a program keep their name."""
+    from scheduler.data import Tournament, merge_local_tournaments
+    from scheduler.labels import PROGRAM_SHORT
+    PROGRAM_SHORT.update({"Boys 14s Locals": "B14L", "Girls HS League": "GHS"})
+    try:
+        d = date(2027, 1, 16)
+        b = Tournament("Seaside", "local", d, d, [], [1, 2], [], program="Boys 14s Locals")
+        g = Tournament("SDVBC", "local", d, d, [], [5], [], program="Girls HS League")
+        g2 = Tournament("SDVBC", "local", d, d, [], [6], [], program="Girls 12s Locals")  # no shorthand
+        assert b.label() == "B14L Local Tourney" and g.label() == "GHS Local Tourney"
+        assert merge_local_tournaments([g, g2])[0].label() == "GHS / Girls 12s Locals Local Tourney"
+        assert Tournament("Holiday Cup", "local", d, d, [], [1], []).label() == "Holiday Cup"
+        assert Tournament("Far Away", "travel", d, d, ["S14-B"], [], [], program="x").label() == "Far Away"
+    finally:
+        PROGRAM_SHORT.pop("Boys 14s Locals", None)
+        PROGRAM_SHORT.pop("Girls HS League", None)
 
 
 def test_paper_numbers_program_sessions_and_tournaments():

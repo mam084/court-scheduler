@@ -241,12 +241,12 @@ def tournament_marks(tourns, locals_=None) -> dict[int, str]:
 
 
 def _tourn_names(here: list, tmarks: dict) -> list[str]:
-    """Local tournaments' names with their marks; same-named ones (two programs hosting one) once."""
+    """Local tournaments' labels ("B14L Local Tourney") with their marks; the same label twice once."""
     names: dict[str, list] = {}
     shown: dict[str, str] = {}
     for tn in here:
-        k = _name_key(tn.name)
-        shown.setdefault(k, tn.name)
+        k = _name_key(tn.label())
+        shown.setdefault(k, tn.label())
         m = tmarks.get(id(tn), "")
         if m and m not in names.setdefault(k, []):
             names[k].append(m)

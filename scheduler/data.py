@@ -1049,7 +1049,14 @@ class Tournament:
         return self.end > self.start
 
     def label(self) -> str:
-        return self.name
+        """What the printouts and court view call it (Nov 18, 2026): a local tournament goes by its
+        program's shorthand, "B14L Local Tourney" (two programs hosting one: "G14L / GHS Local Tourney"),
+        since the names typed in are just the club (SDVBC / Seaside). Google Calendar keeps the name."""
+        progs = [p for p in (getattr(self, "programs", None) or [self.program]) if p and str(p).strip()]
+        if self.kind != "local" or not progs:
+            return self.name
+        from .labels import PROGRAM_SHORT
+        return " / ".join(dict.fromkeys(PROGRAM_SHORT.get(p, p) for p in progs)) + " Local Tourney"
 
 
 def tournament_conflicts(teams: list[Team], tournaments: list[Tournament]) -> list[dict]:
