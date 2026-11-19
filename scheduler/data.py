@@ -1242,29 +1242,51 @@ def _same_name(a: str, b: str) -> bool:
     return " ".join(str(a).lower().split()) == " ".join(str(b).lower().split())
 
 
-def merge_local_tournaments(tournaments: list) -> list:
+def merge_local_tournaments(tournaments: list, by_day: bool = False) -> list:
     """Local tournaments with the same name (ignoring case and spacing) on overlapping days become one:
     the days of both, every court and coach, and `programs` listing each program running it. Travel
-    tournaments are left as they are."""
+    tournaments are left as they are.
+
+    by_day: when the ones merged don't run the same days (a 2-day "SDVBC" for the 14s locals and a
+    1-day "SDVBC" for Dave's Invite on its first day), one per day instead, each with only that day's
+    courts, coaches and programs (Nov 19, 2026: the merged one put Dave's Invite's courts on day two)."""
     from dataclasses import replace
-    out: list = []
+    groups: list[list] = []  # same-named local tournaments with overlapping days
+    out_idx: list = []       # travel ones and groups, in order
     for tn in tournaments:
         if tn.kind != "local":
-            out.append(tn)
+            out_idx.append(tn)
             continue
-        hit = next((i for i, o in enumerate(out) if o.kind == "local" and _same_name(o.name, tn.name)
-                    and o.start <= tn.end and tn.start <= o.end), None)
+        hit = next((g for g in groups if _same_name(g[0].name, tn.name)
+                    and min(x.start for x in g) <= tn.end and tn.start <= max(x.end for x in g)), None)
         if hit is None:
-            out.append(replace(tn, courts=list(tn.courts), coaches=list(tn.coaches)))
-            out[-1].programs = [tn.program] if getattr(tn, "program", "") else []
-            continue
-        o = out[hit]
-        progs = list(dict.fromkeys(o.programs + ([tn.program] if getattr(tn, "program", "") else [])))
-        out[hit] = replace(o, start=min(o.start, tn.start), end=max(o.end, tn.end),
-                           courts=sorted(set(o.courts) | set(tn.courts)),
-                           coaches=list(dict.fromkeys(list(o.coaches) + list(tn.coaches))),
-                           side=o.side if o.side == tn.side else "", until=max(o.until, tn.until))
-        out[hit].programs = progs
+            groups.append([tn])
+            out_idx.append(groups[-1])
+        else:
+            hit.append(tn)
+
+    def merged(ms: list, a: date, b: date):
+        first = ms[0]
+        out = replace(first, start=a, end=b, courts=sorted({c for m in ms for c in m.courts}),
+                      coaches=list(dict.fromkeys(c for m in ms for c in m.coaches)),
+                      side=first.side if all(m.side == first.side for m in ms) else "",
+                      until=max(m.until for m in ms))
+        out.programs = list(dict.fromkeys(m.program for m in ms if getattr(m, "program", "")))
+        return out
+
+    out: list = []
+    for x in out_idx:
+        if not isinstance(x, list):
+            out.append(x)
+        elif not by_day or len({(m.start, m.end) for m in x}) == 1:
+            out.append(merged(x, min(m.start for m in x), max(m.end for m in x)))
+        else:
+            d, last = min(m.start for m in x), max(m.end for m in x)
+            while d <= last:
+                here = [m for m in x if m.start <= d <= m.end]
+                if here:
+                    out.append(merged(here, d, d))
+                d += timedelta(days=1)
     return out
 
 

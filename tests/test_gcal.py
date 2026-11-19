@@ -378,3 +378,23 @@ def test_local_tournaments_go_only_to_their_own_programs_and_side():
     assert gcal.program_span(lps[2:], {"Dave's Invite"},
                              tns + [Tournament("SDVBC", "local", date(2027, 5, 15), date(2027, 5, 15), [], [1], [],
                                                program="Dave's Invite")]) == (date(2027, 1, 5), date(2027, 5, 15))
+
+
+def test_merged_tournament_keeps_each_programs_own_days():
+    """Nov 19, 2026: the 14s locals' "SDVBC" runs Sat-Sun, Dave's Invite's "SDVBC" only the Saturday (no
+    last day). The club calendar gets one Sat-Sun event; Dave's Invite's calendar only Saturday; and the
+    court view's Sunday has only the locals' courts."""
+    from scheduler.data import Tournament, merge_local_tournaments
+    sat, sun = date(2027, 1, 23), date(2027, 1, 24)
+    tns = [Tournament("SDVBC", "local", sat, sun, [], [1, 2, 3], [], program="Girls 14s Locals", side="Girls"),
+           Tournament("SDVBC", "local", sat, sat, [], [5, 6], [], program="Dave's Invite", side="Girls")]
+    links = {("Program", "Girls 14s Locals"): "c14", ("Program", "Dave's Invite"): "cdave",
+             ("Club", "SDVBC"): "girls", ("Club", "Seaside"): "boys"}
+    evs, _ = gcal.desired_events(None, None, tns, [], links, date(2027, 1, 1), date(2027, 1, 31))
+    span = {e.calendar_id: (e.start, e.end) for e in evs}
+    assert span["cdave"] == (sat, sun)            # all-day: Saturday only (end is exclusive)
+    assert span["c14"] == (sat, date(2027, 1, 25)) and span["girls"] == (sat, date(2027, 1, 25))
+    assert "boys" not in span and len(evs) == 3
+    days = merge_local_tournaments(tns, by_day=True)
+    assert [(t.start, t.courts, t.programs) for t in days] == [
+        (sat, [1, 2, 3, 5, 6], ["Girls 14s Locals", "Dave's Invite"]), (sun, [1, 2, 3], ["Girls 14s Locals"])]

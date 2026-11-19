@@ -395,7 +395,7 @@ def court_grid_html(
         return wd not in WEEKDAYS or bool(open_wk and d in open_wk)
 
     # Same-named local tournaments on the same days (two programs hosting one) show as one (Nov 2026).
-    tournaments = merge_local_tournaments(tournaments or [])
+    tournaments = merge_local_tournaments(tournaments or [], by_day=True)  # each day its own courts
     blocked, partial, on_day = {}, {}, {}
     for wd in cols:
         d = (day_dates or {}).get(wd)

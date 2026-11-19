@@ -318,8 +318,16 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
                 boys_ |= {side == "Boys"} if side in ("Girls", "Boys") else {False, True}
             for boys in sorted(boys_):
                 put("Club", club_calendar(links, boys), key, title, desc, s, e, True)
+            # Each program's calendar gets the same event, but on that program's own days (Nov 19, 2026):
+            # Dave's Invite playing only the first day of the 14s locals' 2-day "SDVBC" gets Saturday,
+            # not Saturday-Sunday.
+            from .data import _same_name
             for p_ in progs:
-                put("Program", p_, key, title, desc, s, e, True)
+                own = [m for m in tournaments if m.kind == "local" and getattr(m, "program", "") == p_
+                       and _same_name(m.name, tn.name) and m.start <= tn.end and tn.start <= m.end]
+                a_ = min((m.start for m in own), default=tn.start)
+                b_ = max((m.end for m in own), default=tn.end)
+                put("Program", p_, f"tournament|{a_}|{tn.name}", title, desc, a_, b_ + timedelta(days=1), True)
     return out, sorted(missing)
 
 
