@@ -459,7 +459,7 @@ def _program_runs(client):
                           help="Send everything to one test calendar instead. Nothing real is touched.")
     test_cal = st.text_input("Test calendar ID", key="cal_prog_test_id",
                              placeholder="ID of a throwaway calendar shared with the app") if test_mode else ""
-    span = gcal.program_span(cleaned.locals, set(pick)) if pick else None
+    span = gcal.program_span(cleaned.locals, set(pick), cleaned.tournaments) if pick else None
     if pick and span is None:
         st.warning("Those programs don't have start and end dates yet.")
     if not pick or span is None:
@@ -470,7 +470,7 @@ def _program_runs(client):
     tourns = [tn for tn in cleaned.tournaments if getattr(tn, "program", "") in pick]
     evs, _ = gcal.desired_events(None, rows, tourns, cleaned.teams, plinks, p0, p1,
                                  test_cal.strip() if test_mode else "", secret("CLUB_ADDRESS") or "",
-                                 {}, cleaned.locals, cleaned.closures)
+                                 {lp.name: lp.side for lp in cleaned.locals}, cleaned.locals, cleaned.closures)
     # The programs' own calendars, and their sides' club calendars (girls SDVBC, boys Seaside, both both).
     evs = [e for e in evs if e.target.startswith(("Program:", "Club:"))]
     cals = sorted({test_cal.strip()} if test_mode and test_cal.strip() else

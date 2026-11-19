@@ -349,3 +349,32 @@ def test_program_events_have_no_courts():
     evs, _ = gcal.desired_events(None, gcal.program_sessions([lp], {}, d, d), [], [], {("Program", lp.name): "g"},
                                  d, d, locals_=[lp])
     assert [e.summary for e in evs] == ["Girls Locals"] and "Court" not in evs[0].description
+
+
+def test_local_tournaments_go_only_to_their_own_programs_and_side():
+    """Nov 19, 2026: three girls 14s programs (L14, L14T, Dave's Invite L14D) with "SDVBC" local tournaments
+    on two dates, Dave's Invite only playing one. Sent together: each program calendar gets only its own
+    dates, and they go on the SDVBC calendar only (not Seaside), even when the program sides are passed
+    empty (the whole-run send did that)."""
+    from scheduler.data import LocalProgram, Tournament
+    j, f = date(2027, 1, 23), date(2027, 2, 13)
+    rng = [(date(2027, 1, 5), date(2027, 3, 30))]
+    lps = [LocalProgram(n, "Tue", "5:30", [6], [], True, rng, row=i, side="Girls", short=s)
+           for i, (n, s) in enumerate([("Girls 14s Locals", "L14"), ("Girls 14s Tue", "L14T"),
+                                       ("Dave's Invite", "L14D")])]
+    tns = [Tournament("SDVBC", "local", j, j, [], [1, 2], [], program="Girls 14s Locals", side="Girls"),
+           Tournament("SDVBC", "local", j, j, [], [3, 4], [], program="Dave's Invite", side="Girls"),
+           Tournament("SDVBC", "local", f, f, [], [1, 2], [], program="Girls 14s Locals", side="Girls"),
+           Tournament("SDVBC", "local", f, f, [], [3, 4], [], program="Girls 14s Tue", side="Girls")]
+    links = gcal.with_program_shorthand({("Program", "L14"): "c14", ("Program", "L14T"): "c14t",
+                                         ("Program", "L14D"): "cdave", ("Club", "SDVBC"): "girls",
+                                         ("Club", "Seaside"): "boys"}, lps)
+    for sides in ({lp.name: lp.side for lp in lps}, {}):
+        evs, _ = gcal.desired_events(None, None, tns, [], links, date(2027, 1, 1), date(2027, 3, 31), "", "",
+                                     sides, lps)
+        on = lambda cid: sorted(e.start for e in evs if e.calendar_id == cid)  # noqa: E731
+        assert on("cdave") == [j] and on("c14") == [j, f] and on("c14t") == [f]
+        assert on("girls") == [j, f] and on("boys") == []
+    assert gcal.program_span(lps[2:], {"Dave's Invite"},
+                             tns + [Tournament("SDVBC", "local", date(2027, 5, 15), date(2027, 5, 15), [], [1], [],
+                                               program="Dave's Invite")]) == (date(2027, 1, 5), date(2027, 5, 15))

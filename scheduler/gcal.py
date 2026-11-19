@@ -185,9 +185,13 @@ def program_row(r: dict, locals_) -> int:
     return -1
 
 
-def program_span(locals_: list, names) -> tuple[date, date] | None:
-    """First and last day the given programs run (None if none of them has dates)."""
+def program_span(locals_: list, names, tournaments=None) -> tuple[date, date] | None:
+    """First and last day the given programs run, stretched to cover their local tournaments (Nov 19,
+    2026: a league's tournaments after its last session were left off). None if none has dates."""
     days = [x for lp in locals_ if lp.name in names for a, b in lp.ranges for x in (a, b)]
+    if days:
+        days += [x for tn in tournaments or [] if tn.kind == "local" and getattr(tn, "program", "") in names
+                 for x in (tn.start, tn.end)]
     return (min(days), max(days)) if days else None
 
 
@@ -304,7 +308,11 @@ def desired_events(practices: pd.DataFrame, local_rows: pd.DataFrame, tournament
             desc = f"Hosted here until {tn.until_label}." + (
                 f"\nWorking it: {', '.join(tn.coaches)}" if tn.coaches else "")
             progs = [p_ for p_ in getattr(tn, "programs", None) or [getattr(tn, "program", "")] if p_]
-            sides = {programs_side.get(p_, "") for p_ in progs} or {""}
+            # its programs' sides (the tournament's own side when a program's isn't known): girls on
+            # SDVBC, boys on Seaside, only both when it's both or nobody knows (Nov 19, 2026: an SDVBC one
+            # sent with a girls program landed on the Seaside calendar too)
+            sides = {programs_side.get(p_) or getattr(tn, "side", "") or "" for p_ in progs} \
+                or {getattr(tn, "side", "") or ""}
             boys_ = set()
             for side in sides:
                 boys_ |= {side == "Boys"} if side in ("Girls", "Boys") else {False, True}
