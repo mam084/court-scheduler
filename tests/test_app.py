@@ -1851,3 +1851,27 @@ def test_admin_changes_a_practices_hours(db):
     assert any(r["team"] == team and r["end"] == "8 PM" for r in saved)
     next(b for b in at.button if b.label == "Back to normal hours").click().run()
     assert not at.exception and not len(at.session_state["inp"].hours)
+
+
+def test_new_tournament_form_starts_fresh_after_adding_one(db):
+    """Nov 19, 2026: adding a local tournament for one program left that program picked for the next new
+    one, so the next tournament added was quietly linked to it (Dave's Invite / HS Invite getting other
+    programs' tournaments on Google Calendar)."""
+    from streamlit.testing.v1 import AppTest
+    pid = _save(db, "Tourneys", 5)
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Tournaments").run()
+    progs = [o for o in next(w for w in at.selectbox if w.key.startswith("t_prog")).options if o != "(none)"]
+    assert progs
+    key = lambda p: next(w.key for w in at.selectbox if w.key.startswith(p))  # noqa: E731
+    at.text_input(key=next(w.key for w in at.text_input if w.key.startswith("t_name"))).set_value("SDVBC").run()
+    at.selectbox(key=key("t_prog")).set_value(progs[0]).run()
+    next(b for b in at.button if b.label == "Add tournament").click().run()
+    assert not at.exception
+    t = at.session_state["inp"].tournaments
+    assert (t["program"] == progs[0]).sum() == 1
+    # the form for the next one is blank again: no program carried over
+    assert at.selectbox(key=key("t_prog")).value == "(none)"
+    assert at.text_input(key=next(w.key for w in at.text_input if w.key.startswith("t_name"))).value == ""

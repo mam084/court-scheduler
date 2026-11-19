@@ -36,7 +36,11 @@ def render():
                          key=f"t_sel_{len(_trows)}")
     editing = t_sel != "__new__"
     cur_t = _trows.iloc[t_sel] if editing else None
-    sfx = f"_{t_sel}_{st.session_state.get('locals_ver', 0)}" if editing else ""
+    # Every field's key carries the version, which goes up with each save, so the form starts fresh after
+    # adding one (Nov 19, 2026: a new tournament kept the last one's locals program, courts and coaches, so
+    # the next one added was quietly linked to the same program).
+    _v = st.session_state.get("locals_ver", 0)
+    sfx = f"_{t_sel}_{_v}" if editing else f"_new_{_v}"
 
     def _tval(col, default=""):
         return str(cur_t.get(col, "")).strip() if editing and not blank(cur_t.get(col, "")) else default
@@ -157,7 +161,6 @@ def render():
             else:
                 inp.tournaments = pd.concat([inp.tournaments, pd.DataFrame([row])], ignore_index=True)
                 st.session_state.flash = f"Added {row['name']} ({t_kind.lower()}, {span})."
-                st.session_state.pop("t_name", None)  # clear the form for the next one
             st.session_state.locals_ver = st.session_state.get("locals_ver", 0) + 1
             st.session_state.flash += " " + dates.rebuild_for([(before, inp.tournaments, ("start_date", "end_date"))])
             st.rerun()
