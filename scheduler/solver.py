@@ -60,6 +60,7 @@ from .config import (
     back_to_back,
     court_name,
     day_in_week,
+    is_custom_slot,
     is_late_exception,
     net_height,
     pecking_weights,
@@ -872,7 +873,10 @@ def solve(
             prog = {lp.slot for lp in data.locals if lp.runs_on(d) and c in lp.coaches}
             parts = []
             for band in (EARLY, MID, LATE):
-                const = any(sl in prog for sl in band)
+                # a program at its own hours (1:30-4:30, Nov 20, 2026) counts in each band it overlaps
+                ref = {EARLY: "3:45", MID: "5:30", LATE: "7:20"}[band]
+                const = any(sl in prog for sl in band) or any(
+                    is_custom_slot(sl) and slots_overlap(sl, ref) for sl in prog)
                 vs = [y[t, d, sl] for t in ts for sl in band if (t, d, sl) in y]
                 parts.append((const, vs))
             (ce, ve), (cm, vm), (cl, vl) = parts

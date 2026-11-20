@@ -14,6 +14,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from .config import (
+    is_custom_slot,
     ALL_COURTS,
     COURTS,
     PRACTICE_COURT,
@@ -244,7 +245,7 @@ def _chip(r, stripes, highlight=None, compact=False, local_coaches=False) -> str
     who = f'<br><span>{html.escape(coaches)}</span>' if local_coaches and coaches else ""
     if is_local:
         return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
-                f'<span class="cs-time">{r["slot"]}</span> {name}{who}</div>')
+                f'<span class="cs-time">{_time_txt(r)}</span> {name}{who}</div>')
     return (f'<div class="{" ".join(cls)}" style="{style}" title="{html.escape(title)}">'
             f'<b><span class="cs-time">{_time_txt(r)}</span> {name}</b><span>{html.escape(coaches)}</span>'
             + (f"<div>{tags}</div>" if tags else "") + '</div>')
@@ -256,6 +257,9 @@ def _time_txt(r) -> str:
     if t0 is not None and t1 is not None and not (isinstance(t0, float) and pd.isna(t0)):
         from .hours import short_label
         return short_label(int(t0), int(t1))
+    if is_custom_slot(r["slot"]):  # a program at its own hours: '1:30-4:30' (Nov 20, 2026)
+        from .hours import short_label, slot_span
+        return short_label(*slot_span(r["slot"]))
     return str(r["slot"])
 
 

@@ -153,6 +153,105 @@ WEEKEND_SLOTS = {
     "5PM": "5–7 PM",
     "7PM": "7–9 PM",
 }
+# ---- Programs at their own hours (Nov 20, 2026) -------------------------------------------------
+# A program can run at any start and end, like 1:30-4:30, instead of one of the club's timeslots.
+# Its time is a timeslot of its own, keyed by its label ("1:30–4:30 PM", "8:30–11 AM",
+# "11:30 AM–1 PM"). It's added to SLOTS / SLOT_TIMES / SLOT_KEYS / PROGRAM_SLOTS the first time
+# anything reads that label (a Locals row, a saved schedule), so everything that works by timeslot
+# (blocking, the court view, printouts, Google Calendar) just works: it blocks every club timeslot
+# its hours overlap (1:30-4:30 takes its courts and coaches from 3:45 practices on a weekday, and
+# from the 1-3 and 3-5 blocks on an open day). Team practices never use one.
+
+def _clock(m: int, ampm: bool = True) -> str:
+    h, mi = divmod(int(m), 60)
+    out = f"{(h - 1) % 12 + 1}" + (f":{mi:02d}" if mi else "")
+    return out + (f" {'PM' if h >= 12 else 'AM'}" if ampm else "")
+
+
+def custom_slot_key(start: int, end: int) -> str:
+    """(810, 990) -> '1:30–4:30 PM': a program's own hours (minutes after midnight) as its timeslot key."""
+    same = (start >= 720) == (end >= 720)
+    return f"{_clock(start, ampm=not same)}–{_clock(end)}"
+
+
+_CUSTOM_RE = None
+
+
+def parse_custom_slot(key) -> tuple[int, int] | None:
+    """'1:30–4:30 PM' (a custom_slot_key) -> (810, 990); None for anything else."""
+    import re
+    global _CUSTOM_RE
+    if _CUSTOM_RE is None:
+        _CUSTOM_RE = re.compile(r"^(\d{1,2})(?::(\d{2}))?(?: (AM|PM))?–(\d{1,2})(?::(\d{2}))? (AM|PM)$")
+    m = _CUSTOM_RE.match(str(key))
+    if not m:
+        return None
+    h0, m0, ap0, h1, m1, ap1 = m.groups()
+
+    def mins(h, mi, ap):
+        h = int(h) % 12 + (12 if ap == "PM" else 0)
+        return h * 60 + int(mi or 0)
+    end = mins(h1, m1, ap1)
+    start = mins(h0, m0, ap0 or ap1)
+    if end <= start or custom_slot_key(start, end) != key:
+        return None
+    return start, end
+
+
+def is_custom_slot(slot) -> bool:
+    """A program time at its own hours (not one of the club's timeslots)."""
+    return slot not in _BUILT_IN and parse_custom_slot(slot) is not None
+
+
+def register_custom_slot(start: int, end: int) -> str:
+    """Make a program time at its own hours a timeslot (once) and return its key."""
+    key = custom_slot_key(start, end)
+    if dict.__contains__(SLOT_TIMES, key):
+        return key
+    t = ((start // 60, start % 60), (end // 60, end % 60))
+    dict.__setitem__(SLOT_TIMES, key, t)
+    dict.__setitem__(SLOTS, key, key)
+    if not list.__contains__(SLOT_KEYS, key):
+        list.append(SLOT_KEYS, key)
+        SLOT_KEYS.sort(key=lambda k: SLOT_TIMES[k][0])
+    return key
+
+
+def _known(key) -> bool:
+    """Registers a custom program time the first time it's looked up; True if it's a timeslot."""
+    if isinstance(key, str) and not dict.__contains__(SLOT_TIMES, key):
+        span = parse_custom_slot(key)
+        if span:
+            register_custom_slot(*span)
+    return isinstance(key, str) and dict.__contains__(SLOT_TIMES, key)
+
+
+class _SlotDict(dict):
+    """SLOTS / SLOT_TIMES: also knows every program time at its own hours ('1:30–4:30 PM')."""
+
+    def __missing__(self, key):
+        if _known(key) and dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        raise KeyError(key)
+
+    def __contains__(self, key):
+        return dict.__contains__(self, key) or (_known(key) and dict.__contains__(self, key))
+
+    def get(self, key, default=None):
+        return self[key] if key in self else default
+
+
+class _SlotList(list):
+    """SLOT_KEYS: every timeslot in time order, custom program times included."""
+
+    def __contains__(self, key):
+        return list.__contains__(self, key) or _known(key)
+
+    def index(self, key, *args):
+        _known(key)
+        return list.index(self, key, *args)
+
+
 # JumpStart (junior program) runs only in these early hour-long windows.
 # They're for programs, not team practices, and they overlap the 3:45 slot:
 # a court or coach in JumpStart can't also have a 3:45 practice.
@@ -177,10 +276,10 @@ def slots_overlap(a: str, b: str) -> bool:
     return a0 < b1 and b0 < a1
 
 
-SLOTS = {"3:30": PROGRAM_SLOTS["3:30"], "3:45": WEEKDAY_SLOTS["3:45"], "4:30": PROGRAM_SLOTS["4:30"],
+SLOTS = _SlotDict({"3:30": PROGRAM_SLOTS["3:30"], "3:45": WEEKDAY_SLOTS["3:45"], "4:30": PROGRAM_SLOTS["4:30"],
          "5:30": WEEKDAY_SLOTS["5:30"], "7:20": WEEKDAY_SLOTS["7:20"], "7:20s": PROGRAM_SLOTS["7:20s"],
-         **WEEKEND_SLOTS}
-SLOT_KEYS = list(SLOTS)  # display order within a day (put in time order below, once SLOT_TIMES exists)
+         **WEEKEND_SLOTS})
+SLOT_KEYS = _SlotList(SLOTS)  # display order within a day (put in time order below, once SLOT_TIMES exists)
 WEEKDAY_KEYS = list(WEEKDAY_SLOTS)        # team practice slots
 PROGRAM_KEYS = list(PROGRAM_SLOTS)
 WEEKEND_KEYS = list(WEEKEND_SLOTS)
@@ -193,7 +292,7 @@ WEEKDAY_DAYTIME = ["9AM", "11AM", "1PM"]
 PM_BLOCKS = {"1PM", "3PM", "5PM", "7PM"}
 
 # 24h (start, end) for calendar files.
-SLOT_TIMES = {
+SLOT_TIMES = _SlotDict({
     "3:30": ((15, 30), (16, 30)),
     "4:30": ((16, 30), (17, 30)),
     "3:45": ((15, 45), (17, 30)),
@@ -206,11 +305,12 @@ SLOT_TIMES = {
     "3PM": ((15, 0), (17, 0)),
     "5PM": ((17, 0), (19, 0)),
     "7PM": ((19, 0), (21, 0)),
-}
+})
 
 # Time order, so a day mixing weekday times and 2-hour blocks (a morning camp on a weekday) lists
 # them as they happen: 9AM, 11AM, 1PM, 3PM, 3:30, 3:45, 4:30, 5PM, 5:30, 7PM, 7:20.
 SLOT_KEYS[:] = sorted(SLOT_KEYS, key=lambda k: SLOT_TIMES[k][0])
+_BUILT_IN = frozenset(SLOT_TIMES)  # the club's own timeslots (not programs at their own hours)
 
 PRACTICES_PER_WEEK = 2   # default; a team can ask for more (Teams `practices` column)
 MAX_PRACTICES_PER_WEEK = 5

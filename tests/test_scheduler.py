@@ -2823,3 +2823,62 @@ def test_local_tournament_ending_early_frees_later_times():
     assert t.until == (15, 0) and t.until_label == "3 PM"
     h = paper_weeks_html(pd.DataFrame(columns=["date", "court", "slot", "kind", "name"]), s, e, {}, data.tournaments)
     assert "until 3 PM" in h and "until 7 PM" not in h
+
+
+# ------------------------------------------------- programs at their own hours (Nov 20, 2026) --
+
+def test_program_own_hours_parse():
+    p = lambda v: parse_times(v, programs=True)  # noqa: E731
+    assert p("1:30-4:30") == {"1:30–4:30 PM"}
+    assert p("1:30 PM to 4:30 PM") == {"1:30–4:30 PM"}
+    assert p("9-11:30 AM") == p("9-11:30") == {"9–11:30 AM"}
+    assert p("10-12:30") == {"10 AM–12:30 PM"}
+    # still the club's own times when that's exactly what's written
+    assert p("3:45-7:20") == {"3:45", "5:30"}
+    assert p("9AM-1PM") == {"9AM", "11AM"}
+    assert p("3:30-5:30") == {"3:30", "4:30"}
+    assert p("7:20-8:30") == {"7:20s"}
+    assert p("8:30-11, 5:30") == {"8:30–11 AM", "5:30"}
+    assert p("1:30–4:30 PM") == {"1:30–4:30 PM"}  # as it's saved
+    # team times don't take custom hours
+    with pytest.raises(ValueError):
+        parse_times("1:30-4:30")
+    with pytest.raises(ValueError):
+        p("2-4 AM")
+
+
+def test_program_own_hours_blocks_overlapping_times():
+    from scheduler.config import SLOT_KEYS, SLOT_TIMES, SLOTS
+    teams = [{"team": f"13-K{i}", "age": 13} for i in range(4)]
+    avail = [{"who": t["team"], "type": "No", "times": "5:30"} for t in teams]  # force 3:45
+    prog = [{"program": "Winter Clinic", "side": "Girls", "days": "Mon, Wed", "time": "1:30-4:30",
+             "courts": "1-7"}]
+    inp = _inp(teams, avail, locals_=prog)
+    data = clean(inp, *NOV)
+    key = "1:30–4:30 PM"
+    assert {lp.slot for lp in data.locals} == {key}
+    assert SLOT_TIMES[key] == ((13, 30), (16, 30)) and SLOTS[key] == key
+    assert SLOT_KEYS.index("1PM") < SLOT_KEYS.index(key) < SLOT_KEYS.index("3PM")
+    assert slots_overlap(key, "3:45") and not slots_overlap(key, "5:30")
+    r = solve(inp, *NOV, time_limit_s=10)
+    a = r.assignments
+    pr = a[a["kind"] == "Practice"]
+    assert not pr.empty and pr[pr["day"].isin(["Mon", "Wed"])].empty  # its 3:45s are blocked on every court
+    clinic = a[a["name"] == "Winter Clinic"]
+    assert set(clinic["slot"]) == {key} and set(clinic["slot_label"]) == {key}
+    assert set(clinic["day"]) == {"Mon", "Wed"}
+    # it clashes with another program on the same court at an overlapping time
+    clash = prog + [{"program": "Open Gym", "days": "Mon", "time": "3:45", "courts": "2"}]
+    with pytest.raises(ValueError, match="Winter Clinic"):
+        clean(_inp(teams, avail, locals_=clash), *NOV)
+
+
+def test_program_own_hours_on_a_court_leaves_others_open():
+    teams = [{"team": f"13-K{i}", "age": 13, "practices": 1} for i in range(4)]
+    avail = [{"who": t["team"], "type": "No", "times": "5:30"} for t in teams] + \
+        [{"who": t["team"], "type": "No", "days": "Tue, Wed, Thu, Fri"} for t in teams]  # Mondays at 3:45
+    prog = [{"program": "Winter Clinic", "days": "Mon", "time": "1:30-4:30", "courts": "3, 4"}]
+    r = solve(_inp(teams, avail, locals_=prog), *NOV, time_limit_s=10)
+    pr = r.assignments[r.assignments["kind"] == "Practice"]
+    mon = pr[pr["day"] == "Mon"]
+    assert not mon.empty and not set(mon["court"]) & {3, 4}

@@ -72,6 +72,7 @@ from .config import (
     PROGRAM_KEYS,
     PROGRAM_SLOT_ALIASES,
     SLOT_KEYS,
+    SLOT_TIMES,
     WEEKDAY_DAYTIME,
     WEEKDAY_KEYS,
     WEEKDAYS,
@@ -80,6 +81,8 @@ from .config import (
     LOCAL_TOURNAMENT_END,
     blocked_by_local_tournament,
     default_priority,
+    is_custom_slot,
+    register_custom_slot,
     slot_allowed_for_age,
     slots_overlap,
 )
@@ -585,11 +588,20 @@ def parse_days(value) -> list[str]:
 _WEEKEND_HOUR = {9: "9AM", 11: "11AM", 13: "1PM", 15: "3PM", 17: "5PM", 19: "7PM"}
 
 
-def parse_times(value) -> set[str] | None:
+def parse_times(value, programs: bool = False) -> set[str] | None:
     """Any mix of weekday slots and weekend blocks -> set of slot keys.
-    Blank / 'All' -> None (any time)."""
+    Blank / 'All' -> None (any time).
+
+    programs=True (a program's time, Nov 20, 2026): a range that isn't made of the club's timeslots,
+    like '1:30-4:30' or '9-11:30', is the program's own hours ('1:30–4:30 PM'); see
+    config.register_custom_slot."""
     if blank(value) or str(value).strip().lower() in ("all", "any", "all day", "anytime", "anytimes"):
         return None
+    if programs:
+        out: set[str] = set()
+        for tok in parse_list(value, r"[;,/]|\s+or\s+|\s+and\s+"):
+            out |= _program_time(tok)
+        return out or None
     out: set[str] = set()
     for tok in parse_list(value, r"[;,/]|\s+or\s+|\s+and\s+"):
         alias = PROGRAM_SLOT_ALIASES.get(tok.strip().lower().replace(" ", "").replace("pm", ""))
@@ -628,6 +640,49 @@ def parse_times(value) -> set[str] | None:
             raise ValueError(f"'{tok}' isn't a weekend block start ({', '.join(WEEKEND_KEYS)})")
         out.add(_WEEKEND_HOUR[h24])
     return out or None
+
+
+def _program_time(tok: str) -> set[str]:
+    """One program time: club timeslots ('5:30', '3:45-7:20', '9AM-1PM') or its own hours
+    ('1:30-4:30', '9-11:30 AM', '1:30 PM to 4:30 PM')."""
+    tok = tok.strip()
+    if is_custom_slot(tok):  # already written as its own hours ('1:30–4:30 PM')
+        return {tok}
+    span = None
+    parts = re.split(r"\s*(?:-|–|—|\bto\b)\s*", tok, flags=re.I)
+    if len(parts) == 2 and parts[0] and parts[1]:
+        from .hours import parse_minutes
+        a_tok, b_tok = parts
+        try:
+            ap = re.search(r"(am|pm)\s*$", b_tok, re.I)
+            if ap and not re.search(r"(am|pm)", a_tok, re.I):
+                # '9-11:30 AM' / '1:30-4:30 PM': the start shares the end's AM/PM unless that would put
+                # it after the end ('11-1 PM' is 11 AM to 1 PM)
+                b = parse_minutes(b_tok)
+                a = parse_minutes(f"{a_tok} {ap.group(1)}")
+                if a >= b:
+                    a = parse_minutes(f"{a_tok} {'AM' if ap.group(1).lower() == 'pm' else 'PM'}")
+            else:
+                a, b = parse_minutes(a_tok), parse_minutes(b_tok)
+            span = (a, b) if b > a else None
+        except ValueError:
+            span = None
+    try:
+        slots = parse_times(tok)
+    except ValueError:
+        slots = None
+    if slots and span is None:
+        return slots
+    if slots and span:
+        lo = min(SLOT_TIMES[k][0] for k in slots)
+        hi = max(SLOT_TIMES[k][1] for k in slots)
+        if (lo[0] * 60 + lo[1], hi[0] * 60 + hi[1]) == span:
+            return slots  # it's exactly club timeslots ('3:45-7:20', '9AM-1PM')
+    if span:
+        if not 6 * 60 <= span[0] < span[1] <= 23 * 60:
+            raise ValueError(f"'{tok}' doesn't look like club hours (between 6 AM and 11 PM)")
+        return {register_custom_slot(*span)}
+    raise ValueError(f"Can't read time '{tok}' (like 5:30, 3:45-7:20, 9AM-1PM, or its own hours like 1:30-4:30)")
 
 
 def _parse_span(tok: str) -> set[str] | None:
@@ -1434,9 +1489,10 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
             days = parse_days(r["days"])
             if not days:
                 raise ValueError(f"days '{r['days']}' should be like 'Tue, Thu'")
-            times = parse_times(r["time"])
+            times = parse_times(r["time"], programs=True)
             if not times:
-                raise ValueError("needs a time (e.g. 5:30, 3:45-7:20, or 9AM-1PM on weekends)")
+                raise ValueError("needs a time (e.g. 5:30, 3:45-7:20, 9AM-1PM on weekends, or its own "
+                                 "hours like 1:30-4:30)")
             courts = parse_courts(r.get("courts"))
             on_site = True  # every program on the calendar uses our courts (the on_site column is ignored)
             staff = parse_names(r.get("coaches"))
@@ -1698,7 +1754,7 @@ def clean(inp: ScheduleInput, start: date | None = None, end: date | None = None
                 if not block and slot in WEEKEND_KEYS and slot not in WEEKDAY_DAYTIME:
                     raise ValueError(f"{d:%a %-m/%-d} is a regular weekday: use 3:45, 5:30 or 7:20, or a "
                                      "daytime block (9-11, 11-1 or 1-3) for a practice during the day")
-                if slot in PROGRAM_KEYS:
+                if slot in PROGRAM_KEYS or is_custom_slot(slot):
                     raise ValueError("JumpStart times are for programs, not team practices")
                 if not team.allowed(slot):
                     warnings.append(f"{row}: {team.age}s don't normally practice at {slot}; "

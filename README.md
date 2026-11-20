@@ -37,6 +37,7 @@ The solver ([Google OR-Tools CP-SAT](https://developers.google.com/optimization/
 - Teams at a travel tournament don't practice on tournament days, **or the day after** (Nov 2026: a no-date for them that's never broken)
 - At most one practice per team per day (weeks run Sunday–Saturday)
 - JumpStart programs (3:30–4:30, 4:30–5:30) block 3:45 practices on their courts and for their coaches
+- A program can run at its own hours (Nov 2026), like 1:30–4:30 or 9–11:30 AM: it blocks its courts and coaches in every club timeslot those hours overlap (1:30–4:30 takes 3:45 on a weekday, the 1–3 and 3–5 blocks on an open day)
 - The weekly template obeys the same rules, so it can be read as a real week
 
 **The club's rule order** (weights in [`scheduler/config.py`](scheduler/config.py); each rule outweighs several breaks of the one below it)
@@ -153,7 +154,7 @@ One `.xlsx` with these sheets. Download a filled-in example from the app's sideb
 | Teams | `team`, `club`, `age`, `head_coach` (girls teams can leave it blank: `18-Jordan` means Jordan), `assistants`, `start_date`, `priority` (optional 1–3), `weekend_only` (hard: `11/1 AM; 11/8 3PM`), `weekend_pref` (soft: `AM`, `Sat AM; Sun PM`), `late_ok` (`Yes` lets a 14s-and-under team practice at 7:20 when needed), `rank` (pecking order within the age group: `16-3` or `3`; blank = from the name, "Black" 1 and "Green" 2; files using the older `level` column still work), `practices` (a week; blank = 2) |
 | Availability | one row per rule: `who` (team or coach), `type` (`No` or `Not preferred`), `days` (`Mon`, `Weekdays`), `dates` (`11/10-11/16`), `times` (`5:30`, `3:45`), `note` |
 | Wishlist | `team`, `choice` (1 or 2), `days` (`Tue, Thu`; blank = any), `times` (`5:30, 7:20`) |
-| Locals | `program`, `side` (`Girls` / `Boys`; blank = guessed from a name like "G HS L"), `days` (`Tue, Thu`), `time` (`5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend or break camp `9AM-11AM`), `courts` (`1-4`, `P` = practice court; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional, e.g. `11/02/2026-12/18/2026`), `skip` (single dates it doesn't run, e.g. `11/12; 11/26`). A one-off extra session is its own row with one date |
+| Locals | `program`, `side` (`Girls` / `Boys`; blank = guessed from a name like "G HS L"), `days` (`Tue, Thu`), `time` (`5:30`, `3:45-7:20`, JumpStart `3:30` / `4:30`, weekend or break camp `9AM-11AM`, or its own hours like `1:30-4:30`), `courts` (`1-4`, `P` = practice court; blank until known), `coaches`, `on_site` (`No` for programs elsewhere), `dates` (optional, e.g. `11/02/2026-12/18/2026`), `skip` (single dates it doesn't run, e.g. `11/12; 11/26`). A one-off extra session is its own row with one date |
 | Coaches | `coach`, `email`, `phone`, `note`: roster for coaches who aren't on a team yet |
 | Weekends | open days in 2-hour blocks: `date` (a day or a range like `12/21-1/2`; a weekday listed here runs in blocks, for school breaks), `open` (`9AM-9PM`), `courts`, `group` + `required` (days in a required group: at least one gets used) |
 | Closures | `date`, `reason` |

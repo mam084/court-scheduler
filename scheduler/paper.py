@@ -17,6 +17,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from .config import (
+    is_custom_slot,
     COURTS,
     PRACTICE_COURT,
     SLOT_TIMES,
@@ -319,6 +320,10 @@ def _box(d: date, c: int, book: pd.DataFrame, tourns: list, privs: list, local_c
         if t0 is not None and t1 is not None and not (isinstance(t0, float) and pd.isna(t0)):
             labels[r["slot"]] = short_label(int(t0), int(t1))  # its own hours on its line: "9-11:30"
             holds.append((int(t0), int(t1), html.escape(label_of(r)), r["slot"]))
+        elif is_custom_slot(r["slot"]):  # a program at its own hours (1:30-4:30, Nov 20, 2026)
+            a_, b_ = slot_span(r["slot"])
+            labels[r["slot"]] = short_label(a_, b_)
+            holds.append((a_, b_, html.escape(label_of(r)), r["slot"]))
     if weekend:
         slots = list(WEEKEND_KEYS)
     else:

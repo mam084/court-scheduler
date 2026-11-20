@@ -3,7 +3,7 @@
 The one up-to-date list of the club's scheduling rules, as the app runs them now.
 Earlier decisions that were later changed are left out; see "Changed along the way"
 at the bottom for the reversals people may still remember.
-Last checked against the code: **Nov 15, 2026**.
+Last checked against the code: **Nov 20, 2026**.
 
 When the club changes a rule, update this file in the same commit as the code.
 The numbers live in `scheduler/config.py` (`WEIGHTS`, court ranks) and the hard
@@ -172,6 +172,12 @@ and privates.
   is set to "Runs on holidays". Closures are added by hand.
 - Weeks with nothing scheduled are treated as breaks: no automatic practices.
   Coaches add their own.
+- **Programs can run at their own hours** (Programs → *Its own hours*, like
+  1:30-4:30 or 9-11:30 AM) instead of one of the club's times. A program at its
+  own hours takes its courts and coaches from every club timeslot it overlaps:
+  1:30–4:30 keeps 3:45 practices off its courts (and its coaches free) on a
+  weekday, and takes the 1–3 and 3–5 blocks on an open day. Team practices never
+  use these times.
 - Daytime blocks (9–11, 11–1, 1–3) can go on a regular weekday (for example
   Veterans Day, or Thanksgiving week) without turning it into an open day. The
   day's other practices stay at their normal times.

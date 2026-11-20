@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from scheduler import ScheduleInput, clean
-from scheduler.config import ALL_COURTS, COURTS, DAYS, PROGRAM_KEYS, SLOT_KEYS, SLOTS, court_name
+from scheduler.config import ALL_COURTS, COURTS, DAYS, PROGRAM_KEYS, SLOT_KEYS, SLOTS, court_name, is_custom_slot
 from scheduler.data import (
     COLUMNS,
     blank,
@@ -31,7 +31,7 @@ SLOT_CHOICES = list(SLOT_KEYS)  # every time, in time order: any of them on any 
 
 def slot_label(k: str) -> str:
     """A program time for pickers: '5:30–7:20', '9–11 AM', '3:30–4:30 (JumpStart)'."""
-    return SLOTS[k] + (" (programs only)" if k in PROGRAM_KEYS else "")
+    return SLOTS[k] + (" (programs only)" if k in PROGRAM_KEYS or is_custom_slot(k) else "")
 
 
 SIDES = ["Girls", "Boys", "Both", "Other"]
@@ -44,7 +44,7 @@ def program_defaults(row: dict | None, row_i=None) -> dict:
     start, cleaned = S.start, S.cleaned
     if row is None:
         return {"name": "", "side": "Girls", "on_site": True, "days": [], "holidays": False,
-                "p_start": None, "p_end": None, "times": [], "courts": [], "coaches_sel": [], "coaches_new": "",
+                "p_start": None, "p_end": None, "times": [], "own": [], "courts": [], "coaches_sel": [], "coaches_new": "",
                 "tourns": [], "sessions": [], "tag": "", "meeting": "Practice"}
     yr = start.year
     try:
@@ -52,7 +52,7 @@ def program_defaults(row: dict | None, row_i=None) -> dict:
     except ValueError:
         ranges = []
     try:
-        times = sorted(parse_times(row.get("time")) or [], key=SLOT_KEYS.index)
+        times = sorted(parse_times(row.get("time"), programs=True) or [], key=SLOT_KEYS.index)
     except ValueError:
         times = []
     try:
@@ -73,6 +73,7 @@ def program_defaults(row: dict | None, row_i=None) -> dict:
         "p_start": min(a for a, _ in ranges) if ranges else None,
         "p_end": max(b for _, b in ranges) if ranges else None,
         "times": [t for t in times if t in SLOT_CHOICES], "courts": courts,
+        "own": [t for t in times if is_custom_slot(t)],  # its own hours, like 1:30–4:30 PM (Nov 20, 2026)
         "coaches_sel": [n for n in names if n in known],
         "coaches_new": ", ".join(n for n in names if n not in known),
         "tourns": program_tournaments(str(row.get("program", "")), row_i),
@@ -249,8 +250,15 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
         times = c1.multiselect("Time", SLOT_CHOICES, default=dv["times"], format_func=slot_label,
                                help="Pick every time it uses, on any day: 3:45 and 5:30 for a 3:45–7:20 program, "
                                     "9–11 AM for a morning camp. JumpStart times (3:30–4:30, 4:30–5:30) block 3:45 "
-                                    "practices on those courts.")
-        courts = c2.multiselect("Courts used", ALL_COURTS, default=[c for c in dv["courts"] if c in ALL_COURTS],
+                                    "practices on those courts. For other hours, use **Its own hours**.")
+        own = c2.text_input("Its own hours (if not a club time)", value=", ".join(dv.get("own", [])),
+                            placeholder="e.g. 1:30-4:30",
+                            help="A start and end that aren't one of the club's times, like 1:30-4:30 or "
+                                 "9-11:30 AM (several separated by commas). It takes its courts and coaches from "
+                                 "every club time it overlaps: 1:30-4:30 keeps 3:45 practices off its courts on a "
+                                 "weekday, and the 1-3 and 3-5 blocks on an open day. Use it instead of, or as "
+                                 "well as, the times on the left.")
+        courts = st.multiselect("Courts used", ALL_COURTS, default=[c for c in dv["courts"] if c in ALL_COURTS],
                                 format_func=court_name,
                                 help="Remove a court here if sign-ups are low. Leave empty if not known yet "
                                      "(it then blocks only the coaches). The practice court is for programs "
@@ -284,7 +292,7 @@ def program_form(key: str, dv: dict, submit_labels: list[str]):
             if cols[i].form_submit_button(lab, type="primary" if i == 0 else "secondary", width="stretch"):
                 clicked = lab
     return clicked, dict(name=name, short=short, side=side, on_site=on_site, holidays=holidays, days=days, p_start=p_start,
-                         p_end=p_end, times=times, courts=courts, coaches_sel=coaches_sel, coaches_new=coaches_new,
+                         p_end=p_end, times=times, own=own, courts=courts, coaches_sel=coaches_sel, coaches_new=coaches_new,
                          tourns=tourns, sessions=sessions, tag=tag, meeting=meeting, share=share)
 
 
@@ -295,8 +303,16 @@ def program_row(v: dict) -> tuple[list[str], dict]:
         problems.append("Give the program a name.")
     if not v["days"]:
         problems.append("Pick at least one day.")
+    times = list(v["times"])
+    if str(v.get("own") or "").strip():
+        try:
+            mine = parse_times(v["own"], programs=True) or set()
+            times += [t for t in mine if t not in times]
+        except ValueError as e:
+            problems.append(f"Its own hours: {e}")
+    v["times"] = times
     if not v["times"]:
-        problems.append("Pick at least one timeslot.")
+        problems.append("Pick at least one timeslot, or give it its own hours (like 1:30-4:30).")
     sess = []
     sdf = v.get("sessions")
     for r in (sdf.to_dict("records") if isinstance(sdf, pd.DataFrame) else []):
@@ -530,7 +546,7 @@ def render():
             c1, c2, c3 = st.columns(3)
             a_day = c1.date_input("Date", value=dv["p_start"] or start, format="MM/DD/YYYY",
                                   key=f"one_add_day_{ver}")
-            a_times = c2.multiselect("Time", SLOT_CHOICES, default=[t for t in dv["times"] if t in SLOT_CHOICES],
+            a_times = c2.multiselect("Time", SLOT_CHOICES + dv["own"], default=dv["times"] + dv["own"],
                                      format_func=slot_label, key=f"one_add_t_{ver}")
             a_courts = c3.multiselect("Courts", ALL_COURTS, default=[c for c in dv["courts"] if c in ALL_COURTS],
                                       format_func=court_name, key=f"one_add_c_{ver}")
