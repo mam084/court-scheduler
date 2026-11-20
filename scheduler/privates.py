@@ -164,6 +164,47 @@ def free_courts(when: date, start: int, assignments: pd.DataFrame | None, privs:
     return [c for c in courts if c not in taken]
 
 
+# ---- Changing or cancelling a booked private (Nov 20, 2026) ------------------------------------
+
+def sheet_row(p: dict) -> dict:
+    """A private (as rows() gives it) back as a Privates sheet row."""
+    return {"coach": p["coach"], "date": f"{p['date']:%m/%d/%Y}", "time": clock(p["start"]),
+            "court": court_short(p["court"]), "type": p["type"], "team": p.get("team") or "",
+            "player": p.get("player") or "", "note": p.get("note") or ""}
+
+
+def describe(p: dict) -> str:
+    """'Sun Dec 6 4:00 PM, Court 3' for a private as rows() gives it."""
+    return f"{p['date']:%a %b %-d} {p['time']}, {court_name(p['court'])}"
+
+
+def find(df: pd.DataFrame | None, was: dict, year: int) -> int | None:
+    """Where a private (a sheet row, as saved in a request) is in the Privates sheet now: the
+    position of the row with the same coach, date, start and court. None once it's gone."""
+    got, _ = rows(pd.DataFrame([was]), year)
+    if not got:
+        return None
+    w = got[0]
+    for p in rows(df, year)[0]:
+        if (p["coach"], p["date"], p["start"], p["court"]) == (w["coach"], w["date"], w["start"], w["court"]):
+            return p["row"]
+    return None
+
+
+def replace(df: pd.DataFrame, pos: int, row: dict | None) -> pd.DataFrame:
+    """The Privates sheet with the row at `pos` changed to `row`, or taken out (row=None)."""
+    df = df.reset_index(drop=True)
+    if row is None:
+        return df.drop(index=pos).reset_index(drop=True)
+    df = df.copy()
+    for k, v in row.items():
+        if k not in df.columns:
+            df[k] = ""
+        df[k] = df[k].astype(object)
+        df.at[pos, k] = v
+    return df
+
+
 _HEAD = PatternFill("solid", fgColor="1F2A44")
 _TEAM = PatternFill("solid", fgColor="EEF2FF")
 

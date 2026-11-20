@@ -836,6 +836,85 @@ def test_coach_requests_a_private(db, monkeypatch):
     assert (at.session_state["inp"].privates["coach"] == head).any()
 
 
+def _with_private(db, pid, coach, when="11/10/2026", time="4:00 PM", court="P"):
+    """Puts one private in the saved schedule's Privates sheet."""
+    from scheduler.storage import read_payload
+    rec = db.get(pid)
+    payload = rec["payload"]
+    payload["inputs"]["Privates"] = [{"coach": coach, "date": when, "time": time, "court": court,
+                                      "type": "Player", "team": "", "player": "Ana", "note": ""}]
+    db.save(pid, rec["name"], payload)
+    assert len(read_payload(db.get(pid)["payload"])[0].privates) == 1
+
+
+def test_admin_changes_a_private(db, monkeypatch):
+    pid = _save(db, "Roles", 36)
+    head, _ = _head_of_first_team(db, pid)
+    _with_private(db, pid, head)
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file("../app.py", default_timeout=180)
+    at.query_params["project"] = pid
+    at.run()
+    at.radio(key="nav").set_value("Privates").run()
+    at.selectbox(key="pv_edit_pick").set_value(0).run()
+    assert not at.exception, at.exception
+    at.selectbox(key="pe_0_hour").set_value(6).run()
+    at.selectbox(key="pe_0_court").set_value(3).run()
+    at.button(key="pv_edit_save").click().run()
+    assert not at.exception, at.exception
+    pr = at.session_state["inp"].privates
+    assert len(pr) == 1 and pr.iloc[0]["time"] == "6:00 PM" and str(pr.iloc[0]["court"]) == "3"
+    assert pr.iloc[0]["player"] == "Ana" and pr.iloc[0]["coach"] == head
+    assert at.session_state.get("pv_edit_pick") is None
+    # and removing it from the same place
+    at.selectbox(key="pv_edit_pick").set_value(0).run()
+    at.button(key="pv_edit_rm").click().run()
+    assert not at.exception, at.exception
+    assert len(at.session_state["inp"].privates) == 0
+
+
+def test_coach_asks_to_change_and_cancel_privates(db, monkeypatch):
+    monkeypatch.setenv("COURT_TODAY", "2026-11-01")
+    pid = _save(db, "Roles", 37)
+    head, _ = _head_of_first_team(db, pid)
+    _with_private(db, pid, head)
+    db.save_user("coach@sdvbc.org", "Coach", head)
+    at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Privates").run()
+    at.selectbox(key="pv_edit_pick").set_value(0).run()
+    at.selectbox(key="pe_0_hour").set_value(5).run()
+    at.button(key="pv_edit_ask").click().run()
+    assert not at.exception, at.exception
+    r = db.requests("pending")[0]
+    assert r["kind"] == "private_change" and r["detail"]["private"]["time"] == "5:00 PM"
+    assert r["detail"]["was"]["time"] == "4:00 PM"
+    assert len(at.session_state["inp"].privates) == 1  # nothing changes until it's approved
+    # A scheduling admin approves it: the booking moves to 5:00.
+    db.save_user("cliff@sdvbc.org", "Cliff", "", False, True)
+    at2, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
+    at2.radio(key="nav").set_value("Requests").run()
+    assert not at2.exception, at2.exception
+    assert not at2.button(key=f"rq_ok_{r['id']}").disabled
+    at2.button(key=f"rq_ok_{r['id']}").click().run()
+    assert not at2.exception, at2.exception
+    pr = at2.session_state["inp"].privates
+    assert len(pr) == 1 and pr.iloc[0]["time"] == "5:00 PM"
+    assert db.get_request(r["id"])["status"] == "approved"
+    # Then the coach asks to cancel it, and that's approved too.
+    at, _ = _as(db, monkeypatch, "coach@sdvbc.org", pid=pid)
+    at.radio(key="nav").set_value("Privates").run()
+    at.selectbox(key="pv_edit_pick").set_value(0).run()
+    at.button(key="pv_edit_cancel").click().run()
+    assert not at.exception, at.exception
+    c = db.requests("pending")[0]
+    assert c["kind"] == "private_cancel"
+    at2, _ = _as(db, monkeypatch, "cliff@sdvbc.org", pid=pid)
+    at2.radio(key="nav").set_value("Requests").run()
+    at2.button(key=f"rq_ok_{c['id']}").click().run()
+    assert not at2.exception, at2.exception
+    assert len(at2.session_state["inp"].privates) == 0
+
+
 def test_add_coaches_from_schedule(db, monkeypatch):
     at, pid = _as(db, monkeypatch, "matthew@sdvbc.org", seed=34)
     at.radio(key="nav").set_value("Access").run()

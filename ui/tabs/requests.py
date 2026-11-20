@@ -34,6 +34,15 @@ def approve(req: dict, note: str):
         inp.privates = pd.concat([inp.privates, pd.DataFrame([d["private"]])], ignore_index=True)
         st.session_state.flash = decided(req, "approved", note)
         st.rerun()
+    if req["kind"] in ("private_change", "private_cancel"):  # Nov 20, 2026
+        pos = pv.find(inp.privates, d["was"], _year())
+        if pos is None:
+            st.session_state.flash = ("That private isn't booked anymore (it was changed or removed), so there's "
+                                      "nothing to change. Decline the request with a note.")
+            st.rerun()
+        inp.privates = pv.replace(inp.privates, pos, d["private"] if req["kind"] == "private_change" else None)
+        st.session_state.flash = decided(req, "approved", note)
+        st.rerun()
     st.session_state.approving = req
     st.session_state.approving_note = note
     rp = d.get("replace_pin")
@@ -124,6 +133,28 @@ def _review(req: dict) -> tuple[bool, dict | None]:
     return True, dict(req, detail=dict(req["detail"], rows=rows))
 
 
+def _year() -> int:
+    return S.start.year if S.start else clock.today().year
+
+
+def _booked_now(req: dict) -> dict | None:
+    """For a change or cancel request: the private it's about, as it's booked now (None once it's gone)."""
+    was = (req.get("detail") or {}).get("was") or {}
+    pos = pv.find(S.inp.privates, was, _year()) if was else None
+    return next((p for p in (S.privs or []) if p["row"] == pos), None) if pos is not None else None
+
+
+def _review_private_cancel(req: dict) -> tuple[bool, dict]:
+    """A coach asking to cancel a private: is it still booked?"""
+    p = _booked_now(req)
+    if p is None:
+        st.warning("That private isn't booked anymore (it was changed or removed). Decline or remove the request.")
+        return False, req
+    st.caption(f"Approving takes it off: {p['coach']}, {pv.describe(p)}"
+               + (f" ({p['player'] or p['team']})" if p["player"] or p["team"] else "") + ".")
+    return True, req
+
+
 def _review_private(req: dict) -> tuple[bool, dict]:
     """A private request drawn on its week's court view, with what it clashes with (court, coach,
     another private, a closure). A taken court can be swapped for one that's open then. Returns
@@ -139,6 +170,14 @@ def _review_private(req: dict) -> tuple[bool, dict]:
     day_r = dates.window(d, d)[0]
     a_day = day_r.assignments if day_r is not None else None
     others = list(S.privs or [])
+    if req["kind"] == "private_change":  # it moves from where it's booked now, so that doesn't clash
+        now = _booked_now(req)
+        if now is None:
+            st.warning("That private isn't booked anymore (it was changed or removed). Decline or remove the "
+                       "request.")
+            return False, req
+        others = [x for x in others if x["row"] != now["row"]]
+        st.caption(f"Now: {pv.describe(now)} → asked for: {pv.describe(p)}")
     free = pv.free_courts(d, p["start"], a_day, others, ALL_COURTS)
     if p["court"] not in free and free:
         st.warning(f"{court_name(p['court'])} is taken then.")
@@ -177,7 +216,8 @@ def _pending_card(r: dict, me_email: str):
         if own:
             st.caption("You asked for this, so another scheduling admin has to decide it.")
         ok_, r_go = (_review(r) if r["kind"] in ("move", "extra")
-                     else _review_private(r) if r["kind"] == "private" else (True, r))
+                     else _review_private(r) if r["kind"] in ("private", "private_change")
+                     else _review_private_cancel(r) if r["kind"] == "private_cancel" else (True, r))
         c1, c2, c3, c4 = st.columns([3, 1, 1, 1], vertical_alignment="bottom")
         note_ = c1.text_input("Note to the coach (optional)", key=f"rq_note_{r['id']}",
                               placeholder="e.g. moved to Court 5 instead")
@@ -195,7 +235,8 @@ def _pending_card(r: dict, me_email: str):
             st.rerun()
 
 
-_KIND = {"move": "move", "extra": "extra practice", "cancel": "cancel", "private": "private"}
+_KIND = {"move": "move", "extra": "extra practice", "cancel": "cancel", "private": "private",
+         "private_change": "private change", "private_cancel": "private cancel"}
 
 
 def render():
@@ -203,7 +244,8 @@ def render():
     store, VIEWER, CAN = S.store, S.VIEWER, S.CAN
     me_email = VIEWER.person.email if VIEWER.person else ""
     if CAN:
-        st.markdown("Coaches' requests: moves, extra practices, cancellations and privates. Each move, extra "
+        st.markdown("Coaches' requests: moves, extra practices, cancellations and privates (new, changed or "
+                    "cancelled). Each move, extra "
                     "practice or private shows where it would go on that week's courts. **Approve** puts it on "
                     "an open court (it never pushes out "
                     "anything already there) and emails the coach; **Decline** emails them your note. Nobody "
@@ -248,7 +290,7 @@ def render():
                     hide_index=True, width="stretch")
     else:
         st.markdown("Your requests. Ask for a move, extra practice or cancellation in **Edit practices**, and for a "
-                    "private in **Privates**. You'll get an email when a scheduling admin decides.")
+                    "private, or to change or cancel one, in **Privates**. You'll get an email when a scheduling admin decides.")
         mine_ = store.requests(email=me_email) if me_email else []
         if not mine_:
             st.caption("No requests yet.")

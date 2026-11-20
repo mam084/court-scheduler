@@ -44,14 +44,15 @@ def decision(req: dict, status: str, by: str, note: str = "", link: str = "") ->
     """Back to the coach: approved or declined."""
     word = {"approved": "Approved", "denied": "Declined"}.get(status, status.title())
     subject = f"{word}: {req['summary']}"
+    done = "It's off the schedule now." if req.get("kind") == "private_cancel" else "It's on the schedule now."
     why = f"\n{by}: {note}" if note else ""
     text = (f"Your request was {word.lower()} by {by}:\n\n  {req['summary']}{why}\n\n"
-            + ("It's on the schedule now.\n\n" if status == "approved" else "") + FOOT)
+            + (f"{done}\n\n" if status == "approved" else "") + FOOT)
     body = (f"<p>Your request was <b>{word.lower()}</b> by {_h.escape(by)}:</p>"
             f'<p style="font-size:16px;padding:10px 12px;background:#f3f5fa;border-radius:6px">'
             f"{_h.escape(req['summary'])}</p>"
             + (f"<p><i>{_h.escape(by)}:</i> {_h.escape(note)}</p>" if note else "")
-            + ("<p>It's on the schedule now.</p>" if status == "approved" else ""))
+            + (f"<p>{done}</p>" if status == "approved" else ""))
     return subject, text, _wrap(f"Request {word.lower()}", body, link)
 
 

@@ -200,6 +200,12 @@ and privates.
   timeslot those hours run into (no team gets it 11–1). Privates only have to
   stay clear of the hours themselves (a private there at 11:30 is fine).
   Setting hours rebuilds nothing; moving or removing the practice drops them.
+- **Privates can be changed** (Privates → Change a private): admins change a
+  private's coach, date, time, court, type, team, players or note, or remove it,
+  straight away, with the same conflict warnings as booking. Coaches ask to
+  change or cancel one of their own upcoming privates; it goes to Requests,
+  and nothing changes until a scheduling admin approves it. If the private was
+  changed or removed in the meantime, the request can't be approved.
 - **Coaches** only ask for changes. Scheduling admins approve them, and only
   admins change preferences and no-dates.
 - **Google Calendar:** each team's calendar gets its practices and tournaments.

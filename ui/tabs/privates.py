@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from scheduler import clock
 from scheduler import privates as pv
 from scheduler.config import ALL_COURTS, COURTS, DAYS, PRACTICE_COURT, court_name, court_short
 from ui import dates
@@ -130,8 +131,130 @@ def render():
             st.session_state.flash = f"Removed {plural(len(drop), 'private')}."
             st.rerun()
         st.caption(f"{plural(len(privs), 'private')} booked · {pv.type_counts(privs)}")
+        _change(privs, coach_opts)
     st.download_button("Download every coach's privates (Excel)",
                        lambda: pv.to_excel(privs, coach_opts, pv.conflicts(privs, a_now, closures)),
                        f"privates_{start:%Y%m%d}.xlsx",
                        help="A Coaches sheet with every coach and their player / team / coach's reps counts, one list of "
                             "all privates, and a sheet per coach.")
+
+
+# ---- Changing or cancelling a booked private (Nov 20, 2026) ---------------------------------------
+# Admins change a private straight away. Coaches ask to change or cancel one of theirs: the request
+# goes to the Requests tab, like their other requests, and approving it changes the booking.
+
+def _fields(key: str, p0: dict, others: list[dict], coach_opts: list[str], pick_coach: bool):
+    """The private's details, filled in from `p0`, checked against the schedule and the `others`.
+    Returns (the private as a sheet row, what it clashes with)."""
+    c1, c2, h1, h2, h3 = st.columns([2.2, 1.3, 0.9, 0.9, 1.2], vertical_alignment="bottom")
+    if pick_coach:
+        opts = coach_opts if p0["coach"] in coach_opts else [p0["coach"]] + coach_opts
+        coach = c1.selectbox("Coach", opts, index=opts.index(p0["coach"]), key=f"{key}_coach")
+    else:
+        coach = p0["coach"]
+        c1.text_input("Coach", value=coach, disabled=True, key=f"{key}_coach_me")
+    p_date = c2.date_input("Date", value=p0["date"], format="MM/DD/YYYY", key=f"{key}_date")
+    hr, mn = divmod(p0["start"], 60)
+    p_hr = h1.selectbox("Start hour", list(range(1, 13)), index=(hr % 12 or 12) - 1, key=f"{key}_hour")
+    mins = list(range(0, 60, 5))
+    p_mn = h2.selectbox("Minutes", mins, index=mins.index(mn - mn % 5), format_func=lambda x: f":{x:02d}",
+                        key=f"{key}_min")
+    p_ap = h3.radio("AM / PM", ["AM", "PM"], index=1 if hr >= 12 else 0, horizontal=True, key=f"{key}_ampm")
+    p_start = (p_hr % 12 + (12 if p_ap == "PM" else 0)) * 60 + p_mn
+    _day = dates.window(p_date, p_date)[0]
+    a_day = _day.assignments if _day is not None else None
+    free = pv.free_courts(p_date, p_start, a_day, others, ALL_COURTS)
+    c1, c2, c3 = st.columns([1, 1, 2])
+    p_kind = c1.radio("Type", pv.TYPES, index=pv.TYPES.index(p0["type"]), format_func=pv.TYPE_LABELS.get,
+                      key=f"{key}_type")
+    court_opts = [PRACTICE_COURT] + list(COURTS)
+    p_court = c2.selectbox("Court", court_opts, index=court_opts.index(p0["court"]) if p0["court"] in court_opts
+                           else 0, key=f"{key}_court",
+                           format_func=lambda c: court_name(c) + ("" if c in free else " (taken)"))
+    cleaned = S.cleaned
+    all_teams = [t.name for t in cleaned.teams] if cleaned else []
+    if p_kind == pv.TEAM:
+        mine_ = [t.name for t in cleaned.teams if coach in t.staff] if cleaned else []
+        opts = mine_ + [t for t in all_teams if t not in mine_]
+        if p0.get("team") and p0["team"] not in opts:
+            opts = [p0["team"]] + opts
+        p_team = c3.selectbox("Team", opts, index=opts.index(p0["team"]) if p0.get("team") in opts else 0,
+                              key=f"{key}_team")
+    else:
+        p_team = ""
+    c1, c2 = st.columns(2)
+    p_player = "" if p_kind == pv.REPS else c1.text_input("Player(s) (optional)", value=p0.get("player", ""),
+                                                          key=f"{key}_player")
+    p_note = c2.text_input("Note (optional)", value=p0.get("note", ""), key=f"{key}_note")
+    row = {"coach": coach, "date": f"{p_date:%m/%d/%Y}", "time": pv.clock(p_start), "court": court_short(p_court),
+           "type": p_kind, "team": p_team, "player": p_player.strip(), "note": p_note.strip()}
+    trial = dict(p0, row=-1, coach=coach, date=p_date, day=DAYS[p_date.weekday()], start=p_start,
+                 end=p_start + 60, time=pv.clock(p_start), end_label=pv.clock(p_start + 60), court=p_court,
+                 type=p_kind, team=p_team)
+    clash = pv.conflicts(others + [trial], a_day, S.closures).get(-1, [])
+    if clash:
+        st.warning("Heads up: " + "; ".join(clash) + ".")
+    return row, clash
+
+
+def _change(privs: list[dict], coach_opts: list[str]):
+    """Admins: change or remove a booked private. Coaches: ask to change or cancel one of theirs."""
+    CAN, MY_COACH = S.CAN, S.MY_COACH
+    if CAN:
+        pick = privs
+        title = "Change a private"
+    elif MY_COACH:
+        today = clock.today()
+        pick = [p for p in privs if p["coach"] == MY_COACH and p["date"] >= today]
+        title = "Change or cancel one of my privates"
+    else:
+        return
+    st.markdown(f"**{title}**")
+    if st.session_state.pop("_pv_edit_reset", False):  # after a change, start with nothing picked
+        st.session_state.pop("pv_edit_pick", None)
+    if not pick:
+        st.caption("You don't have any upcoming privates." if not CAN else "None booked yet.")
+        return
+    lab = {p["row"]: f"{p['coach']} · {pv.describe(p)}" + (f" · {p['player'] or p['team']}"
+                                                         if p["player"] or p["team"] else "") for p in pick}
+    sel = st.selectbox("Private", list(lab), index=None, format_func=lambda i: lab[i], key="pv_edit_pick",
+                       placeholder="Choose a private to change" + ("" if CAN else " or cancel"))
+    if sel is None:
+        return
+    p0 = next(p for p in privs if p["row"] == sel)
+    others = [p for p in privs if p["row"] != sel]
+    was = pv.sheet_row(p0)
+    with st.container(border=True):
+        row, clash = _fields(f"pe_{sel}", p0, others, coach_opts, pick_coach=CAN)
+        same = row == was
+        flag = (" (flagged: " + "; ".join(clash) + ")") if clash else ""
+        if CAN:
+            c1, c2, _ = st.columns([1, 1, 2])
+            if c1.button("Save changes", type="primary", disabled=same, key="pv_edit_save", width="stretch"):
+                S.inp.privates = pv.replace(S.inp.privates, sel, row)
+                new = pv.rows(pd.DataFrame([row]), S.start.year)[0][0]
+                st.session_state["_pv_edit_reset"] = True
+                st.session_state.flash = (f"Changed {p0['coach']}'s private: {pv.describe(p0)} → "
+                                          f"{pv.describe(new)}{flag}.")
+                st.rerun()
+            if c2.button("Remove this private", key="pv_edit_rm", width="stretch"):
+                S.inp.privates = pv.replace(S.inp.privates, sel, None)
+                st.session_state["_pv_edit_reset"] = True
+                st.session_state.flash = f"Removed {p0['coach']}'s private ({pv.describe(p0)})."
+                st.rerun()
+        else:
+            st.caption("A scheduling admin approves the change (you'll get an email). Until then it stays as it is.")
+            why = st.text_input("Note to the scheduling admins (optional)", key=f"pv_edit_why_{sel}",
+                                placeholder="e.g. the player can't make 4:00 anymore")
+            c1, c2, _ = st.columns([1, 1, 2])
+            if c1.button("Ask to change", type="primary", disabled=same, key="pv_edit_ask", width="stretch"):
+                new = pv.rows(pd.DataFrame([row]), S.start.year)[0][0]
+                st.session_state["_pv_edit_reset"] = True
+                submit_request("private_change", row["team"],
+                               f"Change {p0['coach']}'s private: {pv.describe(p0)} → {pv.describe(new)}",
+                               {"private": row, "was": was},
+                               ("; ".join(clash) + ". " if clash else "") + why.strip())
+            if c2.button("Ask to cancel", key="pv_edit_cancel", width="stretch"):
+                st.session_state["_pv_edit_reset"] = True
+                submit_request("private_cancel", p0.get("team", ""),
+                               f"Cancel {p0['coach']}'s private: {pv.describe(p0)}", {"was": was}, why.strip())
